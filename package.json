@@ -1,0 +1,13 @@
+{
+  "name": "irdojo-tools",
+  "private": true,
+  "type": "module",
+  "description": "IR Dojo の画面を実際に遊んで確かめるための道具（本体は Python）",
+  "scripts": {
+    "playtest": "node tools/playtest.mjs --dpr 2",
+    "playtest:all": "node tools/playtest.mjs --dpr 1 && node tools/playtest.mjs --dpr 2 && node tools/playtest.mjs --dpr 3"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.63.0"
+  }
+}

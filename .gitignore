@@ -14,3 +14,7 @@ results/
 
 # エージェントの作業メモ
 .claude/scratch/
+
+# ブラウザ検証（node_modules と撮ったもの）
+node_modules/
+.playtest/
