@@ -273,3 +273,23 @@ def test_switching_scenarios_does_not_carry_the_previous_policy(app_js):
     body = body[:body.index("\n}\n") + 3]
     assert "S.scenario.id !== sc.id" in body, "選び直しを検出していない"
     assert "S.policy = sc.default_policy" in body, "方針が持ち越される"
+
+def test_the_screen_does_not_decide_which_way_the_misdirection_went(app_js):
+    """誤導の向きは、画面が判定しない（SPEC 3.4 / 6.6）。
+
+    誤導には2つの向きがある — 疑わせて名指しさせる側と、白と読ませて
+    名指しから落とさせる側で、講評の文面が正反対になる。
+    向きを持っているのは `direction` だけで、画面が
+    「名指しに入っていたか」から推測すると、同じ誤導の説明が
+    2つの文面に割れる（`refuted` で同じ失敗を一度している）。
+
+    見るのは2つ。分岐が `direction` を読んでいることと、
+    `assessment` を引き合いに出して自前で判定していないこと。
+    """
+    body = strip_comments(app_js)
+    start = body.index("function blockCounterfactuals")
+    end = body.index("function blockPolicy")
+    block = body[start:end]
+    assert "cf.direction" in block, "向きの分岐が direction を読んでいない"
+    assert "assessment" not in block, "画面が名指しから向きを判定している"
+

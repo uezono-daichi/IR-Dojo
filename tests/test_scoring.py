@@ -24,12 +24,21 @@ INVESTIGATION = [
 
 def play_spec_68(scenario, contain_first="act_shutdown_fs01",
                  second="act_isolate_ws042"):
+    """SPEC 6.8 の計算例。
+
+    **止めた資産と名指しした資産がずれている**ことが例の主題なので、
+    3台目（ws-055）も止める側にだけ入れる。名指しには入らない —
+    v1.42 で侵害資産が3つになり、この例の再現率は 0.500 から 0.333 へ
+    下がったが、完全度は 1.000 のままである。ずれが1資産から
+    2資産に広がっただけで、例が言おうとしていることは変わらない。
+    """
     e = Engine(scenario, "business_continuity", None)
     for aid, _ in INVESTIGATION:
         e.decide(Decision(kind="action", action_id=aid))
     e.decide(Decision(kind="declare_assessment", assessment=["ws-042", "ws-107"]))
     e.decide(Decision(kind="action", action_id=contain_first))
     e.decide(Decision(kind="action", action_id=second))
+    e.decide(Decision(kind="action", action_id="act_isolate_ws055"))
     e.decide(Decision(kind="finish"))
     return e
 
@@ -38,7 +47,7 @@ def test_playthrough_state(scenario):
     e = play_spec_68(scenario)
     st = e.state
     assert st.investigation_minutes == 165      # 総調査時間
-    assert st.elapsed_minutes == 190            # contain を含む最終値
+    assert st.elapsed_minutes == 200            # contain を含む最終値
     assert st.misled_follow_minutes == 25
     assert st.assessment_snapshot.unresolved_critical == ["q_initial_access"]
     assert st.destroyed_evidence == ["ev_010"]  # 隔離では揮発性証拠は失われない
@@ -46,23 +55,23 @@ def test_playthrough_state(scenario):
     assert st.resolved_questions == [
         "q_lateral_movement", "q_persistence", "q_exfiltration",
     ]
-    assert st.contained_at == {"fs01": 180, "ws-042": 190}
+    assert st.contained_at == {"fs01": 180, "ws-042": 190, "ws-055": 200}
     assert len(st.violations_by_policy["business_continuity"]) == 1
 
 
 def test_consequences(scenario):
     c = scoring.score(play_spec_68(scenario).state, scenario).consequences
-    assert c.elapsed_minutes == 190
+    assert c.elapsed_minutes == 200
     # 被害は二段。演習中に積み上がった分と、復旧地平 H の分（SPEC 5.8 / 6.3）
-    assert c.accumulated_damage == pytest.approx(1383, abs=1)
-    # このプレイは compromised を両方止めたが、**永続化は取り除いていない。**
+    assert c.accumulated_damage == pytest.approx(1440, abs=1)
+    # このプレイは compromised を3つとも止めたが、**永続化は取り除いていない。**
     # 完全度 1.000 と引き換えに、地平の 480分は on_partial (0.6) で
     # 積分され続ける。「隔離しても、端末を戻せば攻撃者も戻ってくる」は
     # ここで初めて数字になる（v1.37 / 9.4 #5）
-    assert c.projected_damage == pytest.approx(12608, abs=1)
-    assert c.total_damage == pytest.approx(13991, abs=1)
-    assert c.business_impact == pytest.approx(424.33, abs=0.01)
-    assert c.evidence_preserved == pytest.approx(0.947, abs=0.001)
+    assert c.projected_damage == pytest.approx(12513, abs=1)
+    assert c.total_damage == pytest.approx(13953, abs=1)
+    assert c.business_impact == pytest.approx(465.00, abs=0.01)
+    assert c.evidence_preserved == pytest.approx(0.952, abs=0.001)
     assert c.containment_completeness == pytest.approx(1.000, abs=0.001)
 
 
@@ -81,7 +90,7 @@ def test_completeness_is_not_the_same_question_as_eradication(scenario):
         play_spec_68(scenario, second="act_purge_persistence_ws042").state, scenario
     ).consequences
 
-    # どちらも「侵害された2資産を直接止めた」ので完全度は同じ
+    # どちらも「侵害された3資産を直接止めた」ので完全度は同じ
     assert partial.containment_completeness == full.containment_completeness == 1.0
     # それでも被害は倍以上違う。違いは根絶したかどうかだけ
     assert partial.total_damage > full.total_damage * 2
@@ -115,19 +124,20 @@ def test_evidence_preserved_cannot_choose_between_containments(scenario):
 def test_fact_metrics(scenario):
     r = scoring.score(play_spec_68(scenario).state, scenario)
     assert r.metrics["assessment_precision"] == pytest.approx(0.500, abs=0.001)
-    assert r.metrics["assessment_recall"] == pytest.approx(0.500, abs=0.001)
+    # 名指しは ws-042 の1つだけ当たっている。侵害は3つある（v1.42）
+    assert r.metrics["assessment_recall"] == pytest.approx(0.333, abs=0.001)
     # ws-042 は ev_006 / ev_009 / ev_011 が指す。ws-107 を指すのは誤導の
     # ev_007 だけなので裏付けにならない
     assert r.metrics["assessment_support"] == pytest.approx(0.500, abs=0.001)
     assert r.metrics["unresolved_questions"] == pytest.approx(0.333, abs=0.001)
-    assert r.fact_score == pytest.approx(0.567, abs=0.001)
+    assert r.fact_score == pytest.approx(0.533, abs=0.001)
 
 
 def test_composite(scenario):
     r = scoring.score(play_spec_68(scenario).state, scenario)
-    assert r.policy_score == pytest.approx(0.582, abs=0.001)
-    assert r.composite_score == pytest.approx(0.571, abs=0.001)
-    assert round(r.composite_score * 100) == 57
+    assert r.policy_score == pytest.approx(0.583, abs=0.001)
+    assert r.composite_score == pytest.approx(0.548, abs=0.001)
+    assert round(r.composite_score * 100) == 55
 
 
 def test_dependency_chain_variant(scenario):
@@ -139,18 +149,20 @@ def test_dependency_chain_variant(scenario):
     """
     e = play_spec_68(scenario, contain_first="act_shutdown_dc01")
     # 封じ込めは直接止めた分だけ。fs01 は入らない
-    assert e.state.contained_at == {"dc01": 180, "ws-042": 190}
-    # 業務は依存で全部止まる。ws-042 は 190分の隔離より早い 180分に繰り上がる
+    assert e.state.contained_at == {"dc01": 180, "ws-042": 190, "ws-055": 200}
+    # 業務は依存で全部止まる。ws-042 と ws-055 は自分が止まる時刻より早い
+    # 180分に繰り上がる（dc01 経由）
     assert e.state.halted_at == {
-        "dc01": 180, "fs01": 180, "ws-042": 180, "ws-107": 180, "ws-113": 180,
+        "dc01": 180, "fs01": 180, "ws-042": 180,
+        "ws-055": 180, "ws-107": 180, "ws-113": 180,
     }
     r = scoring.score(e.state, scenario)
-    assert r.consequences.business_impact == pytest.approx(1339.33, abs=0.01)
+    assert r.consequences.business_impact == pytest.approx(1400.00, abs=0.01)
     assert r.consequences.evidence_preserved == pytest.approx(1.000, abs=0.001)
-    # fs01 が封じ込められていないので完全度は 0.5、減衰も on_partial 止まり
-    assert r.consequences.containment_completeness == pytest.approx(0.500, abs=0.001)
-    assert r.policy_score == pytest.approx(0.321, abs=0.001)
-    assert round(r.composite_score * 100) == 49
+    # fs01 が封じ込められていないので完全度は 2/3、減衰も on_partial 止まり
+    assert r.consequences.containment_completeness == pytest.approx(0.667, abs=0.001)
+    assert r.policy_score == pytest.approx(0.346, abs=0.001)
+    assert round(r.composite_score * 100) == 48
 
 
 def test_same_play_scores_differently_per_policy(scenario):
@@ -165,12 +177,13 @@ def test_same_play_scores_differently_per_policy(scenario):
     # **v1.39 まではここが 0件だった。** 証拠保全最優先の制約が
     # `require_before`（盤面のどこかで揮発性を1つ取っていれば満たす）
     # だった頃、ws-042 のメモリダンプがそのまま fs01 の停止を許していた。
-    # いまは①fs01 の分を取っていない②電源を落とした、の2件が立つ
-    assert got["evidence_preservation"].constraint_violations == 2
+    # いまは①fs01 の分を取っていない②電源を落とした
+    # ③ws-055 の分を取っていない、の3件が立つ（v1.42）
+    assert got["evidence_preservation"].constraint_violations == 3
 
-    assert round(got["business_continuity"].composite_score * 100) == 57
-    assert round(got["damage_minimization"].composite_score * 100) == 58
-    assert round(got["evidence_preservation"].composite_score * 100) == 55
+    assert round(got["business_continuity"].composite_score * 100) == 55
+    assert round(got["damage_minimization"].composite_score * 100) == 56
+    assert round(got["evidence_preservation"].composite_score * 100) == 50
 
     # 事実認識層は方針に依存しない
     facts = {r.fact_score for r in got.values()}
@@ -180,9 +193,9 @@ def test_same_play_scores_differently_per_policy(scenario):
 def test_minimal_path(scenario):
     minutes, ids, exact = retrospective.minimal_path(scenario)
     assert exact is True
-    assert minutes == 130
+    assert minutes == 170
     assert sorted(ids) == [
-        "act_collect_evtx_fs01", "act_mail_gateway",
+        "act_collect_evtx_fs01", "act_local_collect_ws055", "act_mail_gateway",
         "act_memory_dump_ws042", "act_smb_session_fs01",
     ]
 
@@ -261,6 +274,7 @@ def test_assist_level_does_not_change_scoring(scenario):
         e.decide(Decision(kind="declare_assessment", assessment=["ws-042", "ws-107"]))
         e.decide(Decision(kind="action", action_id="act_shutdown_fs01"))
         e.decide(Decision(kind="action", action_id="act_isolate_ws042"))
+        e.decide(Decision(kind="action", action_id="act_isolate_ws055"))
         e.decide(Decision(kind="finish"))
         scores.append(scoring.score(e.state, scenario).composite_score)
     assert len(set(scores)) == 1
@@ -280,15 +294,21 @@ def _play(scenario, triage, investigation, policy=None):
     e = Engine(scenario, policy or scenario.meta.default_policy, None)
     for aid in list(triage) + list(investigation):
         e.decide(Decision(kind="action", action_id=aid))
-    e.decide(Decision(kind="declare_assessment", assessment=["ws-042", "fs01"]))
-    for aid in ("act_rebuild_ws042", "act_shutdown_fs01"):
+    e.decide(
+        Decision(kind="declare_assessment", assessment=["ws-042", "fs01", "ws-055"])
+    )
+    for aid in ("act_rebuild_ws042", "act_shutdown_fs01", "act_isolate_ws055"):
         e.decide(Decision(kind="action", action_id=aid))
     e.decide(Decision(kind="finish"))
     return e
 
 
 SKILLED_T = ["act_collect_evtx_fs01"]
-SKILLED_I = ["act_mail_gateway", "act_smb_session_fs01", "act_memory_dump_ws042"]
+SKILLED_I = [
+    "act_mail_gateway", "act_smb_session_fs01",
+    # 3台目を名指しに載せる唯一の手。管理コンソールの照会では出てこない
+    "act_local_collect_ws055", "act_memory_dump_ws042",
+]
 
 
 def _all_investigate(scenario, phase="investigation"):
@@ -311,8 +331,10 @@ def test_exhaustive_play_loses_to_skilled_play(scenario):
     # 全部やれば事実は掴める。そこは罰しない
     assert every.state.assessment_snapshot.unresolved_critical == []
     assert re_.fact_score >= 0.95
-    # 払った時間の差が方針適合に出る
-    assert every.state.elapsed_minutes > skilled.state.elapsed_minutes * 3
+    # 払った時間の差が方針適合に出る。
+    # v1.42 で巧いプレイ自身が 175 → 225分に伸びたので（3台目を名指しに
+    # 載せる現地採取 40分と、その隔離 10分）、比は 3.3倍 → 2.9倍になった
+    assert every.state.elapsed_minutes > skilled.state.elapsed_minutes * 2.5
     assert re_.policy_score < rs.policy_score
     # 差が意味のある大きさであること（SPEC 8.3 のチェックリスト）
     assert (rs.composite_score - re_.composite_score) * 100 >= 10
@@ -504,8 +526,10 @@ def test_containment_reports_what_it_stopped(scenario):
     assert not out.empty                    # 「何も出てこなかった」にならない
     # 止めたのは dc01 だけ。業務は依存で5資産すべてが止まる（SPEC 6.3）
     assert set(out.contained) == {"dc01"}
-    assert set(out.halted) == {"dc01", "fs01", "ws-042", "ws-107", "ws-113"}
-    assert set(out.cascaded) == {"fs01", "ws-042", "ws-107", "ws-113"}
+    assert set(out.halted) == {
+        "dc01", "fs01", "ws-042", "ws-055", "ws-107", "ws-113",
+    }
+    assert set(out.cascaded) == {"fs01", "ws-042", "ws-055", "ws-107", "ws-113"}
     assert out.business_impact_delta > 0
     assert out.revealed == []               # 証拠は産まない
 
@@ -543,11 +567,13 @@ def test_timeline_fires_while_you_work(scenario):
     e.decide(Decision(kind="action", action_id="act_netflow_overview"))         # 30→50分
     e.decide(Decision(kind="action", action_id="act_memory_dump_ws042"))        # 50→95分
     e.decide(Decision(kind="action", action_id="act_disk_image_ws042"))         # 95→155分
+    e.decide(Decision(kind="action", action_id="act_local_collect_ws055"))     # 155→195分
     assert e.state.fired_events == []             # ここまでは何も起きない
 
-    e.decide(Decision(kind="action", action_id="act_proxy_log"))               # 155→175分
-    out = e.decide(Decision(kind="action", action_id="act_edr_full_scan"))     # 175→210分
-    assert out.events == ["tl_accel"]             # 205分の分が拾われた
+    e.decide(Decision(kind="action", action_id="act_proxy_log"))               # 195→215分
+    e.decide(Decision(kind="action", action_id="act_console_query_ws055"))     # 215→235分
+    out = e.decide(Decision(kind="action", action_id="act_edr_full_scan"))     # 235→270分
+    assert out.events == ["tl_accel"]             # 255分の分が拾われた
 
 
 def test_timeline_takes_something_away(scenario):
@@ -559,7 +585,7 @@ def test_timeline_takes_something_away(scenario):
     for ev in scenario.timeline:
         assert ev.destroys or ev.heralds, f"{ev.id}: 盤面を何も変えない"
 
-    # 245分を跨いだのに ev_010 を持っていなければ、もう取れない
+    # 295分を跨いだのに ev_010 を持っていなければ、もう取れない
     e = Engine(scenario, "damage_minimization", None)
     for aid in ("act_edr_full_scan", "act_backup_integrity", "act_smb_session_fs01",
                 "act_ad_group_audit", "act_dc_authlog", "act_asset_inventory"):
@@ -567,10 +593,12 @@ def test_timeline_takes_something_away(scenario):
     assert "ev_010" not in e.state.lost_evidence
 
     e.decide(Decision(kind="action", action_id="act_collect_evtx_fs01"))       # 155→185分
-    out = e.decide(Decision(kind="action", action_id="act_netflow_overview"))  # 185→205分
-    assert out.events == ["tl_accel"]             # 205分の前触れが拾われる
-    e.decide(Decision(kind="action", action_id="act_mail_gateway"))            # 205→230分
-    out = e.decide(Decision(kind="action", action_id="act_interview_sato"))    # 230→250分
+    e.decide(Decision(kind="action", action_id="act_netflow_overview"))        # 185→205分
+    e.decide(Decision(kind="action", action_id="act_console_query_ws055"))     # 205→225分
+    e.decide(Decision(kind="action", action_id="act_proxy_log"))               # 225→245分
+    out = e.decide(Decision(kind="action", action_id="act_mail_gateway"))      # 245→270分
+    assert out.events == ["tl_accel"]             # 255分の前触れが拾われる
+    out = e.decide(Decision(kind="action", action_id="act_triage_ws113"))      # 270→295分
     assert out.events == ["tl_fs01_restart"]
     assert e.state.lost_evidence == ["ev_010"]
 
@@ -603,7 +631,9 @@ def test_empty_counts_only_the_action(scenario):
     assert out.empty                              # 先に壊したので空振り
     assert out.events == []
     e.decide(Decision(kind="action", action_id="act_smb_session_fs01"))       # 135→165分
-    out = e.decide(Decision(kind="action", action_id="act_memory_dump_fs01")) # 165→205分
+    e.decide(Decision(kind="action", action_id="act_local_collect_ws055"))    # 165→205分
+    e.decide(Decision(kind="action", action_id="act_console_query_ws055"))    # 205→225分
+    out = e.decide(Decision(kind="action", action_id="act_memory_dump_fs01")) # 225→265分
     assert out.events == ["tl_accel"]             # だがその間に電話は鳴る
 
 
@@ -743,17 +773,18 @@ def test_notice_prevents_only_what_has_not_happened(scenario):
     for aid in ("act_edr_full_scan", "act_backup_integrity", "act_smb_session_fs01",
                 "act_ad_group_audit", "act_dc_authlog", "act_asset_inventory",
                 "act_collect_evtx_fs01", "act_netflow_overview",
-                "act_mail_gateway", "act_proxy_log"):
+                "act_mail_gateway", "act_proxy_log",
+                "act_dlp_review", "act_triage_ws113"):
         e.decide(Decision(kind="action", action_id=aid))
-    assert e.state.elapsed_minutes > 245          # tl_fs01_restart は起きてしまった
+    assert e.state.elapsed_minutes > 295          # tl_fs01_restart は起きてしまった
     assert "ev_010" in e.state.lost_evidence
 
-    out = e.decide(Decision(kind="action", action_id=NOTICE))   # 250→265分
+    out = e.decide(Decision(kind="action", action_id=NOTICE))   # 300→315分
     assert "tl_fs01_restart" not in out.prevented  # 起きた後の周知は効かない
     assert out.prevented == ["tl_field_reboot"]    # まだ起きていない分だけ
     assert not out.empty                           # 押しても無言にはならない
 
-    # 255分の分は「周知を書いている 15分の間」に起きてしまった。
+    # 305分の分は「周知を書いている 15分の間」に起きてしまった。
     # 効き始めるのは打ち終わってからなので、これは止められない
     assert out.events == ["tl_backup_roll"]
     assert out.averted == []
@@ -773,7 +804,8 @@ def test_averted_events_still_happen_but_take_nothing(scenario):
     for aid in ("act_edr_full_scan", "act_backup_integrity", "act_smb_session_fs01",
                 "act_ad_group_audit", "act_dc_authlog", "act_asset_inventory",
                 "act_collect_evtx_fs01", "act_netflow_overview",
-                "act_mail_gateway", "act_proxy_log"):
+                "act_mail_gateway", "act_proxy_log",
+                "act_dlp_review", "act_triage_ws113"):
         e.decide(Decision(kind="action", action_id=aid))
 
     assert "tl_fs01_restart" in e.state.fired_events   # 出来事そのものは起きる
@@ -806,7 +838,9 @@ def test_notice_is_a_bet_on_your_own_pace(scenario):
         "act_netflow_overview", "act_dc_authlog", "act_asset_inventory",
         "act_edr_full_scan", "act_backup_integrity", "act_ad_group_audit",
         "act_smb_session_fs01", "act_collect_evtx_fs01", "act_dlp_review",
-        "act_proxy_log", "act_memory_dump_ws042",
+        "act_console_query_ws055", "act_triage_ws113", "act_interview_sato",
+        "act_mail_gateway", "act_backup_config", "act_proxy_log",
+        "act_memory_dump_fs01", "act_memory_dump_ws042",
     ]
     pol = scenario.policy_by_id["evidence_preservation"]
 
@@ -855,7 +889,7 @@ def test_stopping_nothing_is_never_the_cheapest_way_out(scenario):
     実際に効くのはこの区間である。
     """
     stopped = _consequences_after(
-        scenario, ["act_shutdown_fs01", "act_rebuild_ws042"]
+        scenario, ["act_shutdown_fs01", "act_rebuild_ws042", "act_isolate_ws055"]
     )
     nothing = _consequences_after(scenario, [])
 
@@ -894,11 +928,11 @@ def test_the_projection_hangs_on_what_was_stopped(scenario):
     根絶を入れる前は上2つが同じ 0.2 で、真ん中の段が存在しなかった。
     """
     correct = _consequences_after(
-        scenario, ["act_shutdown_fs01", "act_rebuild_ws042"]
+        scenario, ["act_shutdown_fs01", "act_rebuild_ws042", "act_isolate_ws055"]
     )
-    # 侵害資産は両方止めたが、永続化は残ったまま
+    # 侵害資産は3つとも止めたが、永続化は残ったまま
     stopped_only = _consequences_after(
-        scenario, ["act_block_c2", "act_shutdown_fs01"]
+        scenario, ["act_block_c2", "act_shutdown_fs01", "act_isolate_ws055"]
     )
     # 片方しか止めていない
     partial = _consequences_after(scenario, ["act_block_c2"])
@@ -1006,7 +1040,7 @@ def test_a_wasted_move_is_tied_to_what_it_was_looking_for(scenario):
     """
     from irdojo.report import json as report_json
 
-    e = _play_until(scenario, 240, skip={"act_backup_integrity"})
+    e = _play_until(scenario, 300, skip={"act_backup_integrity"})
     gone_at = e.state.destroyed_at.get("ev_018")
     assert gone_at is not None, "ev_018 が世界に奪われる前に打ち切っている"
     pressed_at = e.state.elapsed_minutes
@@ -1045,9 +1079,9 @@ def test_the_notice_that_arrived_too_late_says_so(scenario):
     """
     from irdojo.report import json as report_json
 
-    # tl_backup_roll（255分）より後に打ち終わる位置から始める。
-    # ちょうど 255分に打ち始めると「遅れ 0分」になり、遅れの表示が測れない
-    e = _play_until(scenario, 260, skip={"act_backup_integrity"})
+    # tl_backup_roll（305分）より後に打ち終わる位置から始める。
+    # ちょうど 305分に打ち始めると「遅れ 0分」になり、遅れの表示が測れない
+    e = _play_until(scenario, 310, skip={"act_backup_integrity"})
     e.decide(Decision(kind="action", action_id="act_preservation_notice"))
     e.decide(Decision(kind="declare_assessment", assessment=["fs01"]))
     e.decide(Decision(kind="finish"))

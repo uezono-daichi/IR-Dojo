@@ -197,6 +197,92 @@ def test_loader_rejects(raw, mutate, fragment):
     assert fragment in str(exc.value)
 
 
+def _set_ev(data, eid, **kw):
+    for e in data["evidence"]:
+        if e["id"] == eid:
+            e.update(kw)
+            return e
+    raise KeyError(eid)
+
+
+@pytest.mark.parametrize(
+    "mutate,fragment",
+    [
+        # 白と読ませて正しいなら、それは誤導ではなく資料である
+        (lambda d: _set_ev(d, "ev_013", clears=["ws-055"]),
+         "misleading: true の証拠にのみ"),
+        # 指す先も、白と読ませる先も無い誤導は、誰も誤導しない
+        (lambda d: _set_ev(d, "ev_020", clears=[]),
+         "誰も誤導しません"),
+        # 1つの所見が同じ資産を「疑え」と「白だ」の両方に読ませることはない
+        (lambda d: _set_ev(d, "ev_020", points_to=["ws-055"]),
+         "両方に書いています"),
+        # 無実の資産を白と読ませたなら、その所見は正しい
+        (lambda d: _set_ev(d, "ev_020", clears=["ws-107"]),
+         "compromised 以外"),
+        # 棄却できても名指しが戻らないなら、再現率は下がったまま
+        (lambda d: _set_ev(d, "ev_020", refuted_by=["ev_017"]),
+         "名指しが戻らない"),
+        (lambda d: _set_ev(d, "ev_020", clears=["nope"]),
+         "clears に未定義の資産"),
+    ],
+)
+def test_the_loader_rejects_a_misused_clears(raw, mutate, fragment):
+    """再現率を下げる側の誤導は、**書き間違えても盤面では何も起きない**。
+
+    points_to の誤導は「名指しが増えた」という形で作者に見える。
+    clears の誤導は指す先が無いので、間違って書いても画面は静かなままで、
+    作者は罠を置いたつもりのまま誰も引っかからない盤面を出荷できる。
+    だから同じ厚みの検査をローダに置く（SPEC 3.4）。
+    """
+    data = copy.deepcopy(raw)
+    mutate(data)
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert fragment in str(exc.value)
+
+
+def test_the_board_actually_uses_both_directions_of_misdirection(scenario):
+    """盤面に、誤導の向きが両方あること（SPEC 3.4 / v1.42）。
+
+    v1.41 までの1本目は誤導が2つとも innocent を指しており、
+    教えられる失敗は「無関係なものを疑う」の1種類しか無かった。
+    実務でより高くつくのは逆側で、そちらは盤面に存在しなかった。
+    """
+    truth = set(scenario.world.ground_truth.compromised)
+    mis = [e for e in scenario.evidence if e.misleading]
+    over = [e.id for e in mis if set(e.points_to) - truth]
+    under = [e.id for e in mis if e.clears]
+    assert over, "疑わせる側の誤導が無い"
+    assert under, "白と読ませる側の誤導が無い"
+
+
+def test_the_costly_probe_looks_at_the_same_asset_as_the_cheap_one(scenario):
+    """白と読ませる誤導は、**同じ資産を見に行く手**で覆せること。
+
+    棄却の材料が別の資産の話だと、学習者は「もう一度この端末を見る」
+    という筋道に辿り着けない。SPEC 3.4 の「棄却に必要な証拠が極端に
+    高コスト＝理不尽」の、対象側の条件である。
+
+    壊れ方: 安いほうが高いほうと同値段になると、罠が罠でなくなる
+    （誰も安いほうで済ませない）。
+    """
+    for ev in scenario.evidence:
+        if not ev.clears:
+            continue
+        cheap = [a for a in scenario.actions if ev.id in a.yields]
+        assert cheap, ev.id
+        for asset in ev.clears:
+            back = [
+                a for a in scenario.actions
+                if set(a.yields) & set(ev.refuted_by) and asset in a.investigates
+            ]
+            assert back, f"{ev.id}: {asset} をもう一度見に行く手が無い"
+            assert min(a.cost_minutes for a in back) > min(
+                a.cost_minutes for a in cheap
+            ), f"{ev.id}: 覆す手が安いほうと同値段以下。罠が成立しない"
+
+
 def test_loader_rejects_unknown_keys(raw):
     raw["meta"]["compromised_hint"] = "ws-042"
     with pytest.raises(ScenarioError) as exc:
@@ -257,10 +343,11 @@ def test_complexity_matches_spec_table(raw):
             e["plausibility"] = "high"
     assert compute_complexity(build(data)) == 3
 
-    # 誤導を増やすと上がる（作者が狙って設計できる）
+    # 誤導を増やすと上がる（作者が狙って設計できる）。
+    # v1.42 で盤面の誤導が 2 → 3 になったので、1つ足すだけで★が上がる
     data = copy.deepcopy(raw)
     for e in data["evidence"]:
-        if e["id"] in ("ev_017", "ev_019"):   # ネガティブ所見を誤導に仕立て直す
+        if e["id"] == "ev_017":               # ネガティブ所見を誤導に仕立て直す
             e["misleading"] = True
             e["plausibility"] = "high"
             e["points_to"] = ["ws-113"]
@@ -275,17 +362,26 @@ def test_complexity_counts_multi_step_by_mode_not_by_count(raw):
     （any で候補が2つ）を多段と数えていた。棄却の材料が増えるほど
     複雑度が上がるのは向きが逆で、作者が狙って設計できない。
 
-    この盤面では ev_005 が all の多段（台帳と端末が揃って初めて棄却できる）。
-    同じ refuted_by のまま any に倒すと、多段の項 1.0 が消えて★が1つ下がる。
+    **候補の件数を揃えて、条件だけを入れ替える。** ev_007 の refuted_by を
+    2件にしたうえで any と all を比べると、`len(refuted_by)` は
+    どちらも 2 で同じなのに★が変わる。件数で数えていたら、
+    この2つは区別できない（逃げ道が2本ある易しい誤導のほうまで
+    多段と数えてしまう）。
     """
     assert compute_complexity(build(raw)) == 3
 
-    # 材料は同じで、条件だけ any に倒す → 多段ではなくなる
-    data = copy.deepcopy(raw)
-    for e in data["evidence"]:
-        if e["id"] == "ev_005":
-            e["refutation_mode"] = "any"
-    assert compute_complexity(build(data)) == 2
+    def with_ev_007(mode):
+        data = copy.deepcopy(raw)
+        for e in data["evidence"]:
+            if e["id"] == "ev_007":
+                e["refuted_by"] = ["ev_003", "ev_012"]
+                e["refutation_mode"] = mode
+        return compute_complexity(build(data))
+
+    # 逃げ道が2本ある（any）だけでは、盤面は難しくならない
+    assert with_ev_007("any") == 3
+    # 2つ揃って初めて棄却できる（all）なら、多段が1つ増えて★が上がる
+    assert with_ev_007("all") == 4
 
     # 候補を1つに減らしても同じ（any で1件と、any で2件は同じ難しさ）
     data = copy.deepcopy(raw)
@@ -293,7 +389,22 @@ def test_complexity_counts_multi_step_by_mode_not_by_count(raw):
         if e["id"] == "ev_005":
             e["refutation_mode"] = "any"
             e["refuted_by"] = ["ev_008"]
-    assert compute_complexity(build(data)) == 2
+    assert compute_complexity(build(data)) == compute_complexity(
+        build(_ev_005_as_any(raw))
+    )
+
+
+def _ev_005_as_any(raw):
+    """ev_005 を「材料は2つのまま any」にした盤面。
+
+    上のブロックと合わせて、`refuted_by` の件数が同じでも
+    `refutation_mode` が違えば数え方が変わることを両側から押さえる。
+    """
+    data = copy.deepcopy(raw)
+    for e in data["evidence"]:
+        if e["id"] == "ev_005":
+            e["refutation_mode"] = "any"
+    return data
 
 
 def test_repeated_action_rejected(scenario):
@@ -788,7 +899,9 @@ def test_stopping_the_root_does_not_contain_what_hangs_off_it(scenario):
     e.decide(Decision(kind="finish"))
 
     assert set(e.state.contained_at) == {"dc01"}
-    assert set(e.state.halted_at) == {"dc01", "fs01", "ws-042", "ws-107", "ws-113"}
+    assert set(e.state.halted_at) == {
+        "dc01", "fs01", "ws-042", "ws-055", "ws-107", "ws-113",
+    }
 
     c = scoring.consequences(e.state, scenario)
     assert c.containment_completeness == 0.0    # 侵害資産は1つも止まっていない

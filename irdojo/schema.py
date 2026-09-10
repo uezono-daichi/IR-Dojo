@@ -126,6 +126,14 @@ class Policy(Strict):
 class Evidence(Strict):
     id: str
     points_to: list[str]
+    # **誤導には向きが2つある**（SPEC 3.4）。`points_to` は「この資産を疑え」と
+    # 読ませる側で、外すと適合率が落ちる。`clears` はその逆側 —
+    # 「この資産については何も出てこなかった」と読ませる所見で、
+    # 真に受けると**侵害された資産を名指しから落とす**（再現率が落ちる）。
+    # 実務でより高くつくのは後者だが、v1.41 まで盤面にも計器にも存在しなかった。
+    # ローダは誤導専用にし、`compromised` の資産しか書けないようにする —
+    # 無実の資産を白と読ませる所見は、誤導ではなく正しい資料である。
+    clears: list[str] = []
     misleading: bool = False
     plausibility: Literal["low", "medium", "high"] = "medium"
     volatile: bool = False
@@ -495,13 +503,17 @@ def bearing_evidence(sc: "Scenario") -> list["Evidence"]:
     どの資産も指さず、どの論点も解消せず、どの誤導も棄却しない証拠
     （「バックアップは健全」「特権グループに変更なし」といったネガティブ所見）は
     読む量は増やすが、推論を難しくはしない。複雑度の材料から外す。
+
+    **`clears` を持つ所見は数える。** 見た目は同じネガティブ所見だが、
+    こちらは侵害された資産を名指しから落とさせる仕掛けであって、
+    読む量ではなく推論の難しさを上げている（SPEC 3.4）。
     """
     resolving = {e for q in sc.open_questions for e in q.resolved_by}
     refuting = {r for e in sc.evidence for r in e.refuted_by}
     return [
         e
         for e in sc.evidence
-        if e.points_to or e.id in resolving or e.id in refuting
+        if e.points_to or e.clears or e.id in resolving or e.id in refuting
     ]
 
 
@@ -715,6 +727,7 @@ def _validate_scenario(sc: "Scenario") -> None:
                 raise ValueError(f"{e.id}: 自分自身を refuted_by に指定しています")
         if e.misleading and not e.refuted_by:
             raise ValueError(f"{e.id}: 誤導証拠に refuted_by がありません（棄却不能）")
+        _validate_clears(sc, e, asset_ids)
         # refutation_mode は「誤導をどう棄却するか」の条件なので、
         # 誤導でない証拠に書いてあっても何も意味しない。黙って無視すると
         # 作者は効いているつもりで書き続ける
@@ -805,6 +818,71 @@ def _validate_scenario(sc: "Scenario") -> None:
 
     # 被害モデルの params
     _validate_damage_params(sc.damage)
+
+
+def _validate_clears(sc: "Scenario", e: "Evidence", asset_ids: set[str]) -> None:
+    """`clears`（再現率を下げる側の誤導）の使い方を検査する（SPEC 3.4）。
+
+    この向きの誤導は、**書き間違えても盤面では何も起きない。** 指す先が
+    無いので学習者の名指しは増えず、作者は「罠を置いた」つもりのまま
+    誰も引っかからない盤面を出荷できる。points_to 側の誤導が
+    `refuted_by` 必須で守られているのと同じ厚みの検査をここに置く。
+
+    禁じるのは5つ。
+
+    1. `clears` を誤導以外に書くこと。無実の資産について「何も無かった」と
+       読ませる所見は、**誤導ではなく正しい資料**である（同梱シナリオの
+       ev_013 がそれで、ws-113 は本当に無実）。誤導の印を付けると
+       講評が「これに騙されました」と嘘をつく
+    2. `points_to` にも `clears` にも何も書かれていない誤導。
+       誰も誤導されない飾りで、複雑度だけが上がる
+    3. 同じ資産を `points_to` と `clears` の両方に書くこと。
+       1つの所見が同じ資産を「疑え」と「白だ」の両方に読ませることはない
+    4. `clears` に `compromised` 以外の資産を書くこと。無実の資産を
+       白と読ませたなら、その所見は正しい
+    5. 棄却経路がその資産を名指しに戻さないこと。`refuted_by` のどれかが
+       その資産を `points_to` に持っていなければ、棄却できても
+       **名指しは戻らない** — 再現率は下がったままで、罠に出口が無い
+    """
+    for a in e.clears:
+        if a not in asset_ids:
+            raise ValueError(f"{e.id}: clears に未定義の資産 {a}")
+    if e.clears and not e.misleading:
+        raise ValueError(
+            f"{e.id}: clears は misleading: true の証拠にのみ書けます。"
+            "無実の資産について「何も無かった」と読ませる所見は誤導ではありません"
+        )
+    if e.misleading and not e.points_to and not e.clears:
+        raise ValueError(
+            f"{e.id}: 誤導証拠が points_to も clears も持っていません。"
+            "疑わせる先も、白と読ませる先も無い誤導は、誰も誤導しません"
+        )
+    both = sorted(set(e.points_to) & set(e.clears))
+    if both:
+        raise ValueError(
+            f"{e.id}: 同じ資産を points_to と clears の両方に書いています: {both}"
+        )
+    if not e.clears:
+        return
+    compromised = set(sc.world.ground_truth.compromised)
+    stray = sorted(set(e.clears) - compromised)
+    if stray:
+        raise ValueError(
+            f"{e.id}: clears に compromised 以外の資産があります: {stray}。"
+            "無実の資産を白と読ませたなら、その所見は正しい"
+        )
+    by_id = {x.id: x for x in sc.evidence}
+    for asset in e.clears:
+        back = [
+            r for r in e.refuted_by
+            if r in by_id and not by_id[r].misleading and asset in by_id[r].points_to
+        ]
+        if not back:
+            raise ValueError(
+                f"{e.id}: clears に書いた {asset} を points_to に持つ非誤導証拠が"
+                " refuted_by にありません。棄却できても名指しが戻らないので、"
+                "再現率は下がったままになります"
+            )
 
 
 def _reject_questions_that_name_the_truth(sc: "Scenario") -> None:

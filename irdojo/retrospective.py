@@ -41,6 +41,11 @@ class Counterfactual(BaseModel):
     # **講評の言い回しが変わる。** all の誤導で片方だけ持っていた人に
     # 「棄却の材料は手元にありました」と言うのは事実に反する
     refutation_mode: str = "any"
+    # 誤導の向き（SPEC 3.4）。
+    #   named  … 誤導を根拠に**名指しした**。適合率を下げた側
+    #   missed … 誤導を真に受けて**名指ししなかった**。再現率を下げた側
+    # 講評の文面が正反対になるので、画面に向きを判定させない。
+    direction: str = "named"
     # 宣言の時点の手元で、この誤導を棄却できたか。
     # **画面に判定を書かせない。** 「未取得が残っているか」で画面が判断すると、
     # any の誤導で候補が2つあるとき（1つ持っていれば足りる）に
@@ -375,41 +380,61 @@ def _greedy(scenario: Scenario, actions: list[Action]) -> list[Action]:
 
 
 def counterfactuals(state: GameState, scenario: Scenario) -> list[Counterfactual]:
-    """誤導に依拠した被疑判定と、その棄却経路を洗い出す（SPEC 6.6）。"""
+    """誤導に依拠した被疑判定と、その棄却経路を洗い出す（SPEC 6.6）。
+
+    **向きは2つある**（SPEC 3.4）。誤導を根拠に名指しした側（direction=named）と、
+    誤導を真に受けて名指ししなかった側（direction=missed）である。
+    後者は v1.41 までここに存在しなかった — `state.assessment` を回していたので、
+    **名指しに現れなかったものは原理的に拾えなかった。**
+    講評は取りこぼしを「再現率 2/3」という分数でしか返しておらず、
+    なぜ落としたのかは誰も説明していなかった（原則5）。
+    """
     by_id = scenario.evidence_by_id
     assets = scenario.asset_by_id
     obtained = [by_id[e] for e in state.obtained_evidence if e in by_id]
     explanations = scenario.debrief.misleading_explanations
+
+    def _make(asset_id: str, ev, direction: str) -> Counterfactual:
+        asset = assets.get(asset_id)
+        missing = [r for r in ev.refuted_by if r not in state.obtained_evidence]
+        held = [r for r in ev.refuted_by if r in state.obtained_evidence]
+        return Counterfactual(
+            asset_id=asset_id,
+            asset_label=asset.label if asset else asset_id,
+            evidence_id=ev.id,
+            evidence_summary=ev.summary,
+            explanation=explanations.get(ev.id, ""),
+            refuting_evidence=missing,
+            refuting_summaries=[by_id[r].summary for r in missing if r in by_id],
+            obtainable_by=_actions_yielding(scenario, missing),
+            refuting_obtained=held,
+            refuting_obtained_summaries=[
+                by_id[r].summary for r in held if r in by_id
+            ],
+            refutation_mode=ev.refutation_mode,
+            refuted=ev.is_refuted(state.obtained_evidence),
+            direction=direction,
+        )
 
     out: list[Counterfactual] = []
     for asset_id in state.assessment:
         pointing = [e for e in obtained if asset_id in e.points_to]
         if not pointing or not all(e.misleading for e in pointing):
             continue
-        asset = assets.get(asset_id)
         for ev in pointing:
-            missing = [r for r in ev.refuted_by if r not in state.obtained_evidence]
-            held = [r for r in ev.refuted_by if r in state.obtained_evidence]
-            out.append(
-                Counterfactual(
-                    asset_id=asset_id,
-                    asset_label=asset.label if asset else asset_id,
-                    evidence_id=ev.id,
-                    evidence_summary=ev.summary,
-                    explanation=explanations.get(ev.id, ""),
-                    refuting_evidence=missing,
-                    refuting_summaries=[
-                        by_id[r].summary for r in missing if r in by_id
-                    ],
-                    obtainable_by=_actions_yielding(scenario, missing),
-                    refuting_obtained=held,
-                    refuting_obtained_summaries=[
-                        by_id[r].summary for r in held if r in by_id
-                    ],
-                    refutation_mode=ev.refutation_mode,
-                    refuted=ev.is_refuted(state.obtained_evidence),
-                )
-            )
+            out.append(_make(asset_id, ev, "named"))
+
+    # 逆側。**侵害されていたのに名指ししなかった**資産について、
+    # その資産を「白」と読ませた誤導を手元に持っていたなら、それを出す。
+    # ここだけが ground_truth を読む — 講評は真相を開示する場なので
+    # 問題ないが、プレイ中に呼ばれる経路が無いことは api 側が保証している
+    named = set(state.assessment)
+    for asset_id in scenario.world.ground_truth.compromised:
+        if asset_id in named:
+            continue
+        for ev in obtained:
+            if asset_id in ev.clears:
+                out.append(_make(asset_id, ev, "missed"))
     return out
 
 

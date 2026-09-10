@@ -29,8 +29,10 @@ FORBIDDEN_KEYS = {
     # 棄却の条件も答えの側。「2つ揃わないと棄却できない」と分かれば、
     # その誤導が誤導であることを言ったのと同じになる
     "refutation_mode",
-    # 選択を賭けでなくする構造化情報
-    "points_to", "yields", "destroys", "investigates", "targets",
+    # 選択を賭けでなくする構造化情報。
+    # `clears` は points_to の逆向きで、**印としてはより強い** —
+    # 「この所見は白く見えるだけだ」と教えるのと同じになる（SPEC 3.4）
+    "points_to", "clears", "yields", "destroys", "investigates", "targets",
     # 何を防げるかは答えの側。ラベルが世界の言葉で何をするかを言えば足りる
     "prevents", "averted_text", "averted_label",
     # 採点の内部情報
@@ -129,8 +131,8 @@ def test_report_discloses_truth_only_after_finish(client):
 
     rep = client.get(f"/api/session/{sid}/report").json()
     # ここで初めて開示される
-    assert rep["truth"]["compromised"] == ["ws-042", "fs01"]
-    assert rep["truth"]["misleading_evidence"] == ["ev_005", "ev_007"]
+    assert rep["truth"]["compromised"] == ["ws-042", "fs01", "ws-055"]
+    assert rep["truth"]["misleading_evidence"] == ["ev_005", "ev_007", "ev_020"]
 
 
 def test_scenarios_directory_is_not_served(client):
@@ -360,12 +362,12 @@ def test_primer_follows_assist_level(client):
         assert res["view"]["show_primer"] is want, level
 
 
-def test_scenario_text_has_no_raw_markdown(client):
+def test_scenario_text_has_no_raw_markdown(client, any_scenario):
     """シナリオ由来の文字列は textContent で入れる（SPEC 7.7.2）。
 
     マークダウンは解釈されないので、`**強調**` はそのまま画面に出てしまう。
     """
-    sc = load_scenario("ransomware-initial-response-01")
+    sc = any_scenario
     fields = []
     for e in sc.evidence:
         fields += [(e.id, e.summary), (e.id, e.content), (e.id, e.reading)]
@@ -375,6 +377,19 @@ def test_scenario_text_has_no_raw_markdown(client):
         fields += [(q.id, q.question), (q.id, q.implication)]
     for text in (sc.meta.briefing, sc.world.ground_truth.attack_narrative):
         fields.append(("meta", text))
+    # **講評に出る文字列が抜けていた**（v1.42）。誤導の説明も key_lessons も
+    # 同じ経路で画面に入るのに、この一覧に無かったので `**強調**` が
+    # そのまま出た。拾ったのは playtest で、テストは通っていた
+    for pol in sc.policies:
+        fields.append((pol.id, pol.briefing))
+    for eid, text in sc.debrief.misleading_explanations.items():
+        fields.append((eid, text))
+    for i, text in enumerate(sc.debrief.key_lessons):
+        fields.append((f"key_lessons[{i}]", text))
+    for i, hint in enumerate(sc.debrief.replay_suggestions):
+        fields.append((f"replay_suggestions[{i}]", hint.hint))
+    for ev in sc.timeline:
+        fields += [(ev.id, ev.text), (ev.id, ev.averted_text)]
     for owner, text in fields:
         assert "**" not in (text or ""), f"{owner}: 素のマークダウンが混ざっている"
 
@@ -1179,9 +1194,10 @@ def test_the_debrief_says_what_was_left_behind(client):
     sid = client.post("/api/session", json={"scenario_id": sc.meta.id}).json()["session_id"]
     client.post(
         f"/api/session/{sid}/decide",
-        json={"kind": "declare_assessment", "assessment": ["ws-042", "fs01"]},
+        json={"kind": "declare_assessment",
+              "assessment": ["ws-042", "fs01", "ws-055"]},
     )
-    for aid in ("act_block_c2", "act_shutdown_fs01"):
+    for aid in ("act_block_c2", "act_shutdown_fs01", "act_isolate_ws055"):
         client.post(
             f"/api/session/{sid}/decide", json={"kind": "action", "action_id": aid}
         )
@@ -1199,6 +1215,77 @@ def test_the_debrief_says_what_was_left_behind(client):
     assert c["eradicable_by"]
 
 
+def test_the_debrief_explains_what_was_never_suspected(client):
+    """名指ししなかった侵害資産について、なぜ落としたのかを講評で言う。
+
+    **プレイ中は誰もこの話をしない**（原則5）。名指しに出てこなかった
+    資産は、画面のどこにも現れないまま終わる。反実仮想は v1.41 まで
+    `state.assessment` を回していたので、原理的にここを拾えず、
+    講評が返していたのは「再現率 2/3」という分数だけだった。
+
+    壊れ方: 向きを画面が判定すると、名指しした側と同じ文面が出る
+    （「これを根拠に被疑と判定しました」）。判定していないのだから嘘になる。
+    """
+    sc = load_scenario("ransomware-initial-response-01")
+    sid = client.post("/api/session", json={"scenario_id": sc.meta.id}).json()["session_id"]
+
+    def press(aid):
+        client.post(
+            f"/api/session/{sid}/decide", json={"kind": "action", "action_id": aid}
+        )
+
+    # 安い手で ws-055 を見て、何も出てこないまま名指しから落とす
+    for aid in ("act_collect_evtx_fs01", "act_smb_session_fs01",
+                "act_console_query_ws055"):
+        press(aid)
+    client.post(
+        f"/api/session/{sid}/decide",
+        json={"kind": "declare_assessment", "assessment": ["ws-042", "fs01"]},
+    )
+    press("act_shutdown_fs01")
+    client.post(f"/api/session/{sid}/decide", json={"kind": "finish"})
+    rep = client.get(f"/api/session/{sid}/report").json()
+
+    missed = [
+        cf for cf in rep["retrospective"]["counterfactuals"]
+        if cf["direction"] == "missed"
+    ]
+    assert len(missed) == 1, rep["retrospective"]["counterfactuals"]
+    cf = missed[0]
+    assert cf["asset_id"] == "ws-055"
+    assert cf["evidence_id"] == "ev_020"
+    assert cf["refuting_evidence"] == ["ev_021"]      # 取っていれば戻せた
+    assert cf["obtainable_by"], "どうすれば取れたかを名指ししていない"
+    assert cf["explanation"], "なぜ白く見えたのかの説明が無い"
+
+
+def test_the_debrief_does_not_call_a_named_asset_a_miss(client):
+    """高い手まで押して名指しした人に「落とした」と言わないこと。
+
+    講評の文面は向きで分岐するので、片側だけ直すと必ずずれる
+    （test_the_debrief_says_when_nothing_was_left_behind と同じ論法）。
+    """
+    sc = load_scenario("ransomware-initial-response-01")
+    sid = client.post("/api/session", json={"scenario_id": sc.meta.id}).json()["session_id"]
+    for aid in ("act_collect_evtx_fs01", "act_smb_session_fs01",
+                "act_console_query_ws055", "act_local_collect_ws055"):
+        client.post(
+            f"/api/session/{sid}/decide", json={"kind": "action", "action_id": aid}
+        )
+    client.post(
+        f"/api/session/{sid}/decide",
+        json={"kind": "declare_assessment",
+              "assessment": ["ws-042", "fs01", "ws-055"]},
+    )
+    client.post(f"/api/session/{sid}/decide", json={"kind": "finish"})
+    rep = client.get(f"/api/session/{sid}/report").json()
+
+    assert [
+        cf for cf in rep["retrospective"]["counterfactuals"]
+        if cf["direction"] == "missed"
+    ] == []
+
+
 def test_the_debrief_says_when_nothing_was_left_behind(client):
     """取り除けた場合に「取り除けなかった」と言わないこと。
 
@@ -1208,9 +1295,10 @@ def test_the_debrief_says_when_nothing_was_left_behind(client):
     sid = client.post("/api/session", json={"scenario_id": sc.meta.id}).json()["session_id"]
     client.post(
         f"/api/session/{sid}/decide",
-        json={"kind": "declare_assessment", "assessment": ["ws-042", "fs01"]},
+        json={"kind": "declare_assessment",
+              "assessment": ["ws-042", "fs01", "ws-055"]},
     )
-    for aid in ("act_rebuild_ws042", "act_shutdown_fs01"):
+    for aid in ("act_rebuild_ws042", "act_shutdown_fs01", "act_isolate_ws055"):
         client.post(
             f"/api/session/{sid}/decide", json={"kind": "action", "action_id": aid}
         )

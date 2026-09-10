@@ -1503,24 +1503,41 @@ function blockCounterfactuals(rep) {
   }
   if (!list.length) {
     b.appendChild(el('p', 'dim',
-      '誤導証拠だけを根拠にした名指しはありませんでした。'));
+      '誤導証拠だけを根拠にした名指しも、誤導に隠れた取りこぼしもありませんでした。'));
     return b;
   }
   list.forEach(function (cf) {
     var note = el('div', 'note-bad');
-    note.appendChild(el('p', null,
-      '⚠ ' + cf.evidence_id + '（' + cf.evidence_summary + '）を根拠に ' +
-      cf.asset_id + ' を被疑と判定しました。'));
+    /* **向きは画面が決めない**（cf.direction が持っている）。
+       誤導には2つの向きがある — 疑わせて名指しさせる側と、
+       白と読ませて名指しから落とさせる側で、言うことが正反対になる。
+       ここを「名指ししたかどうか」で画面が判定すると、
+       同じ誤導の説明が2つの文面に割れる（SPEC 3.4 / 6.6） */
+    if (cf.direction === 'missed') {
+      note.appendChild(el('p', null,
+        '⚠ ' + cf.asset_id + ' を名指ししませんでした。手元にあった ' +
+        cf.evidence_id + '（' + cf.evidence_summary + '）が、' +
+        'この資産については何も出てこなかったと読める所見でした。'));
+    } else {
+      note.appendChild(el('p', null,
+        '⚠ ' + cf.evidence_id + '（' + cf.evidence_summary + '）を根拠に ' +
+        cf.asset_id + ' を被疑と判定しました。'));
+    }
     if (cf.explanation) { prose(note.appendChild(el('div')), cf.explanation, 'dim'); }
     /* 棄却の条件は誤導ごとに違う（refutation_mode）。**足りたかどうかは
        画面が判定しない** — cf.refuted が答えを持っている。未取得が
        残っているかで画面が決めていると、候補が2つある any の誤導
        （1つ持てば足りる）に「これだけでは足りません」と出てしまう */
     var every = cf.refutation_mode === 'all';
+    /* 向きで動詞が変わる。名指しした側は「棄却」、名指ししなかった側は
+       白いという読みを「覆す」ことになる */
+    var undo = cf.direction === 'missed' ? '読みを覆せました' : '棄却できました';
     if (cf.refuted) {
       note.appendChild(el('p', null,
-        '→ ' + cf.refuting_obtained.join(', ') +
-        ' は取得済みでした。棄却の材料は手元にありました。'));
+        '→ ' + cf.refuting_obtained.join(', ') + ' は取得済みでした。' +
+        (cf.direction === 'missed'
+          ? 'この資産を名指しに戻す材料は手元にありました。'
+          : '棄却の材料は手元にありました。')));
     } else if (cf.refuting_evidence.length) {
       if (cf.refuting_obtained.length) {
         note.appendChild(el('p', null,
@@ -1534,7 +1551,7 @@ function blockCounterfactuals(rep) {
         : cf.refuting_obtained.length ? ' も取得していれば'
         : ' を取得していれば';
       note.appendChild(el('p', null,
-        '→ ' + cf.refuting_evidence.join(', ') + tail + '棄却できました。' +
+        '→ ' + cf.refuting_evidence.join(', ') + tail + undo + '。' +
         (cf.obtainable_by.length ? '（' + cf.obtainable_by.join(' / ') + '）' : '')));
     }
     b.appendChild(note);

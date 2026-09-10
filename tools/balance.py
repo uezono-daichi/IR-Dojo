@@ -80,6 +80,14 @@ class Profile:
     # 「疑わしきは全部隔離」は、深夜に人手が無いときの定番の降り方である。
     # 手元の証拠から組み立てる `_assess` ではこの形が作れない
     names_everything: bool = False
+    # 空振りに終わった資産を「もう見ない」に入れるか。
+    # **これが盤面のもう1つの向きの失敗を作る像である**（v1.42）。
+    # 安い手を押して何も出てこなかった資産に、より高い手をもう一度
+    # 入れるかどうかは、調査量ではなく読みの問題である。
+    # ここを像の性質として分けないと、「侵害されているものを
+    # 名指ししなかった」という失敗が一度も測れない
+    # （wanderer / wanderer_clear と同じ作り方の対照）
+    writes_off_empty_handed: bool = False
     # 調査を1手も押さない像か。「調べる意味はあるか」の判定は、
     # この印が付いた像と付いていない像の**全対戦**で見る。
     # 1本だけ押して降りる像（shallow）はここに入らない —
@@ -182,6 +190,21 @@ PROFILES = [
     # 依存の根を止める手が一度も押されず、封じ込めの取捨選択が測れない
     Profile("decapitate", "根元を落とす", "依存の根を止めれば全部止まると考える",
             _skilled, contains_root=True),
+    # **名指ししすぎる失敗の、逆側の像**（v1.42）。
+    # 画面の並び順に押していき、安い手が何も指さずに返ってきた資産は
+    # そこで打ち切る。「調べた。何も出なかった。次へ」は、
+    # 深夜に一人で回しているときの最もありふれた降り方である。
+    # `_assess` は手元の証拠が指す先から宣言を組み立てるので、
+    # この像は**その資産を自然に名指ししない** — 誤導の印は見ていない
+    Profile("frugal", "空振りで見切る",
+            "安い手が何も指さなかった資産に、それ以上は手を入れない",
+            _exhaustive, writes_off_empty_handed=True, eradicates_named=True),
+    # frugal と**押し順が1つも違わない**対照。違うのは、空振りした資産に
+    # もう一度手を入れたかどうかだけ。これが無いと「名指ししなかった」損が
+    # 調査量の差と切り分けられない（誤導の対と同じ作り方）
+    Profile("frugal_thorough", "見切らずに戻る",
+            "同じ順で、空振りに終わった資産にもう一度手を入れた場合",
+            _exhaustive, eradicates_named=True),
 ]
 
 
@@ -215,6 +238,7 @@ def _play(
     sc: Scenario, order: list[str], notices: list[str],
     *, stop: bool, patience: int | None,
     weighs_refutations: bool, contains_everything: bool,
+    writes_off_empty_handed: bool = False,
     contains_root: bool = False,
     eradicates_named: bool = False,
     names_everything: bool = False,
@@ -228,6 +252,8 @@ def _play(
 
     critical = {q.id for q in sc.open_questions if q.critical}
     todo = list(order)
+    written_off: set[str] = set()
+    by_id = sc.action_by_id
     while todo:
         if patience is not None and e.state.elapsed_minutes >= patience:
             break
@@ -240,11 +266,21 @@ def _play(
         if stop and critical <= set(e.state.resolved_questions):
             break
         for aid in list(todo):
+            act = by_id.get(aid)
+            # 空振りに終わった資産には、それ以上手を入れない像
+            if (
+                writes_off_empty_handed and act is not None
+                and act.investigates and set(act.investigates) <= written_off
+            ):
+                todo.remove(aid)
+                continue
             try:
                 e.decide(Decision(kind="action", action_id=aid))
             except InvalidDecision:
                 continue
             todo.remove(aid)
+            if writes_off_empty_handed and act is not None:
+                _write_off(sc, e.state, act, written_off)
             break
         else:
             break  # どれも実行できない＝手詰まり
@@ -286,6 +322,29 @@ def _play(
 
     e.decide(Decision(kind="finish"))
     return e
+
+
+def _write_off(sc: Scenario, state, act, written_off: set[str]) -> None:
+    """空振りに終わった資産を「もう見ない」に入れる。
+
+    **これは誤導の印を読んでいない。** 見ているのは学習者が画面で見るものだけ —
+    押した手から何が返ってきたか（どの資産も指していない所見だけだったか）と、
+    その資産を指す証拠を手元にまだ1つも持っていないかである。
+
+    2つ目の条件が要る。ws-042 は利用者に連絡が付かない（何も指さない所見）が、
+    その時点で既に別の証拠が ws-042 を指しているので、
+    実在の学習者はそこで ws-042 を諦めない。この条件が無いと、
+    像は「1回空振りしたら全部やめる」になり、測っているものが
+    再現率ではなく調査量の不足に変わる。
+    """
+    by_id = sc.evidence_by_id
+    got = set(state.obtained_evidence)
+    # 実際に返ってきた分だけを見る。奪われて何も出なかった手も空振りである
+    produced = [by_id[e] for e in act.yields if e in got and e in by_id]
+    if any(ev.points_to for ev in produced):
+        return
+    supported = {a for eid in got if eid in by_id for a in by_id[eid].points_to}
+    written_off |= set(act.investigates) - supported
 
 
 def _assess(sc: Scenario, state, *, weighs_refutations: bool) -> list[str]:
@@ -397,6 +456,7 @@ def run_profile(sc: Scenario, prof: Profile, notices: list[str]) -> Run:
               stop=prof.stop_when_confident, patience=prof.patience_minutes,
               weighs_refutations=prof.weighs_refutations,
               contains_everything=prof.contains_everything,
+              writes_off_empty_handed=prof.writes_off_empty_handed,
               contains_root=prof.contains_root,
               eradicates_named=prof.eradicates_named,
               names_everything=prof.names_everything)
@@ -1004,9 +1064,54 @@ def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
             f"（調査は両方 {ok.decided_at}分まで同一。どの方針でも 5点以上）",
         ))
         out.append(Check(
-            set(bad.assessment) > set(ok.assessment),
+            set(bad.assessment) - set(ok.assessment),
             "誤導は実際に無関係な資産を名指しさせる",
             f"誤導を追う: {bad.assessment} / 棄却できた: {ok.assessment}",
+        ))
+
+    # **誤導には向きが2つある**（SPEC 3.4 / v1.42）。
+    # v1.41 までの盤面の誤導は2つとも innocent を指しており、
+    # 教えられる失敗は「無関係なものを疑う」の1種類しかなかった。
+    # 実務でより高くつくのは逆側 —「侵害されているものを、
+    # 無実に見えたので名指ししなかった」である。
+    # 27項目の判定も全部が名指ししすぎる側だけを見ていた
+    truth = set(sc.world.ground_truth.compromised)
+    traps = [
+        e.id for e in sc.evidence
+        if e.misleading and ((set(e.points_to) & truth) or e.clears)
+    ]
+    out.append(Check(
+        bool(traps),
+        "再現率を下げる誤導が盤面にある",
+        f"侵害資産を白と読ませる誤導: {traps or 'なし'}"
+        f"（誤導 {[e.id for e in sc.evidence if e.misleading]} のうち）",
+    ))
+
+    # 逆側の失敗が、名指ししすぎる失敗と同格に高くつくか。
+    # **どちらの対照も、押し順が1手も違わない。**
+    #   誤導を追う／棄却する … 同じ調査で、宣言の作り方だけが違う
+    #   空振りで見切る／戻る … 同じ順で、空振りした資産に戻ったかだけが違う
+    # 片側だけが高いと、盤面は「疑いすぎるな」しか教えていないことになる
+    if ("frugal", False) in runs and ("wanderer_clear", False) in runs:
+        thin, thick = runs[("frugal", False)], runs[("frugal_thorough", False)]
+        bad, ok = runs[("wanderer", False)], runs[("wanderer_clear", False)]
+        missed = sorted(truth - set(thin.assessment))
+        over = sorted(set(bad.assessment) - truth)
+        loss_thin = min(
+            thick.by_policy[p.id]["composite"] - thin.by_policy[p.id]["composite"]
+            for p in sc.policies
+        )
+        loss_over = min(
+            ok.by_policy[p.id]["composite"] - bad.by_policy[p.id]["composite"]
+            for p in sc.policies
+        )
+        out.append(Check(
+            bool(missed) and bool(over) and loss_thin >= 10 and loss_over >= 10,
+            "名指ししない失敗が、名指ししすぎる失敗と同格に高くつく",
+            f"見切った像が落とした侵害資産 {missed or 'なし'} → 損 {loss_thin}点"
+            f"（{thin.minutes}分 vs 戻った像 {thick.minutes}分）／"
+            f"誤導を追った像が余計に名指しした資産 {over or 'なし'} → 損 {loss_over}点"
+            "（どちらも 10点以上。全方針での最小値）",
         ))
 
     # 調べないプレイが、調べたプレイに勝っていないか。
