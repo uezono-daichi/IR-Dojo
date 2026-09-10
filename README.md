@@ -97,12 +97,45 @@ critical 論点の数、証拠数からローダが算出する。
 
 ```
 pip install -e ".[dev]"
-pytest
+pytest                                   # 100本
 ```
 
 - `tests/test_scoring.py` — SPEC 6.8 の計算例をそのまま検証する
 - `tests/test_edge_cases.py` — SPEC 6.7 の端値とローダが拒否すべき構造
 - `tests/test_no_leak.py` — プレイ中の全レスポンスを走査して答えの漏洩を検査する
+
+### 設計を測る
+
+**「面白くない」「分かりにくい」は感想ではなく測る対象**にしている。
+
+```
+python tools/balance.py                  # 設計の均衡（SPEC 8.3 のチェックリスト）
+npm install
+node tools/playtest.mjs --dpr 2          # 実際に遊んで壊れを拾う＋スクショ
+```
+
+`tools/balance.py` はプレイ像（巧い / 全部押す / 誤導を追う）ごとに実際に遊ばせ、
+折れ点は誰かに踏まれるか、網羅は損になっているか、この手は一度でも押す価値があるか、
+方針を差し替えると評価が変わるか、を数字で判定する。
+
+`tools/playtest.mjs` は実際にブラウザで遊び、描画エラー・横はみ出し・
+canvas の暴走・アクションの画面外への押し出しを拾ってスクリーンショットを撮る。
+**canvas を含む画面は dpr 2 でも必ず確認する** — dpr 1 だけの検証は
+Retina で必ず起きる不具合を素通りさせる（SPEC 7.6.9）。
+
+### Claude Code で作業する
+
+`CLAUDE.md` に守るべきことがある（答えを漏らさない / 網羅を罰しない /
+意味の無い緊迫はノイズ / 正解を一つに定めない / プレイ中に損失を告げない）。
+
+| | |
+|---|---|
+| `/improve` | 評価 → 案 → 実装 → 効果測定を一巡する |
+| `balance-analyst` | 均衡を実測する。原因は書くが案は書かない |
+| `playtest-critic` | 予備知識の無い学習者として遊ぶ |
+| `leak-auditor` | 答えが漏れている箇所を敵対的に探す |
+| `design-proposer` | 症状ではなく原因に案を出す |
+| `spec-implementer` | 実装・シナリオ・テスト・SPEC を一貫させる |
 
 ## ライセンス
 
