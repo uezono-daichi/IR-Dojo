@@ -61,6 +61,7 @@ def base_rate(model: DamageModel, minute: float) -> float:
 
 def containment_factor(
     contained: Iterable[str],
+    eradicated: Iterable[str],
     truth: GroundTruth,
     effect: ContainmentEffect,
 ) -> float:
@@ -68,12 +69,25 @@ def containment_factor(
 
     判定は ground_truth のみに基づく。被害は物理的な現実であり、
     学習者の思い込みでは変わらない。
+
+    **見るのは2つの集合である。** 攻撃の経路を断ったか（contained）と、
+    居座られた状態を消したか（eradicated）は別の問いで、
+    盤面の手も別である（6.3 の contained_at / halted_at と同じ理由）。
+
+    以前は両方を `contained` で判定していた。ローダが
+    `persistence ⊆ compromised` を要求している以上、
+    `compromised ⊆ contained` が成り立てば `persistence ⊆ contained` も
+    自動的に成り立つ — **後半の条項は恒真だった**（9.4 #5）。
+    128通り全数で結果を変える組が0個だったので、
+    「隔離しても、端末を戻せば攻撃者も戻ってくる」という
+    このシナリオの中核が、盤面で一度も問われていなかった。
     """
     c = set(contained)
+    e = set(eradicated)
     compromised = set(truth.compromised)
     persistence = set(truth.persistence)
 
-    if compromised <= c and persistence <= c:
+    if compromised <= c and persistence <= e:
         return effect.on_correct_containment
     if c & compromised:
         return effect.on_partial
@@ -109,6 +123,7 @@ def project(
     model: DamageModel,
     truth: GroundTruth,
     contained: Iterable[str],
+    eradicated: Iterable[str],
     end_minute: int,
     horizon: int,
 ) -> list[float]:
@@ -123,13 +138,14 @@ def project(
     盤面上ほとんど効かなくなる。H は business_impact と共用する
     （「復旧まで」は同じ1つの前提であり、2つ置くと作者が別々に調整できてしまう）。
     """
-    return accrue(model, truth, contained, end_minute, end_minute + horizon)
+    return accrue(model, truth, contained, eradicated, end_minute, end_minute + horizon)
 
 
 def accrue(
     model: DamageModel,
     truth: GroundTruth,
     contained: Iterable[str],
+    eradicated: Iterable[str],
     start_minute: int,
     end_minute: int,
 ) -> list[float]:
@@ -138,7 +154,7 @@ def accrue(
     封じ込め状態は区間内で一定とみなす。エンジンはアクション単位で
     この関数を呼ぶため、区間内で状態が変わることはない。
     """
-    factor = containment_factor(contained, truth, model.containment_effect)
+    factor = containment_factor(contained, eradicated, truth, model.containment_effect)
     out: list[float] = []
     for m in range(start_minute, end_minute):
         # 分あたりに直すため 60 で割る（base は「/時間」で与えられる）

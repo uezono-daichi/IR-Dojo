@@ -69,6 +69,11 @@ class GameState(BaseModel):
     # ws-042 の Run キーは残るし、fs01 上の暗号化プロセスは動き続ける。
     # containment_completeness と 5.8 の減衰判定はこちらを使う（SPEC 6.3）
     contained_at: dict[str, int] = {}
+    # 永続化を取り除いた資産 → その時刻（分）。**依存連鎖しない。**
+    # 根絶は個別の資産に手を当てる作業で、上流を作り直しても
+    # 下流に残された Run キーは消えない。5.8 の減衰判定が
+    # `persistence ⊆ eradicated` でこちらを見る（SPEC 5.8 / 6.3）
+    eradicated_at: dict[str, int] = {}
     # 業務が止まった資産 → その時刻（分）。side_effects.business_impact が
     # true の手だけが入り、depends_on で不動点まで展開される。
     # 「どの資産で仕事ができなくなるか」の答え。business_impact だけが使う
@@ -110,6 +115,10 @@ class ActionOutcome(BaseModel):
     # 封じ込めで新たに止まった資産（直接 targets）。
     # 何をしたのかを告げないと、押しても無言になる。
     contained: list[str] = []
+    # 永続化を取り除いた資産。止めることと作り直すことは別の作業なので、
+    # 別の箱で返す。押した直後にその場で区別できないと、
+    # 学習者は「隔離した」と「作り直した」を同じことだと受け取る
+    eradicated: list[str] = []
     # 業務が止まった資産。依存で波及した分を含む。
     # 止めることと業務が止まることは別なので、別の箱で返す（SPEC 6.3）
     halted: list[str] = []
@@ -131,6 +140,7 @@ class ActionOutcome(BaseModel):
         return (
             not self.revealed
             and not self.contained
+            and not self.eradicated
             and not self.halted
             and not self.already
             and not self.prevented
@@ -417,6 +427,7 @@ class Engine:
             self.scenario.damage,
             self.scenario.world.ground_truth,
             st.contained_at.keys(),
+            st.eradicated_at.keys(),
             start,
             end,
         )
@@ -473,6 +484,7 @@ class Engine:
         #    「fs01 と ws-042 も封じ込めた」ことになり、Run キーも
         #    暗号化プロセスも生きたまま封じ込め成立と数えられていた。
         contained: list[str] = []
+        eradicated: list[str] = []
         halted: list[str] = []
         cascaded: list[str] = []
         already: list[str] = []
@@ -482,6 +494,13 @@ class Engine:
             for asset_id in action.targets:
                 st.contained_at.setdefault(asset_id, end)
             contained = [a for a in st.contained_at if a not in before_contained]
+
+            # 根絶。**依存連鎖しない。** 上流を作り直しても、下流の端末に
+            # 残された永続化は消えない。5.8 の減衰はここを見る
+            before_eradicated = set(st.eradicated_at)
+            for asset_id in action.eradicates:
+                st.eradicated_at.setdefault(asset_id, end)
+            eradicated = [a for a in st.eradicated_at if a not in before_eradicated]
 
             before_halted = set(st.halted_at)
             if action.side_effects.business_impact:
@@ -529,6 +548,7 @@ class Engine:
             revealed=revealed,
             unlocked=sorted(after_unlocked - before_unlocked),
             contained=contained,
+            eradicated=eradicated,
             halted=halted,
             cascaded=cascaded,
             already=already,

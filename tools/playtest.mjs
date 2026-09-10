@@ -299,6 +299,24 @@ if (!(await page.$('#screen-debrief.active'))) {
     await shot(name);
   }
 
+  // 封じ込めの答え合わせ（SPEC 5.8 / 7.6.13）。**ここが唯一の開示の場**で、
+  // 復旧地平の破線がなぜその傾きなのかを言葉にしている唯一の箇所でもある
+  const cont = await page.evaluate(() => {
+    for (const h of document.querySelectorAll('#debrief-body h3')) {
+      if (h.textContent.includes('止めたもの')) {
+        h.scrollIntoView({ block: 'start' });
+        return h.parentElement.innerText.replace(/\s+/g, ' ').trim();
+      }
+    }
+    return null;
+  });
+  if (!cont) {
+    note('error', 'debrief', '封じ込めの答え合わせ（止めたもの／取り除いたもの）が無い');
+  } else {
+    await page.waitForTimeout(180);
+    await shot('09f-debrief-containment');
+  }
+
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   await page.waitForTimeout(200);
   await screen('10-debrief-bottom');

@@ -64,6 +64,13 @@ class Profile:
     # 封じ込めの選び方。False なら「自分が名指しした資産に届く手」だけを押す。
     # True は取捨選択をしない像（調査と同じ振る舞いを対応でも取る）
     contains_everything: bool = False
+    # 名指しした資産に「作り直す」手があるなら、そちらを選ぶか。
+    # 画面に出ているのはラベルと所要だけなので、これは
+    # ground_truth を読む像ではない — 「通信だけを止める」束と
+    # 「作り直す」束のどちらを取るかという、値札を見た上での判断である。
+    # この印が無いと、最安被覆は必ず安いほう（止めるだけ）を選び、
+    # 根絶の手は一度も押されない
+    eradicates_named: bool = False
     # 判定の外でも、依存の根に届く手を押すか。
     # `depends_on` は構成図として学習者に開示されている（7.6.7）ので、
     # 「根を落とせば全部止まる」は画面を見た人が普通に思いつく手である。
@@ -141,7 +148,13 @@ def _shallow(sc: Scenario) -> list[str]:
 
 
 PROFILES = [
-    Profile("skilled", "巧い", "最短経路。答えを知っている者の上限", _skilled),
+    Profile("skilled", "巧い", "最短経路のあと、作り直すところまで行く", _skilled,
+            eradicates_named=True),
+    # skilled と**調査量が1分も違わない**対照。違うのは封じ込めの束だけ。
+    # これが無いと「根絶したか」の差を調査量の差と切り分けられない
+    # （誤導を追う／棄却する の対で使ったのと同じ作り方）
+    Profile("skilled_halfway", "止めるだけ",
+            "同じ調査量で、通信を断つところまでで降りた場合", _skilled),
     Profile("exhaustive", "全部押す", "取捨選択をしない", _exhaustive,
             stop_when_confident=False, contains_everything=True),
     Profile("wanderer", "誤導を追う", "棄却の材料を持ったまま名指しする", _wanderer,
@@ -189,6 +202,9 @@ class Run:
     assessment: list[str] = field(default_factory=list)
     decided_at: int = 0          # 被疑判定を宣言した時刻。折れ点は判断の長さを罰する
     contained: list[str] = field(default_factory=list)
+    # そのうち、永続化まで取り除いた分。止めただけの資産と区別しないと
+    # 「何を止めたか」の表が、5.8 の減衰がどちらだったかを説明できない
+    eradicated: list[str] = field(default_factory=list)
     unresolved: list[str] = field(default_factory=list)
     fired: list[str] = field(default_factory=list)
     averted: list[str] = field(default_factory=list)
@@ -200,6 +216,7 @@ def _play(
     *, stop: bool, patience: int | None,
     weighs_refutations: bool, contains_everything: bool,
     contains_root: bool = False,
+    eradicates_named: bool = False,
     names_everything: bool = False,
     containment: list[str] | None = None,
     assessment: list[str] | None = None,
@@ -258,7 +275,8 @@ def _play(
     # 対応フェーズの取捨選択は、像を1本足しても測れない — 同じ調査のあとに
     # 組だけを入れ替えて比べる必要がある（checks の containment_sweep）
     chosen = containment if containment is not None else _containment(
-        sc, assessment, everything=contains_everything, root=contains_root
+        sc, assessment, everything=contains_everything, root=contains_root,
+        eradicate=eradicates_named,
     )
     for aid in chosen:
         try:
@@ -305,12 +323,21 @@ def _dependency_roots(sc: Scenario) -> set[str]:
     return {a.id for a in sc.world.assets if a.id in depended and not a.depends_on}
 
 
-def cheapest_cover(sc: Scenario, wanted: set[str]) -> list[str]:
+def cheapest_cover(
+    sc: Scenario, wanted: set[str], eradicate: set[str] | None = None
+) -> list[str]:
     """`wanted` の各資産を、最も安い手で1回ずつ覆う（同じ資産に二重に打たない）。
 
     画面に出ているのは**ラベルと所要**だけなので、方針を知らない像が
     使える基準は費用しかない。同点は一覧に出る順（作者が書いた順）で決める。
+
+    `eradicate` に入れた資産は、**作り直す手があるならそちらで覆う。**
+    費用だけで選ぶと必ず安いほう（止めるだけ）に倒れるので、
+    根絶の手は盤面にあっても一度も押されない — その状態で測った L は
+    「最良の対応にかかる時間」を過小に見積もる（9.4 #5）。
+    根絶の手が無い資産は、これまでどおり最安の手で覆う。
     """
+    want_erad = set(eradicate or ())
     acts = [a for a in sc.actions if a.type == ActionType.CONTAIN and a.targets]
     order = {a.id: i for i, a in enumerate(acts)}
     picked: list[str] = []
@@ -319,6 +346,10 @@ def cheapest_cover(sc: Scenario, wanted: set[str]) -> list[str]:
         if asset in covered:
             continue
         cands = [a for a in acts if asset in a.targets and set(a.targets) <= wanted]
+        if asset in want_erad:
+            purging = [a for a in cands if asset in a.eradicates]
+            if purging:
+                cands = purging
         if not cands:
             continue
         best = min(cands, key=lambda a: (a.cost_minutes, order[a.id]))
@@ -328,7 +359,8 @@ def cheapest_cover(sc: Scenario, wanted: set[str]) -> list[str]:
 
 
 def _containment(
-    sc: Scenario, assessed: list[str], *, everything: bool, root: bool = False
+    sc: Scenario, assessed: list[str], *, everything: bool, root: bool = False,
+    eradicate: bool = False,
 ) -> list[str]:
     """封じ込めで実際に押す手。
 
@@ -348,7 +380,10 @@ def _containment(
     # 「dc01 を止めれば全部止まる」は、dc01 を疑っていない人の手ではない
     # — ただし構成図を見て根を落としに行く人はいる（root=True）
     reachable = set(assessed) | (_dependency_roots(sc) if root else set())
-    return cheapest_cover(sc, reachable)
+    # `eradicate` は「作り直す束を選ぶ」像。名指しした資産のうち、
+    # 作り直す手があるものはそちらで覆う（値札を見た上での判断であって、
+    # ground_truth を読んだわけではない）
+    return cheapest_cover(sc, reachable, reachable if eradicate else None)
 
 
 def run_profile(sc: Scenario, prof: Profile, notices: list[str]) -> Run:
@@ -357,6 +392,7 @@ def run_profile(sc: Scenario, prof: Profile, notices: list[str]) -> Run:
               weighs_refutations=prof.weighs_refutations,
               contains_everything=prof.contains_everything,
               contains_root=prof.contains_root,
+              eradicates_named=prof.eradicates_named,
               names_everything=prof.names_everything)
     st = e.state
     r = Run(
@@ -368,6 +404,7 @@ def run_profile(sc: Scenario, prof: Profile, notices: list[str]) -> Run:
         assessment=list(st.assessment),
         decided_at=st.assessment_snapshot.at_minute if st.assessment_snapshot else 0,
         contained=sorted(st.contained_at),
+        eradicated=sorted(st.eradicated_at),
         unresolved=[q.id for q in sc.open_questions if q.id not in st.resolved_questions],
         fired=list(st.fired_events),
         averted=list(st.averted_events),
@@ -487,6 +524,7 @@ def run_order(sc: Scenario, order: list[str], notices: list[str]) -> Run:
         lost_to_world=[x for x in st.lost_evidence if x in st.destroyed_by_world],
         assessment=list(st.assessment),
         contained=sorted(st.contained_at),
+        eradicated=sorted(st.eradicated_at),
         unresolved=[q.id for q in sc.open_questions
                     if q.id not in st.resolved_questions],
     )
@@ -527,6 +565,66 @@ def _covers_compromised(sc: Scenario, combo: tuple[str, ...]) -> bool:
     by_id = sc.action_by_id
     stopped = {t for aid in combo for t in by_id[aid].targets}
     return set(sc.world.ground_truth.compromised) <= stopped
+
+
+# ─────────── 根絶（SPEC 5.8 / 9.4 #5） ───────────
+
+
+def persistence_matters(sc: Scenario) -> list[tuple[str, ...]]:
+    """5.8 の persistence 条項が、実際に結果を変える封じ込めの組を全数で拾う。
+
+    **恒真な条項は書いていないのと同じである。** ローダは
+    `persistence ⊆ compromised` を要求しているので、根絶を
+    `contained` で判定していた頃は `compromised ⊆ contained` が成り立てば
+    後半も自動的に成り立った。128通り全数で結果を変える組は 0個で、
+    `ground_truth.persistence` は完全な死にフィールドだった（9.4 #5）。
+
+    ここが 0件に戻ったら、盤面から根絶の手が消えた（あるいは
+    根絶できる資産が persistence を覆ってしまった）ということである。
+    """
+    from irdojo import damage as damage_mod
+
+    truth = sc.world.ground_truth
+    effect = sc.damage.containment_effect
+    by_id = sc.action_by_id
+    acts = [a.id for a in sc.actions if a.type == ActionType.CONTAIN]
+    out: list[tuple[str, ...]] = []
+    for r in range(len(acts) + 1):
+        for combo in itertools.combinations(acts, r):
+            stopped = {t for aid in combo for t in by_id[aid].targets}
+            purged = {t for aid in combo for t in by_id[aid].eradicates}
+            real = damage_mod.containment_factor(stopped, purged, truth, effect)
+            # 条項が無かった場合＝「止めれば根絶したことになる」旧実装
+            naive = damage_mod.containment_factor(stopped, stopped, truth, effect)
+            if real != naive:
+                out.append(combo)
+    return out
+
+
+def eradication_choice(sc: Scenario) -> dict[str, dict[str, int]]:
+    """根絶の手だけを入れ替えて、方針ごとの評価を比べる。
+
+    **押せば必ず得になる手は、判断ではなく作業である。** 根絶そのものは
+    物理的に必要（それしか on_correct_containment に届かない）だが、
+    **どの根絶手を取るか**は方針で入れ替わらなければならない。
+    残りの封じ込めは揃えて、根絶の手だけを差し替える。
+    """
+    erad = [a for a in sc.actions if a.eradicates]
+    if len(erad) < 2:
+        return {}
+    # 根絶しない資産を覆う分は、最安の手で揃える
+    need = set(sc.world.ground_truth.compromised) - {
+        t for a in erad for t in a.eradicates
+    }
+    base = tuple(cheapest_cover(sc, need))
+    order = [a.id for a in sc.actions if a.type == ActionType.CONTAIN]
+    sweep = containment_sweep(sc)
+    out: dict[str, dict[str, int]] = {}
+    for a in erad:
+        combo = tuple(sorted(set(base) | {a.id}, key=order.index))
+        if combo in sweep:
+            out[a.id] = sweep[combo]
+    return out
 
 
 # ─────────── 判定 ───────────
@@ -838,6 +936,53 @@ def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
             f"最良の組との差: {losses}（どの方針でも 10点以上）",
         ))
 
+    # SPEC 5.8 / 9.4 #5: persistence 条項が恒真になっていないか。
+    # 「隔離しても、端末を戻せば攻撃者も戻ってくる」は key_lessons が
+    # 教えている中核だが、v1.36 までこの条項は 128通り全数で
+    # 一度も結果を変えていなかった（根絶の手が盤面に無かったため）
+    differing = persistence_matters(sc)
+    contain_n = sum(1 for a in sc.actions if a.type == ActionType.CONTAIN)
+    out.append(Check(
+        bool(differing),
+        "persistence 条項が結果を変える封じ込めの組がある",
+        f"{len(differing)} / {2 ** contain_n}通り"
+        + (f"（例: {'＋'.join(differing[0]) or '（何も止めない）'}）" if differing else
+           "。persistence ⊆ compromised なら恒真になる — 根絶の手が盤面に無い印"),
+    ))
+
+    # 同じ調査・同じ判定で、根絶まで行ったかどうかだけを変えた対照。
+    # ここが縮むなら on_partial は名前だけの係数で、
+    # 「止めた」と「取り除いた」が盤面で同じことになっている
+    if ("skilled_halfway", False) in runs:
+        full, half = runs[("skilled", False)], runs[("skilled_halfway", False)]
+        ratio = half.damage / full.damage if full.damage else 0.0
+        out.append(Check(
+            ratio >= 1.5,
+            "根絶しない封じ込めは被害を止めきらない",
+            f"止めるだけ {half.damage:.0f}（{half.minutes}分） vs "
+            f"根絶まで {full.damage:.0f}（{full.minutes}分） = {ratio:.2f}倍"
+            "（狙い 1.5倍以上。調査は両方同一）",
+        ))
+
+    # 根絶そのものは物理的に必要だが、**どの根絶手を取るか**は
+    # 方針で入れ替わること。押せば必ず得になる手は判断ではなく作業である
+    choice = eradication_choice(sc)
+    if len(choice) >= 2:
+        ids = list(choice)
+        winners = {
+            pol.id: max(ids, key=lambda a: choice[a][pol.id])
+            for pol in sc.policies
+        }
+        out.append(Check(
+            len(set(winners.values())) >= 2,
+            "どの根絶手を取るかが方針で入れ替わる",
+            " / ".join(
+                f"{a.replace('act_', '')}: "
+                + "・".join(f"{p.id[:4]} {choice[a][p.id]}" for p in sc.policies)
+                for a in ids
+            ),
+        ))
+
     # 方針を差し替えると評価が変わる（原則3）
     ex = runs[("exhaustive", False)]
     spread = max(v["composite"] for v in ex.by_policy.values()) - \
@@ -914,7 +1059,8 @@ def main() -> int:
         if r is None:
             continue
         print(f"  {prof.label:<16}判定 {'・'.join(r['assessment']) or '（なし）':<28}"
-              f"停止 {'・'.join(r['contained']) or '（なし）'}")
+              f"停止 {'・'.join(r['contained']) or '（なし）':<24}"
+              f"根絶 {'・'.join(r['eradicated']) or '（なし）'}")
 
     print("\n■ 設計の判定（SPEC 8.3）")
     for c in data["checks"]:

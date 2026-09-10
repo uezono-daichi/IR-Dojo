@@ -1029,14 +1029,15 @@ def test_the_two_places_that_decide_nothing_happened_agree():
     i = body.index("var empty =")
     statement = body[i:body.index(";", i)]
 
-    for name in ("revealed", "stopped", "halted", "already", "prevented"):
+    for name in ("revealed", "stopped", "purged", "halted", "already", "prevented"):
         assert name in statement, f"画面側の空振り判定が {name} を数えていない"
 
     # エンジン側（ActionOutcome.empty）と項目が揃っていること
     engine_py = (root / "irdojo" / "engine.py").read_text(encoding="utf-8")
     j = engine_py.index("    def empty(self)")
     prop = engine_py[j:engine_py.index("\n\n", j)]
-    for name in ("revealed", "contained", "halted", "already", "prevented"):
+    for name in ("revealed", "contained", "eradicated", "halted",
+                 "already", "prevented"):
         assert f"self.{name}" in prop, f"エンジン側の空振り判定が {name} を数えていない"
 
 
@@ -1114,3 +1115,99 @@ def test_the_debrief_shows_the_damage_in_two_tiers():
     assert "setLineDash" in chart_js
     # 破線の下は塗らない。積み上がった被害と見分けが付かなくなる
     assert "ctx.lineTo(px(series.length - 1), padT + h);" in chart_js
+
+
+def test_what_is_still_out_there_is_never_said_during_play(client):
+    """「まだ取り除いていない」はプレイ中に言わない（原則5 / SPEC 5.8）。
+
+    置いていかれたものが残っているかどうかは `ground_truth.persistence`
+    にしか無い。押した結果が「元の状態に戻した」と言うのは自分の手の記録だが、
+    「まだ残っている」と言えば、見ていないものの損失を先に告げることになる。
+
+    実際に押して、封じ込めの応答に真相側の語彙が出ないことを見る。
+    """
+    sc = load_scenario("ransomware-initial-response-01")
+    sid = client.post("/api/session", json={"scenario_id": sc.meta.id}).json()["session_id"]
+    client.post(
+        f"/api/session/{sid}/decide",
+        json={"kind": "declare_assessment", "assessment": ["ws-042"]},
+    )
+    seen = []
+    for aid in ("act_block_c2", "act_rebuild_ws042"):
+        res = client.post(
+            f"/api/session/{sid}/decide",
+            json={"kind": "action", "action_id": aid},
+        ).json()
+        assert_clean(res, f"decide {aid}")
+        seen.append(res)
+
+    # 止めた回は「元の状態に戻した」ものが空、戻した回は入る。
+    # どちらも**自分が何をしたか**しか返さない
+    assert seen[0]["contained"] == [{"id": "ws-042", "label": "営業部端末 (佐藤)"}]
+    assert seen[0]["eradicated"] == []
+    assert seen[1]["eradicated"] == [{"id": "ws-042", "label": "営業部端末 (佐藤)"}]
+
+    # 押した結果の箱に渡る部分だけを見る。`view` の未解消論点には
+    # 「永続化の有無」が最初から出ており、そちらは問いであって損失ではない
+    outcome = json.dumps(
+        [{k: v for k, v in r.items() if k != "view"} for r in seen],
+        ensure_ascii=False,
+    )
+    for word in ("永続化", "persistence", "残って", "まだ"):
+        assert word not in outcome, f"押した結果が「{word}」と言っている"
+
+
+def test_the_debrief_says_what_was_left_behind(client):
+    """取り除かないまま終わったことは、講評で初めて言う（SPEC 7.6.13）。
+
+    復旧地平の破線は `on_partial` の傾きで伸びるが、**それは図の上でしか
+    見えない。** 言葉にしないと「正しく止めたのに、なぜまだ伸びるのか」で
+    終わる。誰に・どうすれば取り除けたかまで言う。
+    """
+    sc = load_scenario("ransomware-initial-response-01")
+    sid = client.post("/api/session", json={"scenario_id": sc.meta.id}).json()["session_id"]
+    client.post(
+        f"/api/session/{sid}/decide",
+        json={"kind": "declare_assessment", "assessment": ["ws-042", "fs01"]},
+    )
+    for aid in ("act_block_c2", "act_shutdown_fs01"):
+        client.post(
+            f"/api/session/{sid}/decide", json={"kind": "action", "action_id": aid}
+        )
+    client.post(f"/api/session/{sid}/decide", json={"kind": "finish"})
+    rep = client.get(f"/api/session/{sid}/report").json()
+
+    c = rep["containment"]
+    # 侵害資産は両方止めた。それでも「正しく片付けた」ではない
+    assert c["missed"] == []
+    assert rep["score"]["consequences"]["containment_completeness"] == 1.0
+    assert c["verdict"] == "partial"
+    assert c["still_persistent"]
+    assert c["factor"] > c["best_factor"]
+    # 何をすれば取り除けたかを名指しする
+    assert c["eradicable_by"]
+
+
+def test_the_debrief_says_when_nothing_was_left_behind(client):
+    """取り除けた場合に「取り除けなかった」と言わないこと。
+
+    講評の文面は分岐で作るので、片方だけ直すと必ずずれる。
+    """
+    sc = load_scenario("ransomware-initial-response-01")
+    sid = client.post("/api/session", json={"scenario_id": sc.meta.id}).json()["session_id"]
+    client.post(
+        f"/api/session/{sid}/decide",
+        json={"kind": "declare_assessment", "assessment": ["ws-042", "fs01"]},
+    )
+    for aid in ("act_rebuild_ws042", "act_shutdown_fs01"):
+        client.post(
+            f"/api/session/{sid}/decide", json={"kind": "action", "action_id": aid}
+        )
+    client.post(f"/api/session/{sid}/decide", json={"kind": "finish"})
+    rep = client.get(f"/api/session/{sid}/report").json()
+
+    c = rep["containment"]
+    assert c["verdict"] == "correct"
+    assert c["still_persistent"] == []
+    assert c["eradicated"]
+    assert c["factor"] == c["best_factor"]

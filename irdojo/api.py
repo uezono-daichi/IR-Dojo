@@ -134,6 +134,7 @@ def decide(sid: str, body: Decision) -> dict[str, Any]:
             "revealed_evidence": [],
             "unlocked_count": 0,
             "contained": [],
+            "eradicated": [],
             "halted": [],
             "already": [],
             "halts_business": False,
@@ -169,6 +170,16 @@ def decide(sid: str, body: Decision) -> dict[str, Any]:
         "contained": [
             {"id": a, "label": engine.scenario.asset_by_id[a].label}
             for a in outcome.contained
+            if a in engine.scenario.asset_by_id
+        ],
+        # 永続化を取り除いた資産。止めたことと別の箱で返す（SPEC 5.8 / 7.6.8）。
+        # 「通信を止めた」と「元の状態に戻した」を同じ言い方にすると、
+        # 3つ目の束を押した意味が押した直後に伝わらない。
+        # **何が残っていたかは言わない** — それは ground_truth の側であり、
+        # プレイ中に言えば損失の予告になる（原則5）
+        "eradicated": [
+            {"id": a, "label": engine.scenario.asset_by_id[a].label}
+            for a in outcome.eradicated
             if a in engine.scenario.asset_by_id
         ],
         # 業務が止まった資産。依存で波及した分も含めて告げる。

@@ -53,6 +53,31 @@ class TruthReveal(BaseModel):
     misleading_evidence: list[str]  # 事後に色分けするため
 
 
+class ContainmentReview(BaseModel):
+    """封じ込めの答え合わせ（SPEC 5.8 / 7.6.13）。
+
+    **プレイ中は「止めた」としか言わない。** 何が残ったままだったかは、
+    学習者には見えていないので、そこで告げれば損失の予告になる（原則5）。
+    ここが唯一の開示の場である。
+
+    復旧地平の破線がどの傾きで伸びているかを決めているのは
+    `factor` で、それは「止めたか」と「取り除いたか」の**両方**で決まる。
+    完全度 100% でも `on_partial` に留まることがあり、
+    その差は講評の図では傾きとしてしか見えない — 言葉にしないと、
+    グラフを見た人は「正しく止めたのに、なぜまだ伸びるのか」と読む。
+    """
+
+    stopped: list[str]              # 攻撃の経路を断てた侵害資産
+    missed: list[str]               # 止められなかった侵害資産
+    eradicated: list[str]           # 残されたものを取り除けた資産
+    still_persistent: list[str]     # 取り除けないまま終わった資産
+    factor: float                   # 実際に地平へ掛かった減衰係数
+    best_factor: float              # すべて片付けた場合の係数
+    verdict: str                    # correct | partial | incorrect
+    # 押していれば取り除けた手。**押した後に言う** ので答えにはならない
+    eradicable_by: list[str]
+
+
 class TooLate(BaseModel):
     """失われた後で押した、それを取りに行く手。
 
@@ -224,6 +249,8 @@ class Report(BaseModel):
     violations: list[ViolationDetail]
     retrospective: retro_mod.Retro
     truth: TruthReveal | None
+    # 封じ込めの答え合わせ。reveal_ground_truth が false なら出さない
+    containment: ContainmentReview | None
     key_lessons: list[str]
     replay_suggestions: list[dict[str, str]]
     damage_history: list[float]
@@ -304,13 +331,26 @@ def build(
             )
         )
     for asset_id, minute in sorted(state.contained_at.items(), key=lambda kv: kv[1]):
+        # 止めたことと、残されたものを取り除いたことは別の作業なので、
+        # 同じ時刻に両方やった回は1本にまとめ、別の時刻なら2本立てる。
+        # 図に出るのは番号だけで、名前は凡例に置く（7.6.9）
+        purged = state.eradicated_at.get(asset_id)
         markers.append(
             Marker(
                 minute=minute,
-                label=f"封じ込め {_label(assets, asset_id)}",
+                label=("封じ込め・原状復帰 " if purged == minute else "封じ込め ")
+                + _label(assets, asset_id),
                 short=asset_id,
             )
         )
+        if purged is not None and purged != minute:
+            markers.append(
+                Marker(
+                    minute=purged,
+                    label=f"原状復帰 {_label(assets, asset_id)}",
+                    short=asset_id,
+                )
+            )
 
     # 時刻順に並べて通し番号を振る。図に描くのは番号だけで、名前は凡例に置く。
     # 名前を図に直接置いていた頃は、同時刻の2本の上に6個のラベルが
@@ -329,6 +369,7 @@ def build(
         scenario.damage,
         scenario.world.ground_truth,
         state.contained_at.keys(),
+        state.eradicated_at.keys(),
         state.elapsed_minutes,
         horizon,
     ):
@@ -460,6 +501,7 @@ def build(
         violations=violations,
         retrospective=retro,
         truth=truth,
+        containment=_containment_review(state, scenario) if truth else None,
         key_lessons=list(scenario.debrief.key_lessons),
         replay_suggestions=[
             {
@@ -480,6 +522,51 @@ def build(
         records=rows,
         records_total=len(all_records),
         is_first_play=is_first,
+    )
+
+
+def _containment_review(
+    state: GameState, scenario: Scenario
+) -> ContainmentReview:
+    """止めた／取り除いた の答え合わせを組む（SPEC 5.8）。
+
+    `ground_truth` を読むので、**講評の経路にしか置けない。**
+    プレイ中のどのレスポンスにもこの形は現れない。
+    """
+    gt = scenario.world.ground_truth
+    effect = scenario.damage.containment_effect
+    assets = scenario.asset_by_id
+
+    contained = set(state.contained_at)
+    purged = set(state.eradicated_at)
+    compromised = list(gt.compromised)
+    persistence = list(gt.persistence)
+
+    factor = damage_mod.containment_factor(contained, purged, gt, effect)
+    if factor == effect.on_correct_containment:
+        verdict = "correct"
+    elif factor == effect.on_partial:
+        verdict = "partial"
+    else:
+        verdict = "incorrect"
+
+    remaining = [a for a in persistence if a not in purged]
+    # 押していれば取り除けた手。押し終わったあとなので答えにはならない
+    could = [
+        act.label
+        for act in scenario.actions
+        if set(act.eradicates) & set(remaining)
+    ]
+
+    return ContainmentReview(
+        stopped=[_label(assets, a) for a in compromised if a in contained],
+        missed=[_label(assets, a) for a in compromised if a not in contained],
+        eradicated=[_label(assets, a) for a in persistence if a in purged],
+        still_persistent=[_label(assets, a) for a in remaining],
+        factor=factor,
+        best_factor=effect.on_correct_containment,
+        verdict=verdict,
+        eradicable_by=could,
     )
 
 

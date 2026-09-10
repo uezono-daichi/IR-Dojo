@@ -176,6 +176,13 @@ class Action(Strict):
     requires_evidence: list[str] = []
     investigates: list[str] = []
     targets: list[str] = []
+    # contain 専用。**その資産に残された永続化を取り除く**手であることを表す。
+    # `targets` とは別に持つ。攻撃の経路を断つことと、居座られた状態を
+    # 作り直して消すことは別の作業であり、費用も、失うものも、
+    # 業務への当たり方も違う（SPEC 5.6 / 5.8）。
+    # `targets` の部分集合でなければならない — 手を触れていない資産から
+    # 永続化だけが消えることはない。ローダが拒否する
+    eradicates: list[str] = []
     yields: list[str] = []
     destroys: list[str] = []
     # communicate 専用。以後この出来事は起きなくなる（既に起きた分には効かない）。
@@ -195,6 +202,15 @@ class Action(Strict):
                 f"{self.id}: contain に requires_evidence は使えない。"
                 "封じ込めの当否は方針の制約で測る"
             )
+        if self.eradicates:
+            if self.type != ActionType.CONTAIN:
+                raise ValueError(f"{self.id}: eradicates は contain 専用")
+            stray = sorted(set(self.eradicates) - set(self.targets))
+            if stray:
+                raise ValueError(
+                    f"{self.id}: eradicates が targets に含まれていません: {stray}。"
+                    "手を触れていない資産から永続化だけが消えることはない"
+                )
         if self.type == ActionType.COMMUNICATE:
             # 連絡は「何かを起きなくする」ためだけにある。
             # 何も防がない連絡は、時間を溶かすだけのボタンになる
@@ -726,6 +742,7 @@ def _validate_scenario(sc: "Scenario") -> None:
     _reject_unreachable_actions(sc)
     _reject_criticality_inversion(sc)
     _reject_uncontainable_compromise(sc)
+    _reject_uneradicable_persistence(sc)
     _reject_stops_that_erase_without_stopping(sc)
     _reject_toothless_timeline(sc)
     _reject_questions_that_name_the_truth(sc)
@@ -1034,6 +1051,36 @@ def _reject_uncontainable_compromise(sc: "Scenario") -> None:
         raise ValueError(
             f"直接止める手が無い侵害資産があります: {sorted(missing)}。"
             "封じ込めは依存連鎖しないため（6.3）、上流を止めても代わりにならない"
+        )
+
+
+def _reject_uneradicable_persistence(sc: "Scenario") -> None:
+    """永続化が残る資産すべてに、それを根絶する手があるか（SPEC 5.8 / 6.3）。
+
+    5.8 の減衰は `compromised ⊆ contained` かつ `persistence ⊆ eradicated`
+    のときにだけ `on_correct_containment` を返す。根絶する手が1つも無い資産が
+    `persistence` にあると、**その条件は誰にも満たせない** —
+    どれだけ正しく止めても被害は `on_partial` から下がらず、
+    盤面で最良の対応が存在しないことになる。
+
+    逆に、この検査が無いまま `persistence` を書くと何が起きるかは
+    実測してある（9.4 #5）。`persistence ⊆ compromised` はローダが
+    要求しているので、根絶を `contained` で判定していた頃の条項は
+    **恒真**だった。128通り全数で、条項の有無が結果を変える組は 0個。
+    `ground_truth.persistence` は完全な死にフィールドだった。
+    """
+    eradicable = {
+        t
+        for a in sc.actions
+        if a.type == ActionType.CONTAIN
+        for t in a.eradicates
+    }
+    missing = [a for a in sc.world.ground_truth.persistence if a not in eradicable]
+    if missing:
+        raise ValueError(
+            f"根絶する手が無い永続化があります: {sorted(missing)}。"
+            "eradicates を持つ contain アクションが無いと、"
+            "5.8 の on_correct_containment には誰も到達できない"
         )
 
 

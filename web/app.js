@@ -483,7 +483,8 @@ function renderLegend(view, mini, notes) {
     '経過時間は仮想の時計で、アクションを押した分だけ進みます。' +
     '頭の + は「開始からの経過」という印です。' +
     '累積被害は金額ではなく比べるための相対値で、' +
-    '侵害された資産を止めると増え方が鈍ります。' +
+    '侵害された資産を止めると増え方が鈍り、' +
+    'そのうえで元の状態に戻すと、いちばん鈍ります。' +
     '業務影響は止めた資産が業務に与える影響で、何も止めていない間は 0 です。'));
 
   var cv = null;
@@ -629,6 +630,7 @@ function decide(payload) {
       S.lastOutcome.revealed = (res.revealed_evidence || []).length;
       S.lastOutcome.unlocked = res.unlocked_count || 0;
       S.lastOutcome.contained = res.contained || [];
+      S.lastOutcome.eradicated = res.eradicated || [];
       S.lastOutcome.halted = res.halted || [];
       S.lastOutcome.already = res.already || [];
       S.lastOutcome.haltsBusiness = !!res.halts_business;
@@ -871,15 +873,19 @@ function renderResult(v) {
   }
 
   var stopped = (o.contained || []).length;
+  var purged = o.eradicated || [];
   var halted = o.halted || [];
   var already = o.already || [];
   // 連絡は証拠を産まないが、空振りではない。世界のふるまいが変わっている。
   // 既に止めてある資産をもう一度止めた回も空振りではない（同じ資産に
-  // 手が2つあるので普通に起きる）。エンジン側 ActionOutcome.empty と揃える
-  var empty = !o.revealed && !stopped && !halted.length && !already.length
-              && !o.prevented;
+  // 手が2つあるので普通に起きる）。元の状態に戻した回も同じで、
+  // 攻撃の経路が既に断ってあれば contained は空になる。
+  // エンジン側 ActionOutcome.empty と揃える（片方だけ直すと、
+  // 緑の枠の中にオレンジの「何も出てこなかった」が並ぶ）
+  var empty = !o.revealed && !stopped && !purged.length
+              && !halted.length && !already.length && !o.prevented;
   var note = el('div', 'outcome'
-    + (stopped || halted.length || already.length || o.prevented
+    + (stopped || purged.length || halted.length || already.length || o.prevented
         ? ' outcome-contained'
                               : (empty ? ' outcome-empty' : '')));
 
@@ -907,9 +913,21 @@ function renderResult(v) {
     });
     note.appendChild(row);
   }
+  // 止めることと、元の状態に戻すことは別の作業なので、別の行で言う。
+  // **何が残っていたかは言わない。** それは講評まで開かない側の話で、
+  // ここで言えば「まだ残っている」の予告になる（原則5）
+  if (purged.length) {
+    note.appendChild(el('div', 'outcome-msg stopped',
+      purged.length + ' 件を元の状態に戻した。'));
+    var prow = el('div', 'outcome-cascade');
+    purged.forEach(function (a) {
+      prow.appendChild(el('span', 'chip', a.id + '　' + a.label));
+    });
+    note.appendChild(prow);
+  }
   // 既に止めてある資産に2手目を打った回。無言にすると
   // 「何も出てこなかった」と同じ見た目になり、押した意味が消える
-  if (!stopped && already.length) {
+  if (!stopped && !purged.length && already.length) {
     note.appendChild(el('div', 'outcome-msg stopped',
       already.length + ' 件は既に止まっている。'));
     var arow = el('div', 'outcome-cascade');
@@ -920,7 +938,7 @@ function renderResult(v) {
   }
   // 業務が止まったことは、止めたことと別に告げる。
   // 同じ「止める」でも、通信だけを断つ手は仕事を止めない（SPEC 6.3）
-  if (stopped || halted.length || already.length) {
+  if (stopped || purged.length || halted.length || already.length) {
     if (halted.length) {
       note.appendChild(el('div', 'outcome-msg sub',
         '業務が止まったのは ' + halted.length + ' 件。'));
@@ -1095,7 +1113,8 @@ function renderActions(v) {
           S.lastOutcome = {
             label: a.label, cost: a.cost_minutes, type: a.type,
             command: '', running: true,
-            revealed: 0, unlocked: 0, contained: [], halted: [], already: [],
+            revealed: 0, unlocked: 0, contained: [], eradicated: [],
+            halted: [], already: [],
             haltsBusiness: false, impact: 0, prevented: 0
           };
           // 走らせている間もその場で見せる。押した瞬間に何か起きる
@@ -1580,6 +1599,9 @@ function blockTruth(rep) {
     b.appendChild(g);
   }
 
+  var cr = blockContainment(rep);
+  if (cr) { b.appendChild(cr); }
+
   var mp = rep.retrospective.minimal_path;
   if (mp && mp.minutes !== null) {
     b.appendChild(el('p', null,
@@ -1595,6 +1617,59 @@ function blockTruth(rep) {
     b.appendChild(ul);
   }
   return b;
+}
+
+// 封じ込めの答え合わせ（SPEC 5.8 / 7.6.13）。
+// **ここが唯一の開示の場である。** プレイ中は「止めた」としか言わない —
+// 何が残ったままかは学習者に見えていないので、その場で告げれば
+// 損失の予告になる（原則5）。
+//
+// 図の破線がどの傾きで伸びているかを決めているのは、止めたかどうかと
+// **取り除いたかどうか**の両方である。完全度 100% でも傾きが緩まないことが
+// あり、それを言葉にしないと「正しく止めたのに、なぜまだ伸びるのか」で終わる。
+function blockContainment(rep) {
+  var c = rep.containment;
+  if (!c) { return null; }
+
+  var box = el('div', c.verdict === 'correct' ? 'note' : 'note-warn');
+  box.appendChild(el('h3', null, '止めたもの／取り除いたもの'));
+
+  var g = el('div', 'summary-grid');
+  g.appendChild(el('div', 'k', '攻撃の経路を断てた'));
+  g.appendChild(el('div', 'v', c.stopped.join('、') || '（なし）'));
+  if (c.missed.length) {
+    g.appendChild(el('div', 'k', '止められなかった'));
+    g.appendChild(el('div', 'v', c.missed.join('、')));
+  }
+  g.appendChild(el('div', 'k', '残されたものを取り除けた'));
+  g.appendChild(el('div', 'v', c.eradicated.join('、') || '（なし）'));
+  if (c.still_persistent.length) {
+    g.appendChild(el('div', 'k', '取り除かないまま終わった'));
+    g.appendChild(el('div', 'v', c.still_persistent.join('、')));
+  }
+  box.appendChild(g);
+
+  if (c.still_persistent.length) {
+    var times = c.best_factor ? (c.factor / c.best_factor) : 0;
+    box.appendChild(el('p', null,
+      c.still_persistent.join('、') + ' には、攻撃者が置いていったものが' +
+      'そのまま残っています。通信を止めても、その端末を業務に戻せば' +
+      '同じところから戻ってきます。'));
+    box.appendChild(el('p', null,
+      'そのため、図の破線（復旧までの見込み）は取り除けた場合の約 ' +
+      times.toFixed(1) + ' 倍の傾きで伸び続けています。' +
+      '演習を終えた時点の状態がそのまま続く、という前提で引いた線です。'));
+    if (c.eradicable_by.length) {
+      box.appendChild(el('p', 'dim',
+        '盤面には取り除ける手がありました: ' +
+        c.eradicable_by.map(function (x) { return '「' + x + '」'; }).join('、')));
+    }
+  } else if (c.verdict === 'correct') {
+    box.appendChild(el('p', null,
+      '経路を断ち、置いていかれたものも取り除けています。' +
+      '図の破線は、この盤面で引ける最も緩やかな傾きです。'));
+  }
+  return box;
 }
 
 function blockRecords(rep) {

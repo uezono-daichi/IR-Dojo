@@ -3,7 +3,7 @@ schema_version: "0.4"
 meta:
   id: ransomware-initial-response-01
   title: "深夜のファイルサーバ異常"
-  version: "1.0.0"
+  version: "1.1.0"   # v1.37: 根絶の手を対で追加し、折れ点と正規化の帯を再校正
   author: "IR Dojo"
   license: "CC-BY-4.0"
   estimated_play_minutes: 10
@@ -139,6 +139,13 @@ policies:
       - type: forbid_action
         action_ids: [act_block_smb_fs01]
         message: "境界での遮断は迂回されうる。この方針では確実に止めること"
+      # 同じ理由が永続化の側にもある。登録を戻すだけの除去は、
+      # 見えていない場所に残った分を取りこぼしうる。
+      # 丁寧なほうが高くつくのは fs01 と同じ形で、この方針だけが
+      # 「安くて確実なほう」を選ばされる（原則4）
+      - type: forbid_action
+        action_ids: [act_purge_persistence_ws042]
+        message: "登録を戻すだけでは取りこぼしうる。この方針では作り直して確実に取り除くこと"
 
 evidence:
   - id: ev_001
@@ -1310,6 +1317,68 @@ actions:
     side_effects:
       business_impact: true
 
+  # 3つ目の束。**止めることと、居座られた状態を消すことは別の作業である。**
+  # 通信を断てば攻撃者の手は届かなくなるが、端末に残された仕掛けは
+  # そのままなので、端末を業務に戻した瞬間に元へ戻る。
+  # この束だけが `eradicates` を持ち、5.8 の減衰を on_partial から
+  # on_correct_containment へ動かす（9.4 #5 / v1.37）。
+  #
+  # **fs01 の2つの手と同じ形にしてある**（5.6 / 3.8）。丁寧に取り除く手は
+  # 高くて業務も証拠も守り、作り直す手は安くて確実だが両方を差し出す。
+  # どちらが正解かは方針が決める — damage_minimization は前者を禁じる。
+  - id: act_purge_persistence_ws042
+    label: "ws-042 の自動実行の登録を EDR で標準状態に戻す"
+    command: |
+      $ edrctl remediate --host WS-042 --scope autorun --restore-baseline
+        HKCU\...\Run           : 1 entry reverted
+        HKLM\...\Run           : baseline matched
+        Scheduled Tasks        : baseline matched
+        Services               : baseline matched
+        applied  (00:06:12)
+
+      $ edrctl scan --host WS-042 --profile deep --verify
+        scanned 214,880 objects   (00:33:41)
+        端末は動作を継続。利用者はそのまま作業できる。
+    group: "元の状態に戻す"
+    phase: response
+    type: contain
+    description: |
+      ws-042 の自動実行まわりの登録を、EDR の標準構成と突き合わせて戻す。
+      端末は動いたままで、利用者の作業も止まらない。
+      戻した先が本当に標準どおりかを確かめる深いスキャンに時間がかかる。
+    cost_minutes: 40
+    targets: [ws-042]
+    eradicates: [ws-042]
+    investigates: []
+    destroys: []
+    side_effects:
+      business_impact: false
+
+  - id: act_rebuild_ws042
+    label: "ws-042 を初期化して標準構成で復帰させる"
+    command: |
+      $ imgctl deploy --host WS-042 --image corp-win11-std --wipe
+        disk 0: secure erase started
+        disk 0: secure erase done  (00:11:36)
+        image applied, 1 partition, 62 GB
+
+      $ domainctl rejoin --host WS-042 --ou "OU=Sales" --new-machine-password
+        WS-042: rejoined  (00:26:07)
+        端末は標準構成で起動。利用者プロファイルは復元待ち。
+    group: "元の状態に戻す"
+    phase: response
+    type: contain
+    description: |
+      ws-042 のディスクを消去して標準イメージを再導入し、ドメインへ入れ直す。
+      流し込みは自動化されているので短い。作業の間その端末は使えない。
+    cost_minutes: 30
+    targets: [ws-042]
+    eradicates: [ws-042]
+    investigates: []
+    destroys: [ev_009, ev_014]
+    side_effects:
+      business_impact: true
+
   - id: act_shutdown_dc01
     label: "dc01 を停止"
     command: |
@@ -1365,7 +1434,7 @@ actions:
 # それ自体は正しい行動である。揮発性の証拠は、そういう善意で普通に消える。
 timeline:
   - id: tl_accel
-    at_minutes: 145
+    at_minutes: 165
     label: "監視センターから追加連絡"
     text: |
       「暗号化の進み方が速くなっています。
@@ -1425,9 +1494,12 @@ damage:
     rate: 0.15
   acceleration:
     # 折れ点は「巧いプレイの長さ」L の 1.1〜1.3 倍（SPEC 8.2 手順7）。
-    # L は判断に到達するまで（130分）＋ compromised を覆う最安の封じ込め（25分）。
-    # 判断だけで校正していた頃は 150分で、巧いプレイが自分で踏んでいた
-    threshold_minutes: 180
+    # L は判断に到達するまで（130分）＋ compromised を覆い persistence を
+    # 根絶する最安の封じ込め（45分）＝ 175分。200/175 = 1.14倍。
+    # 判断だけで校正していた頃は 150分で、巧いプレイが自分で踏んでいた。
+    # 根絶を入れる前は 180分で、L の側に根絶の時間が入っていなかった
+    # — 盤面で最良の対応をする人が、自分で折れ点を踏む位置にあった（v1.37）
+    threshold_minutes: 200
     multiplier: 2.5
   containment_effect:
     on_correct_containment: 0.2
@@ -1476,9 +1548,15 @@ scoring:
       - containment_completeness
     business_impact_horizon_minutes: 480
     normalization:
-      total_damage:             { worst: 20000, best: 0 }
+      # 巧いプレイの被害が worst の 2〜3割に入るように再導出する（8.2 手順7）。
+      # 根絶を入れる前は 4993/20000 = 25.0% だった。根絶まで行くと
+      # 封じ込めが 45分に伸びるので巧いプレイの被害が 5300 になり、
+      # 同じ 25.0% に戻すには帯を 21200 まで広げる必要がある。
+      # **base（350.7）は動かさない** — 動かすとどの変更が効いたのか
+      # 分からなくなる（帯だけを動かせば、比は帯の側で閉じる）
+      total_damage:             { worst: 21200, best: 0 }
       business_impact:          { worst: 1200,  best: 0 }
-      evidence_preserved:       { worst: 0.842, best: 1.0 }
+      evidence_preserved:       { worst: 0.789, best: 1.0 }
       containment_completeness: { worst: 0.0,  best: 1.0 }
 
   composite:
@@ -1513,6 +1591,7 @@ debrief:
     - "時刻の近さは関係の証明にならない。同時刻の事象がすべて同じ原因とは限らない。"
     - "通常時の姿を知らないと、異常かどうかは判定できない。台帳や運用設定は最も安価な棄却手段である。"
     - "侵入経路が分からないまま封じ込めても、同じ経路から再び入られる。"
+    - "通信を止めることと、端末を元の状態に戻すことは別の作業である。前者だけでは、その端末を業務に戻したときに元へ戻る。"
     - "揮発性の情報は封じ込めで失われる。取得の順序そのものが判断である。"
   replay_suggestions:
     - policy: evidence_preservation

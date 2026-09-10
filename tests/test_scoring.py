@@ -22,13 +22,14 @@ INVESTIGATION = [
 ]
 
 
-def play_spec_68(scenario, contain_first="act_shutdown_fs01"):
+def play_spec_68(scenario, contain_first="act_shutdown_fs01",
+                 second="act_isolate_ws042"):
     e = Engine(scenario, "business_continuity", None)
     for aid, _ in INVESTIGATION:
         e.decide(Decision(kind="action", action_id=aid))
     e.decide(Decision(kind="declare_assessment", assessment=["ws-042", "ws-107"]))
     e.decide(Decision(kind="action", action_id=contain_first))
-    e.decide(Decision(kind="action", action_id="act_isolate_ws042"))
+    e.decide(Decision(kind="action", action_id=second))
     e.decide(Decision(kind="finish"))
     return e
 
@@ -53,12 +54,37 @@ def test_consequences(scenario):
     c = scoring.score(play_spec_68(scenario).state, scenario).consequences
     assert c.elapsed_minutes == 190
     # 被害は二段。演習中に積み上がった分と、復旧地平 H の分（SPEC 5.8 / 6.3）
-    assert c.accumulated_damage == pytest.approx(1458, abs=1)
-    assert c.projected_damage == pytest.approx(4356, abs=1)
-    assert c.total_damage == pytest.approx(5814, abs=1)
+    assert c.accumulated_damage == pytest.approx(1383, abs=1)
+    # このプレイは compromised を両方止めたが、**永続化は取り除いていない。**
+    # 完全度 1.000 と引き換えに、地平の 480分は on_partial (0.6) で
+    # 積分され続ける。「隔離しても、端末を戻せば攻撃者も戻ってくる」は
+    # ここで初めて数字になる（v1.37 / 9.4 #5）
+    assert c.projected_damage == pytest.approx(12973, abs=1)
+    assert c.total_damage == pytest.approx(14356, abs=1)
     assert c.business_impact == pytest.approx(424.33, abs=0.01)
     assert c.evidence_preserved == pytest.approx(0.947, abs=0.001)
     assert c.containment_completeness == pytest.approx(1.000, abs=0.001)
+
+
+def test_completeness_is_not_the_same_question_as_eradication(scenario):
+    """完全度 1.000 は「もう戻ってこない」を意味しない（SPEC 5.8 / 6.3）。
+
+    `containment_completeness` が測るのは「攻撃の経路を断てたか」で、
+    5.8 の減衰はそれに加えて「居座られた状態を消せたか」を見る。
+    2つを1つの集合で判定していた頃、後半の条項は恒真だった（9.4 #5）。
+
+    同じ判定・同じ調査のまま、ws-042 の隔離を「元の状態に戻す」手に
+    置き換えるだけで、地平の積分係数が 0.6 から 0.2 に変わる。
+    """
+    partial = scoring.score(play_spec_68(scenario).state, scenario).consequences
+    full = scoring.score(
+        play_spec_68(scenario, second="act_purge_persistence_ws042").state, scenario
+    ).consequences
+
+    # どちらも「侵害された2資産を直接止めた」ので完全度は同じ
+    assert partial.containment_completeness == full.containment_completeness == 1.0
+    # それでも被害は倍以上違う。違いは根絶したかどうかだけ
+    assert partial.total_damage > full.total_damage * 2
 
 
 def test_fact_metrics(scenario):
@@ -74,9 +100,9 @@ def test_fact_metrics(scenario):
 
 def test_composite(scenario):
     r = scoring.score(play_spec_68(scenario).state, scenario)
-    assert r.policy_score == pytest.approx(0.626, abs=0.001)
-    assert r.composite_score == pytest.approx(0.584, abs=0.001)
-    assert round(r.composite_score * 100) == 58
+    assert r.policy_score == pytest.approx(0.554, abs=0.001)
+    assert r.composite_score == pytest.approx(0.563, abs=0.001)
+    assert round(r.composite_score * 100) == 56
 
 
 def test_dependency_chain_variant(scenario):
@@ -98,8 +124,8 @@ def test_dependency_chain_variant(scenario):
     assert r.consequences.evidence_preserved == pytest.approx(1.000, abs=0.001)
     # fs01 が封じ込められていないので完全度は 0.5、減衰も on_partial 止まり
     assert r.consequences.containment_completeness == pytest.approx(0.500, abs=0.001)
-    assert r.policy_score == pytest.approx(0.290, abs=0.001)
-    assert round(r.composite_score * 100) == 48
+    assert r.policy_score == pytest.approx(0.301, abs=0.001)
+    assert round(r.composite_score * 100) == 49
 
 
 def test_same_play_scores_differently_per_policy(scenario):
@@ -113,9 +139,9 @@ def test_same_play_scores_differently_per_policy(scenario):
     assert got["damage_minimization"].constraint_violations == 0
     assert got["evidence_preservation"].constraint_violations == 0
 
-    assert round(got["business_continuity"].composite_score * 100) == 58
-    assert round(got["damage_minimization"].composite_score * 100) == 63
-    assert round(got["evidence_preservation"].composite_score * 100) == 62
+    assert round(got["business_continuity"].composite_score * 100) == 56
+    assert round(got["damage_minimization"].composite_score * 100) == 58
+    assert round(got["evidence_preservation"].composite_score * 100) == 61
 
     # 事実認識層は方針に依存しない
     facts = {r.fact_score for r in got.values()}
@@ -164,11 +190,18 @@ def test_assist_level_does_not_change_scoring(scenario):
 
 
 def _play(scenario, triage, investigation, policy=None):
+    """調査だけを入れ替えて、封じ込めは**正しく止めた形**で揃える。
+
+    封じ込めに `act_rebuild_ws042` を使う（v1.37）。隔離だけでは
+    `persistence` が残るので 5.8 は `on_partial` 止まりになり、
+    **どちらのプレイも同じ 0.6 で積分される** — 比べたいのは調査量の差
+    なのに、封じ込めの側で天井を揃えてしまうと帰結の差が潰れる。
+    """
     e = Engine(scenario, policy or scenario.meta.default_policy, None)
     for aid in list(triage) + list(investigation):
         e.decide(Decision(kind="action", action_id=aid))
     e.decide(Decision(kind="declare_assessment", assessment=["ws-042", "fs01"]))
-    for aid in ("act_isolate_ws042", "act_shutdown_fs01"):
+    for aid in ("act_rebuild_ws042", "act_shutdown_fs01"):
         e.decide(Decision(kind="action", action_id=aid))
     e.decide(Decision(kind="finish"))
     return e
@@ -429,10 +462,11 @@ def test_timeline_fires_while_you_work(scenario):
 
     e.decide(Decision(kind="action", action_id="act_netflow_overview"))         # 30→50分
     e.decide(Decision(kind="action", action_id="act_memory_dump_ws042"))        # 50→95分
+    e.decide(Decision(kind="action", action_id="act_disk_image_ws042"))         # 95→155分
     assert e.state.fired_events == []             # ここまでは何も起きない
 
-    out = e.decide(Decision(kind="action", action_id="act_disk_image_ws042"))   # 95→155分
-    assert out.events == ["tl_accel"]             # 145分の分が拾われた
+    out = e.decide(Decision(kind="action", action_id="act_proxy_log"))          # 155→175分
+    assert out.events == ["tl_accel"]             # 165分の分が拾われた
 
 
 def test_timeline_takes_something_away(scenario):
@@ -448,12 +482,12 @@ def test_timeline_takes_something_away(scenario):
     e = Engine(scenario, "damage_minimization", None)
     for aid in ("act_edr_full_scan", "act_backup_integrity", "act_smb_session_fs01",
                 "act_ad_group_audit", "act_dc_authlog", "act_asset_inventory"):
-        e.decide(Decision(kind="action", action_id=aid))          # 0→165分
+        e.decide(Decision(kind="action", action_id=aid))          # 0→155分
     assert "ev_010" not in e.state.lost_evidence
 
-    out = e.decide(Decision(kind="action", action_id="act_collect_evtx_fs01"))  # 165→195分
-    assert out.events == []
-    out = e.decide(Decision(kind="action", action_id="act_netflow_overview"))   # 195→215分
+    out = e.decide(Decision(kind="action", action_id="act_collect_evtx_fs01"))  # 155→185分
+    assert out.events == ["tl_accel"]             # 165分の前触れが拾われる
+    out = e.decide(Decision(kind="action", action_id="act_netflow_overview"))   # 185→205分
     assert out.events == ["tl_fs01_restart"]
     assert e.state.lost_evidence == ["ev_010"]
 
@@ -662,7 +696,7 @@ def test_stopping_nothing_is_never_the_cheapest_way_out(scenario):
     実際に効くのはこの区間である。
     """
     stopped = _consequences_after(
-        scenario, ["act_block_c2", "act_shutdown_fs01"]
+        scenario, ["act_shutdown_fs01", "act_rebuild_ws042"]
     )
     nothing = _consequences_after(scenario, [])
 
@@ -695,12 +729,31 @@ def test_the_projection_hangs_on_what_was_stopped(scenario):
 
     ここが封じ込めに反応しないなら、対応フェーズの中核パラメータは
     演習終了までのわずかな残り時間にしか掛からず、盤面上ほぼ効かない。
+
+    **3段ある**（SPEC 5.8 / v1.37）。「全部止めて根絶した」「止めたが
+    根絶していない」「見当違いを止めた」は、地平の傾きが3つとも違う。
+    根絶を入れる前は上2つが同じ 0.2 で、真ん中の段が存在しなかった。
     """
-    correct = _consequences_after(scenario, ["act_block_c2", "act_shutdown_fs01"])
+    correct = _consequences_after(
+        scenario, ["act_shutdown_fs01", "act_rebuild_ws042"]
+    )
+    # 侵害資産は両方止めたが、永続化は残ったまま
+    stopped_only = _consequences_after(
+        scenario, ["act_block_c2", "act_shutdown_fs01"]
+    )
+    # 片方しか止めていない
     partial = _consequences_after(scenario, ["act_block_c2"])
     wrong = _consequences_after(scenario, ["act_isolate_ws107"])
 
-    assert correct.projected_damage < partial.projected_damage < wrong.projected_damage
+    # 根絶まで行った側は **45分よけいに払っている**（地平の始点が遅く、
+    # そのぶん被害率は高い）のに、それでも地平の積分は小さい
+    assert correct.elapsed_minutes > stopped_only.elapsed_minutes
+    assert correct.projected_damage < stopped_only.projected_damage
+
+    # 経過が同じ 10分の2本で、係数だけを比べる。
+    # 「片方だけ止めた」と「見当違いを止めた」は on_partial と on_incorrect
+    assert partial.elapsed_minutes == wrong.elapsed_minutes
+    assert partial.projected_damage < wrong.projected_damage
 
 
 def test_stopping_something_already_stopped_is_not_a_blank(scenario):

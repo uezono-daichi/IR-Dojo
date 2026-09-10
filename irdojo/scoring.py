@@ -73,6 +73,7 @@ def consequences(state: GameState, scenario: Scenario) -> Consequences:
             scenario.damage,
             truth,
             state.contained_at.keys(),
+            state.eradicated_at.keys(),
             state.elapsed_minutes,
             horizon,
         )

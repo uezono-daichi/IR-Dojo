@@ -707,3 +707,142 @@ def test_the_good_side_name_is_what_the_debrief_shows(scenario):
     assert labels["unresolved_questions"] == "論点を解消してからの判断"
     # 向きが元から良い側の指標は、そのままの名前で通る
     assert labels["assessment_recall"] == "被疑判定の再現率"
+
+
+# ─────────── 根絶（SPEC 5.8 / 9.4 #5） ───────────
+
+
+def _eradicator(data):
+    """盤面から永続化を取り除ける手を1つ取り出す。"""
+    return next(a for a in data["actions"] if a.get("eradicates"))
+
+
+def test_loader_rejects_eradication_by_something_that_is_not_containment(raw):
+    """`eradicates` は封じ込めの手にしか書けない。
+
+    調べる手や連絡の手が資産を作り直すことはない。ここを開けておくと、
+    「メモリを取ったので永続化も消えた」のような、盤面のどこにも
+    根拠のない書き方が通る。
+    """
+    data = copy.deepcopy(raw)
+    act = next(a for a in data["actions"] if a["id"] == "act_memory_dump_ws042")
+    act["eradicates"] = ["ws-042"]
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "contain 専用" in str(exc.value)
+
+
+def test_loader_rejects_eradicating_an_asset_you_do_not_touch(raw):
+    """手を触れていない資産から、永続化だけが消えることはない。
+
+    `eradicates ⊆ targets` を外すと、「dc01 を止めたので ws-042 の
+    仕掛けも消えた」が書けてしまう。6.3 が `contained_at` について
+    退けたのと同じ形の誤りが、根絶の側で復活する。
+    """
+    data = copy.deepcopy(raw)
+    _eradicator(data)["eradicates"] = ["ws-107"]
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "eradicates が targets に含まれていません" in str(exc.value)
+
+
+def test_loader_rejects_persistence_that_nothing_can_remove(raw):
+    """根絶する手が盤面に無い `persistence` は、到達不能な条件になる。
+
+    5.8 は `persistence ⊆ eradicated` を要求する。取り除く手が
+    どこにも無ければ、どれだけ正しく止めても `on_correct_containment` には
+    誰も届かない — そのシナリオには「最良の対応」が存在しない。
+    """
+    data = copy.deepcopy(raw)
+    for a in data["actions"]:
+        a.pop("eradicates", None)
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "根絶する手が無い永続化" in str(exc.value)
+
+
+def test_the_persistence_clause_is_not_vacuous(scenario):
+    """5.8 の後半の条項が、実際に結果を変える組を持っていること。
+
+    ローダは `persistence ⊆ compromised` を要求している。だから
+    根絶を `contained` で判定していた頃は、前半が成り立てば後半も
+    自動的に成り立った — **条項は恒真で、128通り全数で結果を変える組は
+    0個だった**（9.4 #5）。恒真な条項は書いていないのと同じで、
+    「隔離しても、端末を戻せば攻撃者も戻ってくる」は盤面で一度も
+    問われていなかった。
+
+    ここが 0件に戻ったら、盤面から根絶の手が消えたということである。
+    """
+    import itertools
+
+    from irdojo import damage as damage_mod
+    from irdojo.schema import ActionType
+
+    gt = scenario.world.ground_truth
+    effect = scenario.damage.containment_effect
+    by_id = scenario.action_by_id
+    acts = [a.id for a in scenario.actions if a.type == ActionType.CONTAIN]
+
+    differing = 0
+    for r in range(len(acts) + 1):
+        for combo in itertools.combinations(acts, r):
+            stopped = {t for aid in combo for t in by_id[aid].targets}
+            purged = {t for aid in combo for t in by_id[aid].eradicates}
+            real = damage_mod.containment_factor(stopped, purged, gt, effect)
+            naive = damage_mod.containment_factor(stopped, stopped, gt, effect)
+            if real != naive:
+                differing += 1
+    assert differing > 0
+
+
+def test_eradication_does_not_travel_down_the_dependency_chain(scenario):
+    """根絶は連鎖しない。上流を作り直しても、下流の仕掛けは残る。
+
+    業務の停止（`halted_at`）だけが `depends_on` で波及する。
+    攻撃が止まる場所も（6.3）、置いていかれたものが消える場所も、
+    手を当てた資産の上だけである。ここを連鎖させると、
+    **依存の根を1つ作り直すだけで盤面が片付く** — 最も乱暴な手が
+    最も安くなる。
+    """
+    e = Engine(scenario, "damage_minimization", None)
+    e.decide(Decision(kind="declare_assessment", assessment=["ws-042"]))
+    out = e.decide(Decision(kind="action", action_id="act_rebuild_ws042"))
+
+    assert out.eradicated == ["ws-042"]
+    assert set(e.state.eradicated_at) == {"ws-042"}
+    # 業務は依存で波及するが、根絶はしない
+    assert "dc01" not in e.state.eradicated_at
+
+
+def test_stopping_is_not_eradicating(scenario):
+    """通信を止める手は、置いていかれたものには触らない（SPEC 5.8）。
+
+    同じ資産を対象にしていても、`targets` と `eradicates` は別の問いに
+    答えている。ここが一致してしまうと、5.8 の後半の条項は恒真に戻る。
+    """
+    e = Engine(scenario, "damage_minimization", None)
+    e.decide(Decision(kind="declare_assessment", assessment=["ws-042"]))
+    out = e.decide(Decision(kind="action", action_id="act_block_c2"))
+
+    assert out.contained == ["ws-042"]
+    assert out.eradicated == []
+    assert e.state.eradicated_at == {}
+    assert not out.empty
+
+
+def test_restoring_something_already_stopped_is_not_a_blank(scenario):
+    """既に止めた資産を作り直した回は、空振りではない（SPEC 7.6.8）。
+
+    `contained` は空になる（もう止めてある）。`already` は数えるが、
+    その回に実際に起きたのは根絶である。`empty` が `eradicated` を
+    数えないと、緑の枠の中にオレンジの「何も出てこなかった」が並ぶ。
+    判定はエンジンと画面の両方にあるので、必ず同時に直すこと。
+    """
+    e = Engine(scenario, "damage_minimization", None)
+    e.decide(Decision(kind="declare_assessment", assessment=["ws-042"]))
+    e.decide(Decision(kind="action", action_id="act_block_c2"))
+    out = e.decide(Decision(kind="action", action_id="act_rebuild_ws042"))
+
+    assert out.contained == []
+    assert out.eradicated == ["ws-042"]
+    assert not out.empty

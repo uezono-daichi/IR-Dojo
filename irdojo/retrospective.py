@@ -137,7 +137,7 @@ def minimal_path(scenario: Scenario) -> tuple[int | None, list[str], bool]:
 
 
 def minimal_containment(scenario: Scenario) -> tuple[int | None, list[str]]:
-    """`compromised` を覆う最安の封じ込め集合（SPEC 8.2 手順7）。
+    """`compromised` を覆い、`persistence` を根絶する最安の封じ込め集合（8.2 手順7）。
 
     **学習者には出さない内部値である。** 講評に出るのは 6.6 の
     `minimal_path`（判断に到達するまでの参照値）だけで、こちらは
@@ -149,10 +149,18 @@ def minimal_containment(scenario: Scenario) -> tuple[int | None, list[str]]:
 
     「封じ込め手の合計」ではなく「compromised を覆う最安の集合」で定義する。
     合計にすると、手を1つ足すたびに折れ点が動く循環になる。
+
+    **根絶まで含める。** 5.8 の `on_correct_containment` は
+    `persistence ⊆ eradicated` も要求するので、止めるだけの集合は
+    **盤面で最良の対応ではない**（被害は on_partial から下がらない）。
+    L を止めるだけの集合で測ると、折れ点は「最良の対応をした人が
+    自分で踏む」位置に置かれる。ここは 8.2 手順7 が一度直したのと
+    同じ取り違えで、そのときは封じ込めそのものが抜けていた。
     """
     acts = [a for a in scenario.actions if a.type == ActionType.CONTAIN and a.targets]
     need = set(scenario.world.ground_truth.compromised)
-    if not need:
+    need_erad = set(scenario.world.ground_truth.persistence)
+    if not need and not need_erad:
         return 0, []
 
     # 各資産について最も安い手を選ぶ貪欲でよい場面が多いが、
@@ -160,20 +168,24 @@ def minimal_containment(scenario: Scenario) -> tuple[int | None, list[str]]:
     # 封じ込め手は 8.1 の上限で 5〜7 個なので全探索で足りる。
     best: tuple[int, list[str]] | None = None
 
-    def dfs(i: int, chosen: list[Action], cost: int, covered: set[str]) -> None:
+    def dfs(
+        i: int, chosen: list[Action], cost: int,
+        covered: set[str], purged: set[str],
+    ) -> None:
         nonlocal best
         if best is not None and cost >= best[0]:
             return
-        if need <= covered:
+        if need <= covered and need_erad <= purged:
             best = (cost, [a.id for a in chosen])
             return
         if i >= len(acts):
             return
         for j in range(i, len(acts)):
             a = acts[j]
-            dfs(j + 1, chosen + [a], cost + a.cost_minutes, covered | set(a.targets))
+            dfs(j + 1, chosen + [a], cost + a.cost_minutes,
+                covered | set(a.targets), purged | set(a.eradicates))
 
-    dfs(0, [], 0, set())
+    dfs(0, [], 0, set(), set())
     if best is None:
         return None, []
     return best[0], best[1]

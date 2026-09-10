@@ -349,13 +349,22 @@ def test_the_replacement_checks_are_not_slack(balance, monkeypatch):
         )
     )
 
-    # (1) fs01 の手を1つに戻すと、最良手は全方針で一致する
+    # (1) 侵害資産ごとの手を1つずつに戻すと、最良手は全方針で一致する。
+    #     **v1.37 で選択肢が増えた**（fs01 を止める2つ、ws-042 に手を当てる
+    #     4つ）。1つ消しただけでは残りが方針を割り続けるので、
+    #     「侵害資産1つにつき手が1つ」まで落として初めて検査が落ちる。
+    #     残すのは act_shutdown_fs01 と act_rebuild_ws042 — これなら
+    #     persistence を根絶する手も盤面に1つ残る（ローダの要求）
+    alternatives = [
+        "act_block_smb_fs01", "act_purge_persistence_ws042",
+        "act_block_c2", "act_isolate_ws042",
+    ]
     data = copy.deepcopy(raw)
-    data["actions"] = [a for a in data["actions"] if a["id"] != "act_block_smb_fs01"]
+    data["actions"] = [a for a in data["actions"] if a["id"] not in alternatives]
     for pol in data["policies"]:
         for c in pol.get("constraints", []):
             c["action_ids"] = [
-                i for i in c.get("action_ids", []) if i != "act_block_smb_fs01"
+                i for i in c.get("action_ids", []) if i not in alternatives
             ]
     one_way = load_scenario_text(yaml.safe_dump(data, allow_unicode=True))
     assert not _named(
@@ -372,3 +381,81 @@ def test_the_replacement_checks_are_not_slack(balance, monkeypatch):
     assert not _named(
         balance.report(sc), "何も止めないプレイは正しく止めたプレイに負ける"
     )["ok"], "地平が無くても「何も止めない」が負けている"
+
+
+# ─────────── 根絶（SPEC 5.8 / 9.4 #5） ───────────
+
+
+def test_the_persistence_check_fails_when_the_board_loses_eradication(balance):
+    """根絶の手を盤面から抜くと、persistence の検査が落ちること。
+
+    v1.36 まで `ground_truth.persistence` は完全な死にフィールドだった。
+    条項はコードにあり、ローダも通り、テストも全部緑だったのに、
+    128通り全数で結果を変える組は0個 — **「持っているが効いていない」は、
+    測定器に入って初めて見える。** ここが落ちない検査は、
+    もう一度同じ穴を見逃す。
+
+    盤面から根絶を抜くには `persistence` も空にする必要がある
+    （空でないとローダが拒否する）。それが正しい依存関係で、
+    「取り除く手が無いなら、そもそも永続化を書いてはいけない」。
+    """
+    import copy
+
+    import yaml
+
+    from irdojo.loader import SCENARIO_DIR, load_scenario_text
+
+    raw = yaml.safe_load(
+        (SCENARIO_DIR / "ransomware-initial-response-01.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    data = copy.deepcopy(raw)
+    for a in data["actions"]:
+        a.pop("eradicates", None)
+    data["world"]["ground_truth"]["persistence"] = []
+
+    toothless = load_scenario_text(yaml.safe_dump(data, allow_unicode=True))
+    report = balance.report(toothless)
+    assert not _named(report, "persistence 条項が結果を変える封じ込めの組がある")["ok"]
+    assert not _named(report, "根絶しない封じ込めは被害を止めきらない")["ok"]
+
+
+def test_the_thorough_play_and_the_half_play_differ_only_in_containment(balance):
+    """「止めるだけ」と「根絶まで行く」は、調査が1手も違わないこと。
+
+    調査量の差が混ざると、被害の差が「根絶したから」なのか
+    「早く降りたから」なのか切り分けられない。誤導を追う／棄却する の
+    対で使ったのと同じ作り方であり、その作り方を守っているかを見る。
+    """
+    sc = load_scenario("ransomware-initial-response-01")
+    profiles = {p.key: p for p in balance.PROFILES}
+    full = balance.run_profile(sc, profiles["skilled"], [])
+    half = balance.run_profile(sc, profiles["skilled_halfway"], [])
+
+    assert full.decided_at == half.decided_at
+    assert full.assessment == half.assessment
+    # 違うのは封じ込めの側だけ
+    assert full.eradicated and not half.eradicated
+    assert half.damage > full.damage
+
+
+def test_the_cheapest_cover_reaches_for_eradication_when_asked(balance):
+    """最安被覆が、頼まれれば根絶する手を選ぶこと（L の校正に効く）。
+
+    費用だけで選ぶと必ず安いほう（止めるだけ）へ倒れる。それで測った
+    L は「盤面で最良の対応にかかる時間」を過小に見積もり、
+    折れ点が**最良の対応をした人の手前**に置かれる。
+    """
+    sc = load_scenario("ransomware-initial-response-01")
+    wanted = {"ws-042", "fs01"}
+    by_id = sc.action_by_id
+
+    plain = balance.cheapest_cover(sc, wanted)
+    purging = balance.cheapest_cover(sc, wanted, wanted)
+
+    assert not any(by_id[a].eradicates for a in plain)
+    assert any("ws-042" in by_id[a].eradicates for a in purging)
+    # 根絶まで行くほうが高い。安いほうが選ばれていないことの裏取り
+    assert (sum(by_id[a].cost_minutes for a in purging)
+            > sum(by_id[a].cost_minutes for a in plain))
