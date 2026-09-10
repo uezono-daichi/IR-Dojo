@@ -132,11 +132,22 @@ class ActionOutcome(BaseModel):
     averted: list[str] = []           # そのうち、先手が効いて不発に終わった分
     # 連絡で「以後起きなくなる」ようにしたもの。押しても無言にしないため
     prevented: list[str] = []
+    # どの型の手だったか。**連絡は空振りにならない**（下記）
+    kind: ActionType = ActionType.INVESTIGATE
 
     @property
     def empty(self) -> bool:
         # 出来事は世界の側の話。押した結果が空振りだったかとは別に数える。
         # 45分かけて何も出ず、その間に電話が鳴った、は両方起きうる。
+        #
+        # **連絡は決して空振りにしない。** 周知は出したのだから、
+        # 世界の側で起きたことは press した時点で確定している。
+        # `prevented` が空になるのは「もう防ぐものが残っていない」ときだけで、
+        # そこで「何も出てこなかった」と出すと、**間に合わなかったことを
+        # プレイ中に告げる**ことになる（原則5）。速さへの賭けに負けたことは、
+        # 講評まで開かない。文言も勝った回と揃える。
+        if self.kind == ActionType.COMMUNICATE:
+            return False
         return (
             not self.revealed
             and not self.contained
@@ -556,6 +567,7 @@ class Engine:
             events=events,
             averted=averted,
             prevented=prevented,
+            kind=action.type,
         )
 
     def _record_violations(

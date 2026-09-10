@@ -21,6 +21,7 @@ var S = {
   openIds: {},
   closedPhases: {},
   lastOutcome: null,
+  cards: [],          // シナリオ選択のカード。押して選べるようにするために持つ
   incoming: []        // 向こうから入ってきたこと。押した結果とは別に積む
 };
 
@@ -201,14 +202,21 @@ function showListError(err) {
 function renderScenarioList() {
   var host = $('scenario-list');
   clear(host);
+  S.cards = [];
   $('btn-start').disabled = false;
   if (!S.scenarios.length) {
     host.appendChild(el('p', 'empty', 'scenarios/ にシナリオがありません。'));
     $('btn-start').disabled = true;
     return;
   }
+  // カードは押して選ぶ。**2本目が入るまで、ここは押せなかった** —
+  // 一覧を描いたあと無条件に先頭を選んでいたので、1本のときは
+  // 見た目どおりに動き、2本目を足した瞬間に「2本目だけ遊べない」になる
   S.scenarios.forEach(function (sc) {
-    var card = el('div', 'card');
+    var card = el('div', 'card card-pick');
+    card.setAttribute('role', 'radio');
+    card.setAttribute('data-scenario', sc.id);
+    card.setAttribute('tabindex', '0');
     var head = el('div', 'card-head');
     head.appendChild(el('div', 'card-title', sc.title));
     head.appendChild(el('div', 'dim',
@@ -216,15 +224,29 @@ function renderScenarioList() {
     card.appendChild(head);
     card.appendChild(el('div', 'faint',
       sc.tags.join(' / ') + '　約' + sc.estimated_play_minutes + '分'));
+    card.addEventListener('click', function () { selectScenario(sc); });
+    card.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectScenario(sc); }
+    });
+    S.cards.push({ id: sc.id, node: card });
     host.appendChild(card);
   });
   selectScenario(S.scenarios[0]);
 }
 
 function selectScenario(sc) {
+  var changed = !S.scenario || S.scenario.id !== sc.id;
   S.scenario = sc;
+  // 方針とアシストはシナリオごとのもの。持ち越すと、前のシナリオにしか
+  // 無い方針 id を送ることになる（サーバは知らない id を弾く）
+  if (changed) { S.policy = sc.default_policy; S.assist = sc.default_assist_level; }
   S.policy = S.policy || sc.default_policy;
   S.assist = S.assist || sc.default_assist_level;
+  S.cards.forEach(function (c) {
+    var on = (c.id === sc.id);
+    c.node.classList.toggle('card-on', on);
+    c.node.setAttribute('aria-checked', on ? 'true' : 'false');
+  });
 
   var pl = $('policy-list');
   clear(pl);
@@ -331,23 +353,43 @@ function topologyExample(host, assets) {
   if (!assets || !assets.length) { return; }
   var byId = {};
   assets.forEach(function (a) { byId[a.id] = a; });
-  function fallout(id, seen) {
-    var out = [];
+  // 依存は木とは限らない。1つの資産が複数の上流にぶら下がる（DAG）と、
+  // 経路の数だけ数えてしまう。7つしかない盤面で「10台」と言っていた
+  function fallout(id, hit) {
     assets.forEach(function (a) {
-      if (seen.indexOf(a.id) >= 0) { return; }
+      if (hit[a.id] || a.id === id) { return; }
       if ((a.depends_on || []).indexOf(id) < 0) { return; }
-      out = out.concat([a.id], fallout(a.id, seen.concat([id, a.id])));
+      hit[a.id] = true;
+      fallout(a.id, hit);
     });
-    return out;
+    return hit;
   }
   var best = null, bestN = 0;
   assets.forEach(function (a) {
-    var n = fallout(a.id, [a.id]).length;
+    var n = Object.keys(fallout(a.id, {})).length;
     if (n > bestN) { best = a; bestN = n; }
   });
   if (!best) { return; }
+  // 数え方の単位は「つ」。資産が端末とは限らない（原則1：エンジンは中身を知らない）
   host.textContent = best.id + ' を止めれば、それに依存する'
-    + bestN + '台も一緒に止まります。';
+    + bestN + 'つも一緒に止まります。';
+}
+
+/* 箱の幅に収まるところまでラベルを畳む。11px の .name 用。
+
+   全角はおよそ 11px、半角はおよそ 5.5px として数える。厳密な計測は
+   getComputedTextLength でしかできないが、そのためには一度 DOM へ入れて
+   から測り直すことになる（描画前に幅が 0 の状態で測ると必ず外す）。
+   ここは「隣の箱を潰さない」ことが目的なので、見積もりで足りる。 */
+function fitLabel(text, px) {
+  var s = String(text || '');
+  var w = 0, out = '';
+  for (var i = 0; i < s.length; i++) {
+    w += /[\x20-\x7e]/.test(s[i]) ? 5.5 : 11;
+    if (w > px) { return out.replace(/[ (（]+$/, '') + '…'; }
+    out += s[i];
+  }
+  return out;
 }
 
 function renderTopology(host, assets) {
@@ -429,7 +471,10 @@ function renderTopology(host, assets) {
     tag.textContent = critLabel(a.criticality);
     root.appendChild(tag);
     var nm = svg('text', { 'class': 'name', x: p.x + 11, y: p.y + 38 });
-    nm.textContent = a.label;      // シナリオ由来。textContent で入れる
+    // SVG のテキストは箱からはみ出しても切れない。隣の箱の上に重なって
+    // 両方読めなくなる（「テナント管理者アカウント (岸)」が隣を潰していた）。
+    // ラベルの長さは作者の自由なので、描く側で畳む
+    nm.textContent = fitLabel(a.label, BW - 22);
     root.appendChild(nm);
   });
 
@@ -887,10 +932,15 @@ function renderResult(v) {
   // 攻撃の経路が既に断ってあれば contained は空になる。
   // エンジン側 ActionOutcome.empty と揃える（片方だけ直すと、
   // 緑の枠の中にオレンジの「何も出てこなかった」が並ぶ）
-  var empty = !o.revealed && !stopped && !purged.length
+  // 連絡は決して空振りにしない。周知は出したのだから、世界の側の変化は
+  // 押した時点で確定している。`prevented` が空になるのは「もう防ぐものが
+  // 残っていない」ときだけで、そこで「何も出てこなかった」と出すのは
+  // **間に合わなかったことをプレイ中に告げる**ことになる（原則5）
+  var notice = (o.type === 'communicate');
+  var empty = !notice && !o.revealed && !stopped && !purged.length
               && !halted.length && !already.length && !o.prevented;
   var note = el('div', 'outcome'
-    + (stopped || purged.length || halted.length || already.length || o.prevented
+    + (notice || stopped || purged.length || halted.length || already.length || o.prevented
         ? ' outcome-contained'
                               : (empty ? ' outcome-empty' : '')));
 
@@ -901,8 +951,10 @@ function renderResult(v) {
   // 手を動かした感触までは渡す（SPEC 1.4 / 7.6.8）
   if (o.command) { note.appendChild(terminal(o)); }
 
-  // 連絡は証拠を産まない。何をしたのかを言わないと、押しても無言になる
-  if (o.prevented) {
+  // 連絡は証拠を産まない。何をしたのかを言わないと、押しても無言になる。
+  // **文言は「間に合った回」と「間に合わなかった回」で揃える。**
+  // 分けると、その場で賭けの結果を告げることになる（SPEC 5.6.1 / 原則5）
+  if (notice) {
     note.appendChild(el('div', 'outcome-msg notified',
       '周知が行き渡った。以後、現場判断で状態が変わることは無くなる。'));
     note.appendChild(el('div', 'outcome-cascade',

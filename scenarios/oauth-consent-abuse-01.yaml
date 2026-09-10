@@ -1,0 +1,1824 @@
+schema_version: "0.4"
+
+meta:
+  id: oauth-consent-abuse-01
+  title: "取引先からの一本の電話"
+  version: "1.0.0"
+  author: "IR Dojo"
+  license: "CC-BY-4.0"
+  estimated_play_minutes: 10
+  language: ja
+  default_policy: business_continuity
+  default_assist_level: assisted
+  briefing: |
+    6/18 10:40、取引先2社から相次いで連絡。
+    「営業部の森さんから、見慣れない共有リンクの付いたメールが届いた。
+      本文が短くて不自然なので、念のため確認したい」
+
+    差出人は詐称ではなく、社内から出た本物の送信である。
+    あなたは情報セキュリティ担当として対応にあたる。
+
+    自社は クラウド基盤 1テナントで ID・メール・ファイル共有をまとめて
+    運用している中規模の会社で、外部の連携アプリを業務でも使っている。
+    現時点の一次情報は「取引先2社が同じ苦情を寄せている」だけである。
+  tags: [saas, identity, consent-phishing, misleading-evidence]
+
+world:
+  assets:
+    - id: tenant
+      label: "ID基盤テナント"
+      criticality: critical
+      depends_on: []
+      business_impact_per_hour: 90
+
+    - id: mailbox
+      label: "クラウドメール"
+      criticality: high
+      depends_on: [tenant]
+      business_impact_per_hour: 60
+
+    - id: filehub
+      label: "共有ファイル領域"
+      criticality: high
+      depends_on: [tenant]
+      business_impact_per_hour: 55
+
+    - id: acct-admin
+      label: "テナント管理者アカウント (岸)"
+      criticality: medium
+      depends_on: [tenant]
+      business_impact_per_hour: 12
+
+    - id: acct-mori
+      label: "営業部アカウント (森)"
+      criticality: low
+      depends_on: [tenant]
+      business_impact_per_hour: 4
+
+    # 依存が木にならない資産。テナント・メール・ファイル共有の3つに
+    # またがるので、構成図は DAG になる（SPEC 7.6.7）
+    - id: app-scan
+      label: "契約書点検サービス"
+      criticality: low
+      depends_on: [tenant, mailbox, filehub]
+      business_impact_per_hour: 3
+
+    - id: app-relay
+      label: "差出人整理アシスタント"
+      criticality: low
+      depends_on: [tenant, mailbox]
+      business_impact_per_hour: 2
+
+    - id: app-board
+      label: "会議室予約コネクタ"
+      criticality: low
+      depends_on: [tenant]
+      business_impact_per_hour: 2
+
+  ground_truth:
+    patient_zero: acct-mori
+    compromised: [acct-mori, mailbox, app-relay]
+    persistence: [mailbox, app-relay]
+    innocent: [acct-admin, app-scan, app-board]
+    attack_narrative: |
+      5/17（32日前）10:02、営業部の森宛に「共有された文書の閲覧」を装うメールが届いた。
+      リンクの先はクラウド基盤の本物の同意画面で、そこに並んでいたのは
+      攻撃者が3日前に登録した「差出人整理アシスタント」というアプリだった。
+      森は 10:04 に「承諾」を押している。パスワードは一度も入力していないし、
+      多要素認証も破られていない。攻撃者が手に入れたのは資格情報ではなく、
+      森の代理としてメールとファイルを読む「委任された立場」である。
+
+      以後32日間、攻撃者はこのアプリのトークンでメールとファイル共有を読み続けた。
+      同時に森の受信箱へ規則を1件追加し、「請求」「口座」を含む受信を既読にして
+      RSS フィード フォルダへ移すようにしてある。森からは何も見えていない。
+
+      6/18 10:12、攻撃者は同じアプリの権限で、森の名前のまま取引先30社へ
+      共有リンク付きのメールを送った。これが露見の契機になった。
+
+      契約書点検サービスは、2年前に法務部が申請し承認された正規の連携である。
+      テナント全体のファイルとメールを読める広い権限を持っているが、
+      それは審査を通ったうえで与えられたものである。
+      会議室予約コネクタの呼び出しが 10:05 前後に集中しているのは、
+      始業時刻に予約の同期が走る設定によるものである。
+      テナント管理者アカウントに並んでいる外部からのサインインの記録は、
+      条件付きアクセスがすべて手前で止めている試行である。
+
+      共有ファイル領域そのものは乗っ取られていない。読まれたのは
+      森に見えている範囲であり、それはアプリに委ねられた権限の広さで決まる。
+
+policies:
+  - id: business_continuity
+    label: "業務継続最優先"
+    briefing: |
+      経営判断により、業務の停止は最終手段とする。
+      封じ込めは業務影響を最小化する形で実施すること。
+      証拠保全は可能な範囲で行えばよい。
+      全社の利用者を一斉に巻き込む止め方は取らないこと。
+
+      基幹の仕組み（ID基盤テナント / クラウドメール / 共有ファイル領域）を
+      止める場合は、それが侵害されている根拠を示せる状態であること。
+    weights:
+      business_impact:          0.40
+      total_damage:             0.25
+      containment_completeness: 0.20
+      evidence_preserved:       0.15
+    constraints:
+      - type: forbid_containment_without_evidence
+        assets: [tenant, mailbox, filehub]
+        message: "証拠なしに基幹の仕組みを止めることは方針違反です"
+      # 全社に「消すな・移すな」と流し、対象期間に保全ホールドを掛けることは、
+      # 日々の運用を止めることと同じである。記録は残るが、その日の仕事は滞る。
+      # この方針の下では取れない手（SPEC 5.6.1）
+      - type: forbid_action
+        action_ids: [act_preservation_notice]
+        message: "全社への保全の周知と保持の固定は、日々の運用を止めます"
+      # 全利用者のトークンを一括で失効させる手は、全社をその場でサインアウトさせる。
+      # 業務影響の積分は「復旧まで止まっている資産」しか数えないので（SPEC 6.3）、
+      # 数分で戻るが全員を巻き込むこの止め方に値段が付かない。
+      # 盤面で表せない費用は、方針が名指しで禁じる（SPEC 5.10 の費用の型）。
+      # これが無いと、業務継続最優先が自分の案を他方針の案より高く採点しない
+      - type: forbid_action
+        action_ids: [act_purge_tenantwide]
+        message: "全社の利用者を一斉にサインアウトさせる手は、この方針では取れません"
+
+  - id: evidence_preservation
+    label: "証拠保全最優先"
+    briefing: |
+      法的対応と対外報告の可能性があり、証拠保全を最優先とする。
+
+      このテナントでは、記録は待っていると消える。
+      保全ホールドとエクスポートを封じ込めに先行させること。
+
+      止める資産ごとに、その資産の記録を押さえてから止めること。
+      別の資産で書き出せていることは、この要件を満たさない。
+      封じ込めによって失われる状態がある場合、先に書き出してから実施すること。
+    weights:
+      evidence_preserved:       0.45
+      containment_completeness: 0.25
+      total_damage:             0.20
+      business_impact:          0.10
+    constraints:
+      # `require_before` ではなく `require_capture_of_target`（SPEC 5.4 / v1.40）。
+      # 前者は「前提タグの付いた手を盤面のどこかで1つ押していれば満たす」なので、
+      # 監査記録を1回書き出しただけで、受信箱の中身を控えずに止めてよくなる
+      # ＝この方針が事実上無料になる。**止める資産ごとに、その資産の記録を
+      # 押さえてから**にすることで初めて、証拠保全が時間を要求する
+      # （方針ごとの L が 170分 → 190分。SPEC 8.2 手順7）
+      - type: require_capture_of_target
+        action_type: contain
+        prerequisite_tags: [preservation_hold]
+        message: "止める資産の記録を、止める前に保全ホールドとエクスポートで押さえていません"
+
+  - id: damage_minimization
+    label: "被害最小化最優先"
+    briefing: |
+      被害拡大の阻止を最優先とする。
+      業務影響および証拠保全は二次的な考慮事項とする。
+
+      止めるべきものは、根拠が固まる前でも止めてよい。
+      利用者ごとに手で戻して回るのではなく、テナントの側で確実に断つこと。
+      入れ替えて凌がず、いま渡っている鍵ごと断つこと。
+    weights:
+      total_damage:             0.50
+      containment_completeness: 0.30
+      business_impact:          0.10
+      evidence_preserved:       0.10
+    constraints:
+      # 利用者を1人ずつ回って同意を取り消す手は、名簿から漏れた1人を取りこぼす。
+      # 業務継続にとっては最良の手が、この方針では違反になる。
+      # これが無いと3つの締め方は「業務を止めない順」で決まり、
+      # 対応フェーズの取捨選択が方針に依存しなくなる（SPEC 原則4）
+      - type: forbid_action
+        action_ids: [act_revoke_per_user]
+        message: "利用者ごとに回る取り消しは取りこぼしうる。この方針ではテナントの側で断つこと"
+      # 控えを取っている間も、読まれ続ける時間は進んでいる。
+      # 証拠保全にとっては最良の手が、この方針では違反になる。
+      # 3つの締め方に、3つの方針がそれぞれ別に着地する形はここで閉じる
+      # （残る1つ＝テナントの側で登録ごと断つ手だけが、この方針で許される）
+      - type: forbid_action
+        action_ids: [act_hold_then_revoke]
+        message: "控えを取っている間も読まれ続ける。この方針では書き出しを待たずに断つこと"
+      # 資格情報を入れ替えても、既に発行された更新トークンはそのまま生きている。
+      # 森のアカウントの締め方も方針で割れる（業務継続＝本人を止めない再発行 /
+      # 被害最小化＝いま持たれている鍵ごと断つサインイン停止）
+      - type: forbid_action
+        action_ids: [act_reset_acct_mori]
+        message: "資格情報の入れ替えでは、既に発行された更新トークンは失効しません"
+
+evidence:
+  - id: ev_001
+    points_to: [acct-mori]
+    misleading: false
+    plausibility: high
+    volatile: false
+    summary: "森のアカウントから、社外30宛先へ共有リンク付きのメールが一斉に送られている"
+    reading: |
+      メッセージ追跡ログの1行は「時刻 / 差出人 / 宛先 / 件名 / 経路 / 結果」で並ぶ。
+
+      ClientApp の欄は、その送信がどの経路で投げられたかを表す。
+        Browser        利用者がブラウザの画面から送った
+        MobileApp      利用者が携帯の専用アプリから送った
+        RESTAPI        アプリケーションが API 経由で送った
+      RESTAPI の場合、AppId の欄に呼び出し元のアプリ識別子が入る。
+
+      Auth の欄は送信時の認証方式で、Delegated は「利用者の代理として」、
+      AppOnly は「アプリ自身として」を表す。前者は利用者の権限で動く。
+
+      短時間に同一本文が多数の宛先へ出る形は、一斉送信の設定でも
+      自動化された送信でも同じように記録される。件数と間隔だけでは
+      どちらかを決められない。
+    content: |
+      # クラウドメール メッセージ追跡 (2026-06-18 09:00 - 11:00)
+
+      2026-06-18T10:12:04Z  mori@example.com -> torihiki-a@example.org
+        Subject   : 共有されたファイルのご確認
+        ClientApp : RESTAPI
+        AppId     : 7f3c-relay
+        Auth      : Delegated (mori@example.com)
+        Status    : Delivered
+      2026-06-18T10:12:04Z  mori@example.com -> torihiki-b@example.org   (同一本文)
+      2026-06-18T10:12:05Z  mori@example.com -> torihiki-c@example.org   (同一本文)
+      ...
+        同一 Subject の外部宛て送信 : 30 件 (10:12:04 - 10:12:31)
+        本文中の URL              : https://files.example.net/s/9d1a  (全件同一)
+
+      同時間帯の mori@example.com の他の送信:
+        ClientApp=Browser  4 件   ClientApp=MobileApp 1 件
+
+      集計対象 : 追跡ログに残る送受信（社内外を問わない）
+      非対象   : 送信の本文そのもの、下書きのまま送られなかったもの
+
+  - id: ev_002
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "森のサインインは拠点の回線と登録済み端末からのものだけで、外部からの成功は認められない"
+    reading: |
+      サインイン ログの読み方。
+        ResultCode 0       成功
+        ResultCode 50126   利用者名またはパスワードが違う
+        ResultCode 50074   多要素認証の要求が満たされていない
+        DeviceCompliant    端末管理に登録され、要件を満たしているか
+        RiskLevel          サインインごとに付く危険度の推定値
+
+      このテナントのサインイン ログの保持は既定の 30日で、
+      31日目以降は日次のジョブで古い日から順に落ちていく。
+      照会できるのは、その時点で残っている範囲だけになる。
+
+      なお、委任された立場で動くアプリの API 呼び出しは、
+      利用者のサインインとしては記録されない。別の帳簿に載る。
+    content: |
+      # サインイン ログ (mori@example.com / 保持範囲の全期間)
+
+        期間            : 2026-05-19 - 2026-06-18   (30日保持の残存分)
+        総件数          : 412
+        ResultCode 0    : 409
+        ResultCode 50074:   2   (2026-06-02 09:11, 2026-06-09 08:57)
+        ResultCode 50126:   1   (2026-06-05 08:44)
+
+        送信元 IP       : 203.0.113.24/29 のみ  (本社回線)
+        DeviceId        : 3 台。いずれも DeviceCompliant=true
+        RiskLevel       : none 410 / low 2 / medium 0 / high 0
+
+      照会対象 : サインインの成否と条件付きアクセスの評価結果
+      非対象   : 委任された立場で動くアプリからの API 呼び出し、
+                 保持期間 (30日) を過ぎて落ちた日の分
+
+  - id: ev_003
+    points_to: [acct-mori]
+    misleading: false
+    plausibility: high
+    volatile: false
+    summary: "5/17 10:04 に、森が外部のアプリへ委任同意を与えている"
+    reading: |
+      監査ログの Consent to application は、利用者が同意画面で「承諾」を
+      押したときに1件記録される。読みどころは3つある。
+
+        ConsentType    Principal は「その利用者ぶんだけ」、
+                       AllPrincipals は「テナント全員ぶん」を表す
+        Scope          委ねた権限の一覧。Mail.Read は受信箱の読み取り、
+                       Files.Read.All は利用者から見えるファイルの読み取り、
+                       Mail.Send は利用者の名前での送信、
+                       offline_access は利用者が画面にいなくても
+                       アプリが動き続けられる更新トークンの発行を指す
+        IPAddress      同意画面を操作した端末の送信元
+
+      統合監査ログの保持は既定 90日で、サインイン ログ (30日) より長い。
+      同じ出来事でも、どの帳簿に載るかで残っている期間が違う。
+    content: |
+      # 統合監査ログ / Consent to application
+
+      2026-05-17T10:04:38Z
+        Operation      : Consent to application
+        InitiatedBy    : mori@example.com
+        IPAddress      : 203.0.113.26
+        ConsentType    : Principal
+        Scope          : Mail.Read Mail.Send Files.Read.All offline_access User.Read
+        AppDisplayName : 差出人整理アシスタント
+        AppId          : 7f3c-relay
+
+      同一利用者の直前の操作:
+      2026-05-17T10:03:51Z  UserLoggedIn        mori@example.com  203.0.113.26
+      2026-05-17T10:02:10Z  MailItemsAccessed   (Browser)         203.0.113.26
+
+      照会対象 : 統合監査ログに載る操作 (保持 90日)
+      非対象   : 同意画面に至るまでにたどったリンクの経路
+
+  - id: ev_004
+    points_to: [app-relay]
+    misleading: false
+    plausibility: high
+    volatile: true
+    summary: "そのアプリには 12名ぶんの同意が生きており、更新トークンが今も使われている"
+    reading: |
+      委任同意の一覧は、いま有効な「代理の許可証」を並べたものである。
+      台帳ではなく現在の状態なので、取り消すと行そのものが消える。
+      取り消した後で「どんな範囲を渡していたか」を数え直すことはできない。
+
+        Grants        その利用者ぶんの委任同意
+        Scope         委ねた権限
+        RefreshTokens 発行済みの更新トークン。1本ごとに、利用者が
+                      画面にいなくてもアプリが動き続けられる
+        LastUsed      その利用者ぶんの許可証が最後に使われた時刻
+
+      LastUsed が現在時刻に近いということは、その許可証が今も
+      生きて使われているということを表す。
+    content: |
+      # 委任同意の一覧 (現在の状態 / AppId=7f3c-relay)
+
+        Grants        : 12 principals
+        ConsentType   : Principal (AllPrincipals なし)
+        Scope         : Mail.Read Mail.Send Files.Read.All offline_access User.Read
+        RefreshTokens : 12 本 (失効なし)
+
+        principal            granted              LastUsed
+        mori@example.com     2026-05-17T10:04Z    2026-06-18T10:31Z
+        sekiya@example.com   2026-05-21T14:22Z    2026-06-18T09:48Z
+        ...                  (計 12 名)
+        最古の granted       : 2026-05-17T10:04Z
+        最新の granted       : 2026-06-16T11:07Z
+
+      取得範囲 : 現在有効な委任同意と、それに紐づく更新トークンの本数
+      非対象   : 既に取り消された同意、アプリ自身の権限 (AppOnly) の分
+
+  - id: ev_005
+    points_to: [app-relay]
+    misleading: false
+    plausibility: high
+    volatile: false
+    summary: "そのアプリは同意の3日前に登録され、発行元の検証がなく、応答先が社外である"
+    reading: |
+      アプリ登録の内容は、テナントに登録された連携アプリの素性である。
+
+        PublisherVerified   発行元が事業者として検証されているか
+        VerifiedPublisherId 検証済みの発行元に割り当てられる識別子
+        CreatedDateTime     テナントに登録された日時
+        SignInAudience      どのテナントの利用者が同意できるか
+        ReplyUrls           同意後に利用者を送り返す先
+        RequiredResourceAccess  同意画面に並べる権限の要求一覧
+
+      ReplyUrls は同意の完了時に認可コードを受け取る場所なので、
+      ここに書かれたホストが、その連携の実体が動いている場所になる。
+
+      社内の申請を経て導入した連携であれば、審査番号と申請部署が
+      アプリ審査台帳の側に載っている。登録の内容だけでは分からない。
+    content: |
+      # アプリ登録 (AppId=7f3c-relay)
+
+        DisplayName         : 差出人整理アシスタント
+        CreatedDateTime     : 2026-05-14T03:26:11Z
+        PublisherVerified   : false
+        VerifiedPublisherId : (なし)
+        SignInAudience      : AzureADMultipleOrgs
+        ReplyUrls           : https://relay-portal.example.net/oauth2/cb
+        Owners              : (なし)
+        RequiredResourceAccess:
+          Mail.Read (Delegated) / Mail.Send (Delegated) /
+          Files.Read.All (Delegated) / offline_access / User.Read
+
+        Logo                : 登録あり
+        TermsOfService      : (なし)      PrivacyStatement : (なし)
+
+      取得範囲 : テナントに登録されたアプリの属性と要求権限
+      非対象   : 実際に呼び出された回数、社内の導入申請の記録
+
+  - id: ev_006
+    points_to: [mailbox]
+    misleading: false
+    plausibility: high
+    volatile: false
+    summary: "森の受信箱に、請求と口座を含む受信を既読にして別フォルダへ移す規則が1件ある"
+    reading: |
+      受信箱の規則は、受信のたびにサーバ側で動く設定である。
+      端末にもブラウザにも依存しないので、利用者が別の端末に変えても動き続ける。
+
+        Enabled       規則が有効か
+        Priority      複数ある場合に評価される順番
+        Conditions    どの受信に当てはめるか
+        Actions       当てはまったときに何をするか
+          MarkAsRead      既読にする
+          MoveToFolder    指定フォルダへ移す
+          StopProcessing  以降の規則を評価しない
+
+      規則は現在の設定であって、いつ誰が作ったかは規則そのものには残らない。
+      作成の記録は統合監査ログ側の New-InboxRule に載る。
+    content: |
+      # 受信箱の規則 (mori@example.com)
+
+      Name         : (空文字)
+      Enabled      : True      Priority : 1
+      Conditions   : SubjectOrBodyContainsWords = {請求, 口座, invoice, payment}
+      Actions      : MarkAsRead = True
+                     MoveToFolder = "RSS フィード"
+                     StopProcessing = True
+
+      Name         : 社内報を購読フォルダへ
+      Enabled      : True      Priority : 2
+      Conditions   : FromAddressContainsWords = {kouhou@example.com}
+      Actions      : MoveToFolder = "購読"
+
+        規則の総数 : 2
+        RSS フィード フォルダの未読数 : 0    アイテム数 : 63
+
+      取得範囲 : サーバ側に保存された受信箱の規則
+      非対象   : 端末側のメールソフトに保存された振り分け設定
+
+  - id: ev_007
+    points_to: [app-relay]
+    misleading: false
+    plausibility: high
+    volatile: false
+    summary: "あるアプリ識別子からの読み取りが、32日間ほぼ毎日続いている"
+    reading: |
+      統合監査ログをアプリ識別子ごとに畳んだもの。委任された立場で動く
+      アプリの操作は、利用者のサインインではなくここに載る。
+
+        MailItemsAccessed   受信箱の項目が読まれたときに記録される
+        FileAccessed        ファイル共有の項目が読まれたときに記録される
+        Send                利用者の名前でメールが送られたときに記録される
+        ClientAppId         呼び出し元のアプリ識別子
+        UserId              誰の代理として動いたか
+
+      1日あたりの件数と、動いている時間帯の幅を見る。
+      人が画面を操作して読む場合は、就業時間の中に収まり、
+      日によって件数が大きく振れる。予約実行の仕組みが読む場合は、
+      時刻と件数が揃う。どちらの形かは並べてみないと分からない。
+    content: |
+      # 統合監査ログ / ClientAppId 別 (2026-05-17 - 2026-06-18)
+
+        ClientAppId=7f3c-relay
+          MailItemsAccessed : 8,214 件   (32日間 / 稼働日 32日)
+          FileAccessed      : 1,902 件
+          Send              :    30 件   (2026-06-18 10:12 のみ)
+          UserId            : 12 名
+          時間帯            : 00:00 - 23:59 に分散。02:00 台と 04:00 台にも計上あり
+          1日あたり         : 最小 141 / 中央値 256 / 最大 612
+
+        ClientAppId=2b90-scan
+          FileAccessed      : 44,310 件   MailItemsAccessed : 5,180 件
+          時間帯            : 01:00 - 03:00 に集中 (夜間の定期処理)
+
+        ClientAppId=51ad-board
+          その他の操作      : 6,404 件    時間帯 : 08:45 - 09:15 に集中
+
+      照会対象 : 統合監査ログに載る操作 (保持 90日)
+      非対象   : 記録が有効になっていない項目、90日を過ぎた分
+
+  - id: ev_008
+    points_to: [app-scan]
+    misleading: true
+    plausibility: high
+    volatile: false
+    summary: "契約書点検サービスはテナント全体のファイルとメールを読める権限を持っている"
+    reading: |
+      委任権限の一覧は、各連携アプリが同意画面で要求し、実際に与えられた
+      権限を並べたものである。
+
+        Delegated   利用者の代理として、その利用者に見える範囲で動く
+        Application アプリ自身として、テナント全体に対して動く
+        .All が付く権限は、その種別の対象全体を指す
+          Files.Read.All   ファイル共有の全体
+          Mail.Read        受信箱の読み取り
+          Sites.Read.All   サイトの全体
+
+      ConsentType が AllPrincipals の場合、管理者が全員ぶんをまとめて
+      承諾したことを表す。Principal の場合は、その利用者ぶんだけになる。
+
+      権限の広さは「何ができる状態か」を表すもので、
+      「何をしたか」は別の帳簿 (統合監査ログ) の側にある。
+    content: |
+      # 連携アプリの委任権限一覧 (要求スコープ順)
+
+      AppId=2b90-scan   契約書点検サービス
+        ConsentType : AllPrincipals   (テナント全体)
+        Scope       : Files.Read.All Sites.Read.All Mail.Read User.Read.All
+                      offline_access
+        Principals  : 全利用者 (218 名)
+
+      AppId=7f3c-relay  差出人整理アシスタント
+        ConsentType : Principal
+        Scope       : Mail.Read Mail.Send Files.Read.All offline_access User.Read
+        Principals  : 12 名
+
+      AppId=51ad-board  会議室予約コネクタ
+        ConsentType : AllPrincipals
+        Scope       : Calendars.ReadWrite Place.Read.All User.Read
+        Principals  : 全利用者 (218 名)
+
+      取得範囲 : 各アプリに現在与えられている委任権限
+      非対象   : 実際の呼び出し回数、導入時の申請と審査の記録
+    refuted_by: [ev_009]
+
+  - id: ev_009
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "3つの連携アプリの過去90日の利用実績と、導入時の審査記録が並ぶ"
+    reading: |
+      連携アプリの利用実績は、テナントの利用状況レポートから取れる。
+      平常時の姿を並べておくと、いま見えている数がその範囲に収まるかを
+      比べられる。
+
+        導入日        テナントに登録された日
+        審査番号      社内の申請と承認の識別子。申請を経ていなければ空欄になる
+        呼び出し (90日) 直近90日の API 呼び出しの総数
+        利用者数      その期間に一度でも呼び出しが発生した利用者の数
+        直近30日/前60日 の比  同じ長さで割った、伸びの度合い
+
+      比が 1.0 前後なら、その期間の使われ方は前と同じ形をしている。
+      比が大きいほど、最近になって増えたことを表す。
+    content: |
+      # 連携アプリ 利用実績レポート (2026-03-20 - 2026-06-18)
+
+      AppId=2b90-scan   契約書点検サービス
+        導入日        : 2024-04-02      審査番号 : APP-2024-0031 (法務部)
+        呼び出し(90日): 1,486,220       利用者数 : 214
+        直近30日/前60日: 0.98
+        最終利用      : 2026-06-18T03:12Z
+
+      AppId=51ad-board  会議室予約コネクタ
+        導入日        : 2023-11-15      審査番号 : APP-2023-0118 (総務部)
+        呼び出し(90日): 190,441         利用者数 : 205
+        直近30日/前60日: 1.02
+        最終利用      : 2026-06-18T09:02Z
+
+      AppId=7f3c-relay  差出人整理アシスタント
+        導入日        : 2026-05-14      審査番号 : (空欄)
+        呼び出し(90日): 10,146          利用者数 : 12
+        直近30日/前60日: (前60日の実績なし)
+        最終利用      : 2026-06-18T10:31Z
+
+      集計対象 : テナントの利用状況レポートに載る API 呼び出し
+      非対象   : 呼び出しの中身、どの利用者のどの項目が読まれたか
+
+  - id: ev_010
+    points_to: [acct-admin]
+    misleading: true
+    plausibility: medium
+    volatile: false
+    summary: "テナント管理者アカウントに、外部からのサインイン試行が並んでいる"
+    reading: |
+      サインイン ログのうち、条件付きアクセスの評価まで含めた行。
+
+        ResultCode 0       成功
+        ResultCode 50126   利用者名またはパスワードが違う
+        ResultCode 53003   条件付きアクセスのポリシーで阻止された
+        ResultCode 50053   試行が続いたため一時的に締め出された
+        ConditionalAccessStatus  success / failure / notApplied
+
+      ClientAppUsed の欄には、その試行がどのプロトコルで来たかが入る。
+      Browser / Mobile Apps and Desktop clients は現代の認証経路、
+      IMAP4 / POP3 / SMTP AUTH は古い認証経路を表す。
+
+      管理者の資格情報は名簿や過去の流出から集めやすいため、
+      外部からの試行そのものは、どのテナントでも日常的に記録される。
+      1件ずつの結果コードを見ないと、届いたかどうかは区別できない。
+    content: |
+      # サインイン ログ (kishi-adm@example.com / 2026-06-01 - 2026-06-18)
+
+        総件数 : 1,184
+
+        2026-06-18T02:41:09Z  IP 198.51.100.31  (国外)  IMAP4
+          ResultCode 53003   ConditionalAccessStatus failure
+        2026-06-18T02:41:22Z  IP 198.51.100.31  (国外)  IMAP4
+          ResultCode 53003   ConditionalAccessStatus failure
+        2026-06-17T22:08:44Z  IP 198.51.100.204 (国外)  SMTP AUTH
+          ResultCode 53003   ConditionalAccessStatus failure
+        ...
+
+        結果コードの内訳:
+          53003 : 1,178      50126 : 4      50053 : 2      0 : 0
+        送信元 : 41 か国 / 306 アドレス
+
+      照会対象 : このアカウントのサインイン試行と条件付きアクセスの評価
+      非対象   : 委任された立場で動くアプリからの API 呼び出し
+
+    refuted_by: [ev_011]
+
+  - id: ev_011
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "条件付きアクセスの構成と、結果コードが何を意味するかの対応表が取れる"
+    reading: |
+      条件付きアクセスは、サインインの成否を決める前段の関門である。
+      ポリシーごとに「誰に」「どの経路で」「何を要求するか」を持つ。
+
+        State           enabled / reportOnly / disabled
+        Users           対象の利用者や役割
+        Conditions      対象のクライアント種別・場所・端末の状態
+        GrantControls   通すための条件 (多要素認証・準拠端末など)
+        BlockLegacyAuth 古い認証経路を一律で遮断する設定
+
+      結果コード 53003 は、条件付きアクセスの段でその試行が止まったことを表す。
+      止まった試行では、その先の資格情報の照合そのものが行われない。
+
+      ポリシーの評価は毎回のサインインで走るので、
+      構成が変わっていない限り、同じ経路の試行は同じ段で扱われる。
+    content: |
+      # 条件付きアクセス ポリシー一覧 (2026-06-18 時点)
+
+      CA-001  管理者ロールに多要素認証を必須化
+        State : enabled    Users : Global Administrator ほか 6 ロール
+        GrantControls : requireMFA AND requireCompliantDevice
+
+      CA-002  古い認証経路の遮断
+        State : enabled    Users : 全利用者
+        Conditions : clientAppTypes = [exchangeActiveSync, other]
+        GrantControls : block
+
+      CA-003  国外からの管理操作の遮断
+        State : enabled    Users : Global Administrator ほか 6 ロール
+        Conditions : locations = All except 日本
+        GrantControls : block
+
+        直近30日の変更履歴 : 0 件
+        reportOnly のポリシー : 0 件
+
+      照会対象 : ポリシーの構成と、直近の変更履歴
+      非対象   : 各サインインが実際にどのポリシーで扱われたかの1件ごとの内訳
+
+  - id: ev_012
+    points_to: [acct-mori]
+    misleading: false
+    plausibility: high
+    volatile: false
+    summary: "5/17 10:02 に、森宛へ同意画面の URL を含むメールが配送されている"
+    reading: |
+      メールゲートウェイの配送ログ。認証結果の読み方は次のとおり。
+        spf  : pass    送信元 IP が差出人ドメインの許可一覧にある
+        dkim : pass    電子署名が検証できた
+        dmarc: pass    上の2つと差出人表示の整合が取れている
+
+      3つとも pass でも、それは「そのドメインから確かに出た」ことまでしか
+      表さない。無料で取得したドメインでも同じ結果になる。
+
+      本文の URL が login.idp.example.com のような認証基盤のホストを指す場合、
+      クエリ文字列の中身を分けて読む。
+        client_id     同意を求めているアプリの識別子
+        scope         同意画面に並べる権限
+        redirect_uri  承諾した後に利用者を送り返す先
+
+      添付が無く、URL が正規の認証基盤を指すメールは、
+      添付形式や既知の危険な URL を見る仕組みでは扱いの対象にならない。
+    content: |
+      # メールゲートウェイ 配送ログ
+
+      2026-05-17T10:02:47Z  queue_id=C41A77E0
+        from    : share-notice@example.net
+        to      : mori@example.com
+        subject : 【共有】2026年度 取引条件の確認について
+        attach  : (なし)
+        spf     : pass    dkim : pass    dmarc : pass
+        verdict : delivered
+        body_url:
+          https://login.idp.example.com/common/oauth2/v2.0/authorize
+            ?client_id=7f3c-relay
+            &scope=Mail.Read%20Mail.Send%20Files.Read.All%20offline_access
+            &redirect_uri=https%3A%2F%2Frelay-portal.example.net%2Foauth2%2Fcb
+            &response_type=code
+
+        送信元ドメイン example.net の登録日 : 2026-05-11
+
+      照会対象 : ゲートウェイを通過した受信 (保持 180日)
+      非対象   : 利用者が本文中の URL を開いたかどうか
+
+  - id: ev_013
+    points_to: [app-relay]
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "同じアプリへの同意が、この1か月で12名まで増えている"
+    reading: |
+      テナント全体の同意付与の推移は、統合監査ログの
+      Consent to application を日ごとに数えたものである。
+
+        新規付与     その日に「承諾」が押された件数
+        対象アプリ   その日に同意されたアプリの内訳
+        ConsentType  Principal は利用者ぶん、AllPrincipals は全員ぶん
+
+      平常時、利用者ぶんの同意は日に数件しか発生しない。
+      1つのアプリに対して、部署をまたいで少しずつ積み上がる形は、
+      同じ誘導が繰り返し届いた場合にも、口伝えで広まった場合にも起きる。
+      推移の形だけでは、どちらかを決められない。
+    content: |
+      # 統合監査ログ / Consent to application 日次集計 (直近30日)
+
+        日付         新規付与   内訳
+        2026-05-17      2       7f3c-relay 1 / 2b90-scan 1
+        2026-05-21      1       7f3c-relay 1
+        2026-05-28      3       7f3c-relay 2 / 51ad-board 1
+        2026-06-03      1       7f3c-relay 1
+        2026-06-09      4       7f3c-relay 3 / 2b90-scan 1
+        2026-06-16      2       7f3c-relay 2
+        （他の日は 0 - 2 件）
+
+        期間合計 : 新規付与 24 件
+          7f3c-relay  : 12 件 (Principal のみ / 部署は営業・経理・法務にまたがる)
+          2b90-scan   :  7 件 (Principal / いずれも新入社員の初回同意)
+          51ad-board  :  5 件 (Principal / 同上)
+
+      集計対象 : 統合監査ログに載る同意付与 (保持 90日)
+      非対象   : 管理者がまとめて承諾した分 (AllPrincipals) の内訳
+
+  - id: ev_014
+    points_to: [app-relay]
+    misleading: false
+    plausibility: high
+    volatile: false
+    summary: "共有ファイル領域から、委任された立場のアプリ経由で 1,902 件が取り出されている"
+    reading: |
+      共有ファイル領域のアクセス記録は、1操作1行で残る。
+
+        Operation     FileAccessed は閲覧、FileDownloaded は取得を表す
+        UserAgent     呼び出し元の名乗り。API 経由では固定の文字列になる
+        ApplicationId 委任された立場で動いたアプリの識別子
+        UserId        誰の代理として動いたか
+        SiteUrl       どの領域の項目か
+
+      利用者本人がブラウザで開いた場合、UserAgent にはブラウザの名乗りが入り、
+      ApplicationId には画面のアプリの識別子が入る。
+
+      どの項目が読まれたかは1行ずつ残るが、
+      「その利用者から見えていた範囲のうち、どこまでを読み終えたか」は
+      記録の側からは出てこない。数えられるのは、実際に触れた分だけである。
+    content: |
+      # 共有ファイル領域 アクセス記録 (2026-05-17 - 2026-06-18 / API 経由に限定)
+
+        ApplicationId=7f3c-relay
+          FileAccessed    : 1,902 件
+          FileDownloaded  :   417 件
+          UserId          : 12 名
+          SiteUrl         : /sites/sales (1,140) /sites/keiri (502)
+                            /sites/houmu (260)
+          UserAgent       : relay-portal/1.4 (+https://relay-portal.example.net)
+          最初の操作      : 2026-05-17T10:09:52Z
+          最後の操作      : 2026-06-18T10:29:41Z
+
+        参考 : 同期間の全 API 経由アクセス 46,212 件のうち、
+               ApplicationId 別の上位3件は 2b90-scan / 7f3c-relay / 51ad-board
+
+      照会対象 : API 経由のアクセス記録 (保持 90日)
+      非対象   : 各利用者から見えていた項目の総数、取り出した先での取り扱い
+
+  - id: ev_015
+    points_to: [app-board]
+    misleading: true
+    plausibility: medium
+    volatile: false
+    summary: "会議室予約コネクタの呼び出しが 10:05 前後に集中している"
+    reading: |
+      API 呼び出しの概況は、テナント全体の呼び出しを5分ごとに畳んだものである。
+
+        呼び出し数    その区間に処理された API 要求の数
+        Throttled     速度制限で待たされた要求の数
+        主な操作      その区間で最も多かった操作の種別
+
+      短い区間に呼び出しが跳ねる形は、定刻に走る同期でも、
+      人手を介さない連続した取得でも同じように現れる。
+      跳ねた時刻が事案の時刻と近いかどうかは、
+      それだけでは関係の有無を決める材料にならない。
+
+      平常時に同じ時刻へ跳ねているかどうかは、
+      同じ帳簿を過去の日付で引き直すか、利用実績の側で比べることになる。
+    content: |
+      # API 呼び出し概況 (2026-06-18 / 5分ごと)
+
+        時刻      呼び出し数   Throttled   主な操作
+        09:55        1,204          0      GetSchedule
+        10:00        2,881          0      GetSchedule / FindRooms
+        10:05       11,470         38      FindRooms  (ClientAppId=51ad-board)
+        10:10        3,102          0      GetSchedule / MailItemsAccessed
+        10:15        1,908          0      MailItemsAccessed
+        10:20        1,644          0      MailItemsAccessed
+
+        当日の上位 ClientAppId:
+          51ad-board  38,220      2b90-scan  12,904      7f3c-relay  611
+
+      集計対象 : テナント全体の API 要求 (当日分 / 5分粒度)
+      非対象   : 前日以前の同じ時間帯、要求ごとの利用者の内訳
+    refuted_by: [ev_009]
+
+  - id: ev_016
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "森は同意画面を操作した記憶があり、その場で連携を自分で外した"
+    reading: |
+      本人への聞き取りは、記録に残らないことを埋める唯一の手段である。
+      「どんな画面が出たか」「何を押したか」は、どの帳簿にも載らない。
+
+      同時に、聞き取りは相手を動かす。画面を共有して一覧を見せると、
+      見覚えのないものを本人がその場で外そうとするのは自然な反応である。
+      現在の状態を並べた一覧は、外された時点で行そのものが消える。
+
+      証言は、時期や順序が曖昧なまま出てくることが多い。
+      裏取りは機器の側の記録で行う。
+    content: |
+      # 対応記録 (聞き取り)
+
+      2026-06-18 11:0x  営業部 森 と画面共有
+
+        「先月、取引条件の確認という件名のメールが来ました。
+          リンクを開いたら、いつものサインイン画面が出たので、
+          そのまま承諾しました。パスワードは入れていないと思います」
+
+        「取引先に何か送った覚えはありません」
+
+        「請求のメールが最近少ないなとは思っていましたが、
+          時期的なものだと思っていました」
+
+        画面共有中、本人が連携アプリの一覧から見覚えのないものを選び、
+        「これですね」と削除を実行。受信箱の規則も1件その場で外した。
+
+      備考 : 聞き取りの時刻は 2026-06-18 11:0x。
+             証言の時期は本人の記憶によるもので、記録側との突き合わせが要る。
+
+      収集範囲 : 本人の証言と、画面共有中に本人が行った操作
+      非対象   : 端末に残る操作の記録、本人が閲覧したメールの中身
+
+  - id: ev_017
+    points_to: [mailbox]
+    misleading: false
+    plausibility: high
+    volatile: false
+    summary: "受信箱の規則が動かした 63 通と、削除済みアイテムの中身が書き出せる"
+    reading: |
+      保全ホールドは、対象の利用者について削除と保持期間の適用を止める設定である。
+      掛けた時点から先、その利用者の項目は自動整理の対象から外れる。
+      掛ける前に整理で消えた分は戻らない。
+
+      エクスポートは、ホールドの下で受信箱の内容を1通ずつ書き出す。
+        Items         書き出した通数
+        Folder        通が置かれていたフォルダ
+        Recoverable Items  利用者が削除した後、保持期間の間だけ残る領域
+
+      メールボックス監査（誰がどの通を開いたか）はこのテナントでは
+      既定のまま無効になっている。有効にしても、有効にした時点から先の
+      分しか記録されない。過去にさかのぼって数えることはできない。
+    content: |
+      # 保全ホールドとエクスポート (mori@example.com)
+
+        Hold        : InPlaceHold 適用    適用時刻 2026-06-18T11:2xZ
+        Export      : PST 1 ファイル (2.8 GB)  Items 41,208
+
+        Folder 別の内訳 (抜粋)
+          受信トレイ        18,440
+          送信済みアイテム   6,102   うち 2026-06-18T10:12Z の外部宛て 30 通
+          RSS フィード          63   受信 2026-05-17 - 2026-06-18 / 全件既読
+          Recoverable Items  1,884
+
+        RSS フィード フォルダの 63 通 : 件名に 請求 / 口座 / invoice / payment
+                                        のいずれかを含む
+
+      取得範囲 : ホールド適用後にエクスポートできた受信箱の全項目
+      非対象   : ホールドを掛ける前に自動整理で消えた分、
+                 どの通が誰にいつ開かれたか（メールボックス監査は既定のまま無効）
+
+  - id: ev_018
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "統合監査ログとサインイン ログを保全先へ書き出し、保持の期限から切り離せる"
+    reading: |
+      このテナントの記録は、帳簿ごとに保持期間が違う。
+
+        サインイン ログ   既定 30日
+        統合監査ログ      既定 90日
+        メールボックス監査 既定のまま無効
+        メッセージ追跡    90日
+
+      保持期間を過ぎた分は日次のジョブで古い日から落ちるため、
+      放っておくと、調べたい範囲の端から順に取れなくなる。
+
+      エクスポートは、保持の期限とは別の場所へ写しを作る操作である。
+      写した後の分はテナント側の期限に影響されない。
+      写す前に落ちた分は戻らない。
+    content: |
+      # 監査記録の保全エクスポート
+
+        ジョブ           : audit-export-2026-06-18
+        対象             : 統合監査ログ / サインイン ログ / メッセージ追跡
+        期間指定         : 2026-03-20 - 2026-06-18
+        出力             : JSON Lines 3 ファイル / 合計 6.1 GB
+        書き出し件数     : 4,180,662 行
+        保全先           : 監査用ストレージ（変更不可の設定で保持）
+
+        テナント側で当該期間に残っている範囲:
+          統合監査ログ   : 2026-03-20 以降（90日保持のため境界に接している）
+          サインイン ログ : 2026-05-19 以降（30日保持）
+          メッセージ追跡  : 2026-03-20 以降
+
+      取得範囲 : 指定した期間のうち、テナント側にまだ残っていた分
+      非対象   : 既に保持期間を過ぎて落ちた日の分、無効な記録項目
+
+open_questions:
+  - id: q_entry
+    label: "最初の一手"
+    question: "森の名前で動いているものは、どうやってその立場を手に入れたか"
+    resolved_by: [ev_003, ev_012]
+    resolution_mode: any
+    critical: true
+    implication: |
+      入口が分からないままでは、同じ誘い方が他の利用者にも届いているかを
+      確かめられません。資格情報を入れ替えれば済む話かどうかも、
+      ここが決まらないと判断できません。
+
+  - id: q_which
+    label: "関与している連携の絞り込み"
+    question: "森のアカウントに紐づく外部連携のうち、この動きを説明できるのはどれか"
+    resolved_by: [ev_005, ev_007]
+    resolution_mode: any
+    critical: true
+    implication: |
+      対象を絞れないままでは、取り消す先も、止める先も決められません。
+      広く止めれば業務が止まり、狭く止めれば残ります。
+
+  # 「どこまで読まれたか」は、この題材の本当の中心である。だが被疑判定は
+  # 資産の集合しか宣言できないので、範囲はここでしか問えない（SPEC 9.4 #7）。
+  # ファイル側とメール側の両方を書き出さないと数えられないので mode: all。
+  # この論点があるおかげで、保全ホールドとエクスポートが最短経路に乗る
+  - id: q_scope
+    label: "読まれた範囲"
+    question: "その立場で、どこまで読まれたのか"
+    resolved_by: [ev_014, ev_017]
+    resolution_mode: all
+    critical: true
+    implication: |
+      範囲が分からないままでは、誰に何を知らせるべきかを決められません。
+      読まれた分は、記録がまだ残っている間にしか数えられません。
+
+  - id: q_persist
+    label: "入り直せる状態の有無"
+    question: "資格情報を入れ替えた後も、外から入り直せる仕掛けが残っていないか"
+    resolved_by: [ev_006]
+    resolution_mode: any
+    critical: true
+    implication: |
+      ここを見ないまま資格情報だけを入れ替えると、同じ経路がそのまま残ります。
+      取り消すべきものを数え上げるまで、封じ込めたとは言えません。
+
+  - id: q_spread
+    label: "同じ状態の利用者の広がり"
+    question: "同じものを承諾している利用者が、他にもいるか"
+    resolved_by: [ev_013]
+    resolution_mode: any
+    critical: false
+    implication: |
+      1人ぶんの取り消しで終わるかどうかが決まります。
+      対外報告の範囲と、通知すべき相手の確定にも直結します。
+
+actions:
+  # ── 調査 ──
+  - id: act_mail_trace
+    label: "クラウドメールの外部宛て送信記録を洗う"
+    command: |
+      $ mailctl trace --sender mori@example.com \
+          --from 2026-06-18T09:00 --to 2026-06-18T11:00
+        events : 87
+
+      $ mailctl trace --sender mori@example.com --recipient-domain '!example.com' \
+          --group-by subject
+        groups : 6
+    group: "クラウドメール"
+    phase: investigation
+    type: investigate
+    description: |
+      クラウドメールのメッセージ追跡から、当該アカウントの送信を
+      社外宛てに絞って並べる。誰にいつ何を送ったか、どの経路で投げられたかを見る。
+    cost_minutes: 20
+    investigates: [mailbox, acct-mori]
+    yields: [ev_001]
+
+  - id: act_inbox_rules
+    label: "クラウドメールの受信箱の規則を一覧する"
+    command: |
+      $ mailctl inboxrule list --user mori@example.com --format detail
+        rules : 2
+
+      $ mailctl folder stat --user mori@example.com --all
+        folders : 19
+    group: "クラウドメール"
+    phase: investigation
+    type: investigate
+    description: |
+      サーバ側に保存された受信箱の規則を、条件と動作まで含めて書き出す。
+      フォルダごとの件数も併せて確認する。
+    cost_minutes: 15
+    investigates: [mailbox]
+    yields: [ev_006]
+
+  - id: act_hold_export_mailbox
+    label: "クラウドメールに保全ホールドを掛けて書き出す"
+    command: |
+      $ ediscctl hold apply --case IR-0618 --user mori@example.com --type inplace
+        hold applied
+
+      $ ediscctl export start --case IR-0618 --user mori@example.com --format pst
+        job queued
+      $ ediscctl export status --case IR-0618 --wait
+        completed  (00:38:11)
+    group: "クラウドメール"
+    phase: investigation
+    type: investigate
+    tags: [preservation_hold]
+    requires_evidence: [ev_001, ev_006]
+    description: |
+      対象の受信箱に保全ホールドを掛け、自動整理と保持期間の適用を止めたうえで、
+      内容を1通ずつ書き出す。掛ける前に整理で消えた分は対象にならない。
+    cost_minutes: 45
+    investigates: [mailbox]
+    yields: [ev_017]
+
+  - id: act_signin_review
+    label: "森のサインイン記録を照会する"
+    command: |
+      $ idctl signin list --user mori@example.com --all-retained
+        records : 412
+
+      $ idctl signin list --user mori@example.com --group-by resultCode
+        groups : 4
+      $ idctl signin list --user mori@example.com --group-by deviceId
+        groups : 3
+    group: "営業部アカウント（森）"
+    phase: investigation
+    type: investigate
+    description: |
+      当該アカウントのサインイン記録を、保持されている範囲すべてについて引く。
+      送信元、端末、結果コード、危険度の推定値を並べる。
+    cost_minutes: 20
+    investigates: [acct-mori]
+    yields: [ev_002]
+
+  - id: act_consent_audit
+    label: "森のアカウントの同意付与の履歴を照会する"
+    command: |
+      $ auditctl search --user mori@example.com \
+          --operation 'Consent to application' --days 90
+        records : 1
+
+      $ auditctl search --user mori@example.com --days 90 --around 2026-05-17T10:04Z \
+          --window 10m
+        records : 9
+    group: "営業部アカウント（森）"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_001, ev_006, ev_015]
+    description: |
+      統合監査ログから、当該アカウントが同意画面で承諾した操作を抜き出す。
+      前後の操作も同じ帳簿の中で並べて確認する。
+    cost_minutes: 25
+    investigates: [acct-mori]
+    yields: [ev_003]
+
+  - id: act_mail_gateway
+    label: "森宛の受信を、ゲートウェイの配送記録から洗う"
+    command: |
+      $ mgctl search --rcpt mori@example.com --from 2026-05-01 --to 2026-06-18 \
+          --has-url
+        messages : 61
+
+      $ mgctl show C41A77E0 --headers --auth --body-urls
+        headers + 1 url
+
+      $ whoisq example.net --field created
+        1 record
+    group: "営業部アカウント（森）"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_001, ev_015]
+    description: |
+      メールゲートウェイの配送記録から、当該アカウント宛ての受信を洗う。
+      差出人、件名、認証結果、本文中の URL を確認する。
+    cost_minutes: 30
+    investigates: [acct-mori]
+    yields: [ev_012]
+
+  - id: act_user_selfcheck
+    label: "森本人に連絡し、画面を共有して見覚えのない連携と規則をその場で外してもらう"
+    command: |
+      $ 架電 11:02  内線                    応答あり
+      $ 画面共有セッション開始 11:04        接続
+      $ 聞き取り 11:04 - 11:2x              記録 3 ページ
+    group: "営業部アカウント（森）"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_001, ev_003]
+    description: |
+      利用者本人に連絡し、記録に残らないこと（どんな画面が出て、何を押したか）を
+      聞き取る。画面を共有し、本人が使っている連携の一覧を一緒に見ながら、
+      見覚えのないものをその場で外してもらう。
+    cost_minutes: 25
+    investigates: [acct-mori]
+    yields: [ev_016]
+    # **調査側の排他はここ1組だけ。** 本人に片付けてもらうと、
+    # 現在の状態を並べた一覧も、規則の定義も残らない。
+    # 失われる側に critical 論点が紐づいている（SPEC 8.2 手順6.5）
+    destroys: [ev_004, ev_006]
+
+  - id: act_app_permission_review
+    label: "連携アプリの委任権限を、要求スコープごとに一覧する"
+    command: |
+      $ tnctl app list --with-grants --sort scope-breadth
+        apps : 3
+
+      $ tnctl grant summary --by-app
+        rows : 3
+    group: "連携アプリを見比べる"
+    phase: investigation
+    type: investigate
+    description: |
+      テナントに登録された連携アプリを、要求している権限の広さで並べる。
+      誰の代理として動くのか、全員ぶんの承諾があるのかを確認する。
+    cost_minutes: 25
+    investigates: [app-scan, app-board, app-relay]
+    yields: [ev_008]
+
+  - id: act_api_traffic_overview
+    label: "テナント全体の API 呼び出しの概況を確認する"
+    command: |
+      $ tnctl api-usage --date 2026-06-18 --bucket 5m
+        buckets : 288
+
+      $ tnctl api-usage --date 2026-06-18 --top-clients 5
+        rows : 5
+    group: "テナント全体を横断して見る"
+    phase: investigation
+    type: investigate
+    description: |
+      テナント全体の API 要求を時間帯ごとに畳んで並べる。
+      どのアプリ識別子が、いつ、どれだけ呼んだかを見る。
+    cost_minutes: 20
+    investigates: [app-board, app-scan, app-relay]
+    yields: [ev_015]
+
+  - id: act_unified_audit
+    label: "統合監査ログを、アプリ識別子ごとに畳んで確認する"
+    command: |
+      $ auditctl search --days 90 --operations MailItemsAccessed,FileAccessed,Send \
+          --group-by clientAppId
+        groups : 3
+
+      $ auditctl search --days 90 --client-app 7f3c-relay --histogram day
+        buckets : 32
+    group: "テナント全体を横断して見る"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_001, ev_003, ev_008, ev_015]
+    description: |
+      統合監査ログを、委任された立場で動いたアプリの識別子ごとにまとめる。
+      読み取りと送信の件数、動いている時間帯の幅を並べる。
+    cost_minutes: 30
+    investigates: [app-relay, app-scan, app-board]
+    yields: [ev_007]
+
+  - id: act_grant_inventory
+    label: "テナントに現在生きている委任同意を一覧する"
+    command: |
+      $ tnctl grant list --type delegated --state active --with-tokens
+        grants : 31
+
+      $ tnctl grant list --type delegated --state active --by-app --detail
+        rows : 3
+    group: "テナント全体を横断して見る"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_003, ev_008]
+    description: |
+      いま有効な委任同意を、利用者・権限・発行済みトークンの本数まで含めて
+      書き出す。これは台帳ではなく現在の状態なので、取り消すと行が消える。
+    cost_minutes: 25
+    investigates: [app-relay]
+    yields: [ev_004]
+
+  - id: act_app_registration
+    label: "差出人整理アシスタントのアプリ登録の内容を確認する"
+    command: |
+      $ tnctl app show 7f3c-relay --detail --owners --reply-urls
+        1 record
+
+      $ tnctl app show 7f3c-relay --required-access
+        entries : 5
+    group: "差出人整理アシスタント"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_004, ev_007, ev_013]
+    description: |
+      テナントに登録されたそのアプリの素性を引く。発行元の検証状況、
+      登録日時、同意後の送り返し先、要求している権限の一覧を確認する。
+      発行元の検証状況は別系統の照会になるため、応答を待つ時間がかかる。
+    cost_minutes: 35
+    investigates: [app-relay]
+    yields: [ev_005]
+
+  - id: act_file_access_audit
+    label: "共有ファイル領域のアクセス記録を、API 経由に絞って洗う"
+    command: |
+      $ auditctl search --days 90 --workload filehub \
+          --operations FileAccessed,FileDownloaded --client-app 7f3c-relay
+        records : 2319
+
+      $ auditctl search --days 90 --workload filehub --group-by siteUrl \
+          --client-app 7f3c-relay
+        groups : 3
+    group: "共有ファイル領域"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_004, ev_007]
+    description: |
+      共有ファイル領域のアクセス記録を、API 経由の呼び出しに絞って洗う。
+      どの領域の項目が、誰の代理として、どれだけ触られたかを並べる。
+    cost_minutes: 30
+    investigates: [filehub, app-relay]
+    yields: [ev_014]
+
+  - id: act_tenant_consent_sweep
+    label: "テナント全体の同意付与の推移を洗う"
+    command: |
+      $ auditctl search --days 30 --operation 'Consent to application' \
+          --histogram day
+        buckets : 30
+
+      $ auditctl search --days 30 --operation 'Consent to application' \
+          --group-by appId --with-department
+        groups : 3
+    group: "テナント全体を横断して見る"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_003, ev_008]
+    description: |
+      統合監査ログの同意付与を日ごとに数え、どのアプリに何件が積み上がったかを
+      並べる。承諾した利用者の所属も併せて出す。
+    cost_minutes: 30
+    investigates: []
+    yields: [ev_013]
+
+  - id: act_app_usage_baseline
+    label: "連携アプリ3件の利用実績を、過去90日の実行回数で比べる"
+    command: |
+      $ tnctl report app-usage --days 90 --all-apps
+        rows : 3
+
+      $ appreviewq --status approved --format count
+        2 records
+    group: "台帳・運用の記録"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_008, ev_015]
+    description: |
+      テナントの利用状況レポートから、各連携アプリの導入日と呼び出し回数を引く。
+      社内のアプリ審査台帳も併せて照会し、申請と承認の記録を突き合わせる。
+      異常かどうかは、平常時の姿を知らないと判定できない。
+    cost_minutes: 25
+    investigates: []
+    yields: [ev_009]
+
+  - id: act_admin_signin_review
+    label: "テナント管理者アカウントのサインイン記録を照会する"
+    command: |
+      $ idctl signin list --user kishi-adm@example.com --from 2026-06-01 \
+          --with-ca-status
+        records : 1184
+
+      $ idctl signin list --user kishi-adm@example.com --from 2026-06-01 \
+          --group-by resultCode
+        groups : 4
+    group: "テナント管理者アカウント（岸）"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_002, ev_008]
+    description: |
+      特権のあるアカウントのサインイン記録を、条件付きアクセスの評価結果まで
+      含めて引く。送信元、経路、結果コードを並べる。
+    cost_minutes: 25
+    investigates: [acct-admin]
+    yields: [ev_010]
+
+  - id: act_ca_review
+    label: "条件付きアクセスの構成と直近の変更履歴を確認する"
+    command: |
+      $ idctl ca policy list --state all
+        policies : 3
+
+      $ idctl ca policy history --days 30
+        changes : 0
+    group: "台帳・運用の記録"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_010]
+    description: |
+      サインインの成否を決める前段の関門が、いまどう構成されているかを引く。
+      直近の変更履歴も併せて確認する。
+    cost_minutes: 20
+    investigates: []
+    yields: [ev_011]
+
+  - id: act_hold_export_audit
+    label: "監査記録を保全先へ書き出す"
+    command: |
+      $ auditctl export start --from 2026-03-20 --to 2026-06-18 \
+          --sources unified,signin,messagetrace --sink audit-archive
+        job queued
+
+      $ auditctl export status --wait
+        completed  (00:27:44)
+    group: "テナント全体を横断して見る"
+    phase: investigation
+    type: investigate
+    tags: [preservation_hold]
+    requires_evidence: [ev_002, ev_003]
+    description: |
+      テナント側にまだ残っている監査記録を、保持期間とは別の保管先へ写す。
+      写した後の分は、テナント側の保持期間の影響を受けなくなる。
+      写す前に落ちた日の分は対象にならない。
+      指定した期間を投げるだけの操作で、待ち時間も短い。
+    cost_minutes: 20
+    # 統合・サインイン・メッセージ追跡の3系統は、テナントと、そこに属する
+    # アカウントおよび連携アプリの「何が起きたか」を記録している。
+    # 受信箱の中身（規則・アイテム）はここに入らないので mailbox は含めない
+    # ＝そちらは act_hold_export_mailbox の受け持ちである。
+    # 証拠保全最優先の require_capture_of_target は、この対応表を見る
+    investigates: [tenant, acct-mori, acct-admin, app-relay, app-scan, app-board]
+    yields: [ev_018]
+
+  # ── 現場への指示 ──
+  # 証拠を取りに行くのではなく、記録が消えるのを止めに行く手。
+  # このテナントで記録を消すのは自分の手ではなく時計である（保持期間）。
+  # 効くのは打ち終わった時刻から先だけで、既に落ちた日には効かない。
+  - id: act_preservation_notice
+    label: "全社に保全の周知を出し、対象期間の保持を固定する"
+    command: |
+      $ noticectl send --template ir-preserve --to all-staff@example.com
+        delivered: 218 recipients
+
+      $ ediscctl hold apply --case IR-0618 --scope tenant --period 2026-03-20..now
+        hold applied
+
+      $ helpdesk-cli script set --id first-response --file notice-hd.txt
+        1 script updated
+    group: "全体への指示"
+    phase: investigation
+    type: communicate
+    description: |
+      情報システム部から全社へ、調査期間中のメールとファイルの削除・移動・
+      連携の解除を行わないよう周知する。あわせて対象期間の記録に保全ホールドを
+      掛け、保持期間による自動削除を止める。ヘルプデスクの一次応答も
+      同じ文面に差し替える。調査そのものは1ミリも進まない。
+    cost_minutes: 20
+    prevents: [tl_retention_signin, tl_deleted_items, tl_app_sweep,
+               tl_helpdesk_rule, tl_user_unlink]
+
+  # ── 封じ込め・対応 ──
+  # 連携そのものを止める手。登録も同意も残るので、条件を外せば元に戻る。
+  - id: act_block_app_relay
+    label: "差出人整理アシスタントを、条件付きアクセスで遮断する"
+    command: |
+      $ idctl ca policy create --name block-7f3c --target-app 7f3c-relay \
+          --grant block --state enabled
+        policy created
+      $ idctl ca policy simulate --app 7f3c-relay
+        evaluated : blocked
+        登録と同意はそのまま。条件の側だけで止める。
+    group: "連携だけを止める"
+    phase: response
+    type: contain
+    description: |
+      その連携アプリからの要求を、条件付きアクセスの側で拒否する。
+      登録も同意も残したまま、通る／通らないの判定だけを変える。
+    cost_minutes: 15
+    targets: [app-relay]
+    investigates: []
+    side_effects:
+      business_impact: false
+
+  - id: act_block_app_scan
+    label: "契約書点検サービスを、条件付きアクセスで遮断する"
+    command: |
+      $ idctl ca policy create --name block-2b90 --target-app 2b90-scan \
+          --grant block --state enabled
+        policy created
+      $ idctl ca policy simulate --app 2b90-scan
+        evaluated : blocked
+        夜間の定期処理は次回から止まる。
+    group: "連携だけを止める"
+    phase: response
+    type: contain
+    description: |
+      その連携アプリからの要求を、条件付きアクセスの側で拒否する。
+      登録も同意も残したまま、通る／通らないの判定だけを変える。
+    cost_minutes: 15
+    targets: [app-scan]
+    investigates: []
+    side_effects:
+      business_impact: true
+
+  # 受信箱の側で連携を止める手。攻撃者の読み取りは止まるが、
+  # 同意も規則も残るので、方針を戻せば元に戻る。
+  # **この手が無いと 5.8 の persistence 条項が恒真になる** — 受信箱を止める
+  # 手が根絶する手しか無いと、「止めたが取り除いていない」盤面が作れない（v1.37）
+  - id: act_mailbox_app_block
+    label: "クラウドメールへの、外部連携からのアクセスを止める"
+    command: |
+      $ mailctl appaccess policy create --name deny-apps --user mori@example.com \
+          --apps all --action deny
+        policy created
+      $ mailctl appaccess test --user mori@example.com --app 7f3c-relay
+        access : denied
+        利用者本人の送受信はそのまま続く。
+    group: "連携だけを止める"
+    phase: response
+    type: contain
+    description: |
+      対象の受信箱に対して、外部連携アプリからの参照を拒否する方針を入れる。
+      利用者本人の送受信はそのまま続く。同意も規則もそのまま残る。
+    cost_minutes: 15
+    targets: [mailbox]
+    investigates: []
+    side_effects:
+      business_impact: false
+
+  - id: act_reset_acct_mori
+    label: "森の資格情報を入れ替え、多要素認証を登録し直す"
+    command: |
+      $ idctl user reset-credential --user mori@example.com --require-change
+        credential reset
+      $ idctl user mfa reset --user mori@example.com
+        methods cleared : 2
+        本人が再登録すれば、そのまま業務を続けられる。
+    group: "利用者の側で締める"
+    phase: response
+    type: contain
+    description: |
+      当該アカウントのパスワードを再設定し、多要素認証の登録をやり直させる。
+      本人は再登録の後、そのまま業務を続けられる。
+    cost_minutes: 25
+    targets: [acct-mori]
+    investigates: []
+    side_effects:
+      business_impact: false
+
+  - id: act_disable_acct_mori
+    label: "森のアカウントをサインインできない状態にする"
+    command: |
+      $ idctl user block-signin --user mori@example.com
+        accountEnabled : false
+        本人は自分の画面にも入れなくなる。
+    group: "利用者の側で締める"
+    phase: response
+    type: contain
+    description: |
+      当該アカウントのサインインを止める。本人も業務に使えなくなる。
+    cost_minutes: 10
+    targets: [acct-mori]
+    investigates: []
+    side_effects:
+      business_impact: true
+
+  - id: act_disable_acct_admin
+    label: "テナント管理者アカウントをサインインできない状態にする"
+    command: |
+      $ idctl user block-signin --user kishi-adm@example.com
+        accountEnabled : false
+        このアカウントで行う管理作業は止まる。
+    group: "利用者の側で締める"
+    phase: response
+    type: contain
+    description: |
+      特権のあるアカウントのサインインを止める。
+      このアカウントで行っている管理作業も止まる。
+    cost_minutes: 10
+    targets: [acct-admin]
+    investigates: []
+    side_effects:
+      business_impact: true
+
+  - id: act_tenant_consent_lock
+    label: "ID基盤テナントで、利用者による外部連携への同意を一律に停止する"
+    command: |
+      $ tnctl setting set --key userConsentToApps --value disabled
+        applied (tenant-wide)
+      $ tnctl grant list --type delegated --state active
+        grants : 31
+        既にある同意はそのまま。新しく承諾することだけができなくなる。
+    group: "テナント全体を締める"
+    phase: response
+    type: contain
+    description: |
+      テナントの設定を変え、利用者が自分の判断で外部連携へ同意することを
+      できなくする。全社の連携申請は管理者経由に切り替わる。
+    cost_minutes: 25
+    targets: [tenant]
+    investigates: []
+    side_effects:
+      business_impact: true
+
+  # 3つの締め方。**止めることと、居座られた状態を消すことは別の作業である。**
+  # 条件付きアクセスで遮断しても、同意も規則も残るので、条件を外せば元に戻る。
+  # この3つだけが `eradicates` を持ち、5.8 の減衰を on_partial から
+  # on_correct_containment へ動かす。
+  #
+  # **対ではなく3つ置いてある。** 業務／記録の2軸を張るには手が2つでは足りず、
+  # 「業務も記録も守る手」が1つあると2方針がそこへ相乗りする（SPEC 8.1）。
+  - id: act_revoke_per_user
+    label: "同意を利用者ごとに取り消し、受信箱の規則を既定に戻す"
+    command: |
+      $ tnctl grant revoke --app 7f3c-relay --principal-file principals.txt
+        revoked : 12 grants
+      $ mailctl inboxrule reset --user-file principals.txt --to-baseline
+        rules reset : 3 users
+        利用者は自分の画面をそのまま使い続けられる。
+    group: "元の状態に戻す"
+    phase: response
+    type: contain
+    description: |
+      承諾した利用者を1人ずつ回り、その利用者ぶんの委任同意を取り消す。
+      あわせて受信箱の規則を、その利用者の既定の状態へ戻す。
+      利用者の画面は止まらないが、名簿を作って回るぶん時間がかかる。
+    cost_minutes: 40
+    targets: [app-relay, mailbox]
+    eradicates: [app-relay, mailbox]
+    investigates: []
+    # 取り消すと同意の行は消え、規則を戻すと規則の定義も残らない。
+    # どちらも「現在の状態」であって、台帳ではない
+    destroys: [ev_004, ev_006]
+    side_effects:
+      business_impact: false
+
+  - id: act_hold_then_revoke
+    label: "保全ホールドを掛けたうえで、同意を取り消し、受信箱の規則を控えて外す"
+    command: |
+      $ ediscctl hold apply --case IR-0618 --scope tenant --type inplace
+        hold applied
+      $ tnctl grant export --app 7f3c-relay --sink audit-archive
+        exported : 12 grants
+      $ mailctl inboxrule export --user-file principals.txt --sink audit-archive
+        exported : 3 users
+      $ tnctl grant revoke --app 7f3c-relay --all-principals
+        revoked : 12 grants
+        ホールドの間、対象の受信箱は送受信を止めて据え置く。
+    group: "元の状態に戻す"
+    phase: response
+    type: contain
+    tags: [preservation_hold]
+    description: |
+      先に保全ホールドを掛け、取り消す前の状態を控えてから同意を取り消す。
+      控えを取る間、対象の受信箱は据え置きになり、送受信が止まる。
+      控えは同意・規則・受信箱の3系統をそれぞれ書き出すので、時間がかかる。
+    cost_minutes: 60
+    targets: [app-relay, mailbox]
+    eradicates: [app-relay, mailbox]
+    investigates: []
+    destroys: []
+    side_effects:
+      business_impact: true
+
+  - id: act_purge_tenantwide
+    label: "アプリ登録を削除し、テナント全体で発行済みトークンを一括で失効させる"
+    command: |
+      $ tnctl app delete 7f3c-relay --purge
+        application deleted
+        service principal deleted
+      $ idctl token revoke --all-users
+        refresh tokens revoked : 5,402
+        全利用者が次の操作でサインインし直す。
+    group: "元の状態に戻す"
+    phase: response
+    type: contain
+    description: |
+      アプリの登録そのものをテナントから削除し、あわせて全利用者の
+      発行済みトークンを一括で失効させる。全社がサインインし直すことになる。
+      登録を消すので、その登録の内容と、それに紐づいていた同意の状態は
+      以後たどれなくなる。管理画面から1操作で終わる。
+    cost_minutes: 15
+    targets: [app-relay, mailbox]
+    eradicates: [app-relay, mailbox]
+    investigates: []
+    # 登録が消えると識別子が解決できなくなるので、登録の内容も、
+    # そこに紐づいていた同意の状態も、以後たどれない
+    destroys: [ev_004, ev_005]
+    side_effects:
+      business_impact: true
+
+phases:
+  - id: investigation
+    label: "調査"
+    advance_label: "対応フェーズに移る"
+
+  - id: response
+    label: "封じ込め・対応"
+    advance_label: null
+    requires_assessment: true
+
+# 時間が経つと向こうから入ってくること（SPEC 5.10）。
+# 1本目のシナリオでは、揮発性の証拠を消すのは学習者自身の手だった。
+# ここでは消すのは**時計**である — 帳簿ごとに保持期間が違い、
+# 日次のジョブが古い日から順に落としていく。誰も悪意で消していない。
+# 保全ホールドを先に掛けた場合だけ、落ちるはずだった日が残る。
+timeline:
+  - id: tl_accel
+    at_minutes: 190
+    label: "取引先窓口から追加連絡"
+    text: |
+      「同じ内容のメールについて、問い合わせが増えています。
+        朝より速い勢いで連絡が来ていて、こちらの窓口が追いつきません。」
+    heralds: acceleration
+
+  - id: tl_retention_signin
+    at_minutes: 255
+    label: "ログ基盤チームから連絡"
+    text: |
+      「日次のパージが走りました。保持期間の設定どおりの動作です。
+        照会範囲の古い側から、順に対象に入っていきます。」
+    destroys: [ev_002]
+    averted_label: "ログ基盤チームから連絡"
+    averted_text: |
+      「日次のパージが走りましたが、保全の指定が入っていたので
+        対象から外れました。範囲はそのまま残っています。」
+
+  - id: tl_deleted_items
+    at_minutes: 300
+    label: "メール運用チームから連絡"
+    text: |
+      「メールボックスの容量が上限に近づいていたので、
+        自動整理が動きました。設定どおりの定期処理です。」
+    destroys: [ev_017]
+    averted_label: "メール運用チームから連絡"
+    averted_text: |
+      「自動整理が動こうとしたのですが、保全の指定が掛かっていたので
+        対象外になりました。中身はそのままです。」
+
+  - id: tl_app_sweep
+    at_minutes: 330
+    label: "アプリ管理チームから連絡"
+    text: |
+      「申請の記録が無い連携の登録を自動で整理する仕組みが、
+        今朝の分をまとめて処理しました。月次の棚卸しの設定どおりです。」
+    destroys: [ev_005]
+    averted_label: "アプリ管理チームから連絡"
+    averted_text: |
+      「自動整理が走るところでしたが、保全の指定が入っていたので
+        処理から外しました。登録はそのまま残しています。」
+
+  - id: tl_helpdesk_rule
+    at_minutes: 350
+    label: "ヘルプデスクから連絡"
+    text: |
+      「営業部から『請求のメールが届かない』という申告が来ていて、
+        担当者が受信箱の設定を見て、その場で直したそうです。」
+    destroys: [ev_006]
+    averted_label: "ヘルプデスクから連絡"
+    averted_text: |
+      「営業部から『請求のメールが届かない』という申告が来ていますが、
+        先の周知どおり、設定には触らずに預かっています。」
+
+  - id: tl_user_unlink
+    at_minutes: 400
+    label: "営業部から連絡"
+    text: |
+      「本人が心配して、自分の画面から連携アプリの一覧を開いて、
+        見覚えのないものを片付けたと言っています。」
+    destroys: [ev_004]
+    averted_label: "営業部から連絡"
+    averted_text: |
+      「本人が心配して連携アプリの一覧を開いたそうですが、
+        周知を見て、そのままにしておいたとのことです。」
+
+damage:
+  model: exponential
+  params:
+    base: 300.0
+    rate: 0.15
+  acceleration:
+    # 折れ点は「巧いプレイの長さ」L の 1.1〜1.3 倍（SPEC 8.2 手順7）。
+    # L は方針ごとに違う。最も高くつくのは業務継続最優先で、
+    # 判断に到達するまで（145分）＋ 全社をサインアウトさせない止め方
+    # （サインイン停止10分＋利用者ごとの取り消し40分）＝ 195分。
+    # 証拠保全と被害最小化はどちらも 170分。
+    # **折れ点は最も高くつく方針で置く** — 折れ点を踏むかどうかが、
+    # どの方針を渡されたかで決まってはいけない。225/195 = 1.15倍
+    threshold_minutes: 225
+    multiplier: 2.5
+  containment_effect:
+    on_correct_containment: 0.2
+    on_partial: 0.6
+    on_incorrect: 1.0
+
+scoring:
+  fact_layer:
+    metrics:
+      - id: assessment_precision
+        label: "被疑判定の適合率"
+        direction: higher_is_better
+      - id: assessment_recall
+        label: "被疑判定の再現率"
+        direction: higher_is_better
+      - id: assessment_support
+        label: "名指しの裏付け"
+        direction: higher_is_better
+      - id: unresolved_questions
+        label: "未解消論点を抱えたままの判断"
+        label_good: "論点を解消してからの判断"
+        direction: lower_is_better
+    weights:
+      assessment_precision:  0.20
+      assessment_recall:     0.20
+      assessment_support:    0.20
+      # critical 論点が4つあるので 5段階の階段になる。1論点 = 10 fact点
+      unresolved_questions:  0.40
+
+  policy_layer:
+    constraint_penalty: 0.15
+
+  consequence_layer:
+    display_only:
+      - elapsed_minutes
+      - total_damage
+      - business_impact
+      - evidence_preserved
+      - containment_completeness
+    business_impact_horizon_minutes: 480
+    normalization:
+      total_damage:             { worst: 18000, best: 0 }
+      # 帯の上端は「盤面で到達しうる最悪」に合わせる。1600 にしていたとき、
+      # 依存の根を止める3つのプレイ（1976 / 2071 / 2273）が全部 0点に
+      # 張り付いて、互いの差が消えていた
+      business_impact:          { worst: 2300,  best: 0 }
+      evidence_preserved:       { worst: 0.722, best: 1.0 }
+      containment_completeness: { worst: 0.0,   best: 1.0 }
+
+  composite:
+    method: weighted_sum
+    fact_weight: 0.7
+
+retrospective:
+  minimal_path:
+    compute: true
+    label: "事後的に見た最短経路"
+    disclaimer: |
+      これは答えを知った上で算出した参照値です。
+      実際の対応では、外れを引くことは避けられません。
+      この差分は無駄ではなく、不確実性の代価です。
+  counterfactuals:
+    compute: true
+  unresolved_review:
+    compute: true
+
+debrief:
+  reveal_ground_truth: true
+  misleading_explanations:
+    ev_008: |
+      契約書点検サービスの権限は、確かにこのテナントで最も広いものです。
+      ただしそれは2年前に法務部が申請し、審査番号 APP-2024-0031 として
+      承認されたうえで与えられたものです。過去90日の呼び出しは
+      148万件・214名で、直近30日と前60日の比は 0.98 でした。
+      権限の広さは「何ができる状態か」であって、「何が起きたか」ではありません。
+    ev_010: |
+      テナント管理者アカウントへの試行は、条件付きアクセスの CA-002／CA-003 が
+      すべて手前で止めています。結果コード 53003 は、資格情報の照合まで
+      到達していないことを表します。成功（結果コード 0）は 0 件でした。
+      外部からの試行そのものは、どのテナントでも日常的に記録されます。
+    ev_015: |
+      会議室予約コネクタの呼び出しが 10:05 に跳ねるのは、
+      始業時刻に予約の同期が走る設定によるものです。
+      過去90日の実績と比べれば同じ形が毎営業日に現れます。
+      跳ねた時刻が事案の時刻と近かったため、関係があるように見えました。
+  key_lessons:
+    - "同意は認証ではない。パスワードも多要素認証も破られていないのに、攻撃者は32日間読み続けられる。サインインの記録だけを見ていると、この形は最後まで見えない。"
+    - "権限の広さは、何が起きたかを語らない。最も凶悪な権限を持つ連携が、最も長く使われてきた正規の連携でもある。棄却の材料は台帳ではなく、平常時の利用実績にある。"
+    - "資格情報の入れ替えでは、委ねた立場は戻らない。同意と、受信箱に残された規則を取り消すまで、同じ経路がそのまま残る。"
+    - "このテナントでは、記録は自分の手より先に時計が消す。帳簿ごとに保持期間が違い、日次のジョブが古い日から順に落としていく。保全は「先に掛ける」ことでしか効かない。"
+    - "読まれた範囲は、権限の広さで決まる。取り消した後に数え直すことはできない。"
+  replay_suggestions:
+    - policy: evidence_preservation
+      hint: |
+        同じ状況を「証拠保全最優先」で解くと、封じ込めの前に
+        保全ホールドとエクスポートが要ります。その分だけ被害が伸びます。
+    - policy: damage_minimization
+      hint: |
+        「被害最小化最優先」では、利用者を1人ずつ回る取り消しが違反になります。
+        同じ行動列でも評価が変わることを確かめてください。

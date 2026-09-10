@@ -1092,3 +1092,35 @@ def test_chart_markers_are_numbered_in_time_order(scenario):
     assert idx == list(range(1, len(rep.markers) + 1))
     minutes = [m.minute for m in rep.markers]
     assert minutes == sorted(minutes)
+
+
+def test_a_notice_that_arrives_too_late_is_not_reported_as_a_dead_end(scenario):
+    """間に合わなかった周知を「何も出てこなかった」にしない（原則5 / SPEC 5.6.1）。
+
+    連絡は「自分の速さへの賭け」で、押す時点では勝ち負けが分からない
+    ——というのが 5.6.1 の主張である。ところが `prevents` の対象が全部
+    起きてしまった後に押すと `prevented` が空になり、空振り判定が立って
+    画面に「何も出てこなかった。」が出ていた。
+
+    **それはその場で賭けの結果を告げることである。** 何を失ったかは
+    言っていないが、「間に合わなかった」ことは言っている。
+    速いプレイと遅いプレイで文言が変わってはいけない。
+
+    周知そのものは出ている。世界の側で何が残っていたかは講評の仕事。
+    """
+    e = Engine(scenario, "damage_minimization", None)
+    # 防げる出来事を全部通り過ぎるまで押す
+    for a in scenario.actions:
+        if a.type.value != "investigate":
+            continue
+        try:
+            e.decide(Decision(kind="action", action_id=a.id))
+        except InvalidDecision:
+            continue
+    preventable = {t for a in scenario.actions for t in a.prevents}
+    assert preventable <= set(e.state.fired_events), "まだ防げる出来事が残っている"
+
+    out = e.decide(Decision(kind="action", action_id=NOTICE))
+    assert out.prevented == []      # もう防ぐものが残っていない
+    assert not out.empty            # それでも空振りではない
+    assert out.kind.value == "communicate"

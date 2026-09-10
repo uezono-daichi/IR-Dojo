@@ -1022,3 +1022,43 @@ def test_restoring_something_already_stopped_is_not_a_blank(scenario):
     assert out.contained == []
     assert out.eradicated == ["ws-042"]
     assert not out.empty
+
+
+def _action(data, aid):
+    return next(a for a in data["actions"] if a["id"] == aid)
+
+
+def test_loader_rejects_a_block_that_erases_what_it_never_touched(raw):
+    """通り道を塞ぐだけの手から、稼働中の痕跡は消えない（SPEC 5.6）。
+
+    境界での遮断は資産に手を触れない。そこに `destroys` を付けると
+    「業務影響ゼロで証拠だけ消える」手になり、業務継続からも証拠保全からも
+    一方的に安い抜け道になる。
+    """
+    data = copy.deepcopy(raw)
+    _action(data, "act_block_smb_fs01")["destroys"] = ["ev_010"]
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "通り道を塞ぐだけ" in str(exc.value)
+
+
+def test_an_eradicating_hand_may_erase_the_state_it_removes(raw):
+    """取り除く手は、業務を止めなくても現在の状態を消してよい（v1.38）。
+
+    この条件はもともと `business_impact: false` だけで書かれていた。
+    「業務が止まる」と「資産が動き続ける」が一致する世界
+    ——端末は電源を切ると業務も止まる——でしか正しくない近似で、
+    SaaS の盤面で破れた。委任同意を利用者ごとに取り消す手は、
+    生きている同意の一覧を確実に消すが、業務は1分も止まらない。
+
+    そこで `business_impact: true` と書かせるのは世界について嘘をつくこと、
+    `volatile: false` と書かせるのは証拠について嘘をつくことだった。
+    抜け道が開かないのは、取り除く手が盤面で最も価値のある手だからである。
+    """
+    data = copy.deepcopy(raw)
+    act = _action(data, "act_purge_persistence_ws042")
+    assert act["side_effects"]["business_impact"] is False
+    assert act["eradicates"] == ["ws-042"]
+    act["destroys"] = ["ev_010"]        # volatile な稼働中の痕跡
+    sc = build(data)                    # 通ること
+    assert "ev_010" in sc.action_by_id["act_purge_persistence_ws042"].destroys

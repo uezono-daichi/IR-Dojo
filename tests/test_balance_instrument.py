@@ -408,6 +408,11 @@ def test_the_ranking_check_catches_a_duplicated_policy(balance):
     このとき「封じ込めの最良手が方針ごとに違う」（2通り以上あればよい）は
     **通ってしまう。** 被害最小化最優先が別の手を選ぶからで、
     その1本だけで3本分の証明になっていた。順位ごと比べないと落ちない。
+
+    **これは1本目限定でよい。** 見ているのは盤面ではなく計器であり、
+    そのためには「壊れていたと分かっている盤面」が要る。
+    2本目にも同じ品質は要求するが、それは
+    `test_every_bundled_scenario_passes_the_design_checks` の側が受け持つ。
     """
     import copy
 
@@ -439,16 +444,21 @@ def test_the_ranking_check_catches_a_duplicated_policy(balance):
     assert _named(report, "封じ込めの最良手が方針ごとに違う")["ok"]
 
 
-def test_the_bend_is_placed_for_the_costliest_policy(balance):
+def test_the_bend_is_placed_for_the_costliest_policy(balance, any_scenario):
     """折れ点は最も高くつく方針の L で置く（SPEC 8.2 手順7 / v1.40）。
 
     L に方針が入っていなかった頃、証拠保全最優先だけが
     「最良に解いても自分で折れ点を踏む」位置に置かれていた。
     折れ点を踏むかどうかが、渡された方針で決まってはいけない。
+
+    **同梱の全部にかける。** 2本目は周1 の盤面で校正されていたので、
+    この検査を1本目限定にしておくと「方針で L が変わらない盤面」が
+    黙って入ってくる（実際に入っていた。方針ごとの L が 170/170/170 で、
+    どの方針を渡しても同じ手を押せば済む＝方針が時間を要求していない）。
     """
     from irdojo import retrospective
 
-    sc = load_scenario("ransomware-initial-response-01")
+    sc = any_scenario
     lengths = {
         pol.id: retrospective.minimal_response(sc, pol)[0] for pol in sc.policies
     }
@@ -644,3 +654,179 @@ def test_the_price_of_an_innocent_stop_is_not_the_price_of_ten_more_minutes(bala
     for _aid, deltas in costs.items():
         for pid, delta in deltas.items():
             assert abs(delta) < 0.01, f"{pid}: 停止の値段が 0 でないのに per_hour は 0"
+
+# ─────────── 同梱シナリオ全体にかかる検査 ───────────
+
+def test_every_bundled_scenario_passes_the_design_checks(balance, any_scenario):
+    """同梱シナリオはどれも SPEC 8.3 の判定を全部通る。
+
+    **均衡は書いて決めるものではなく、走らせて決めるものである。**
+    1本目は7周かけて 27/27 になった。2本目を足したとき、
+    その 27本を誰かが手で走らせる決まりにしておくと、いつか走らせない。
+
+    落ちた項目をここで無視できないようにしておくと、
+    「シナリオを1本足す」が「盤面の均衡を1つ設計する」と同じ意味になる。
+    そして**逆向きにも効く** — 検査を1本足すと、そのとき同梱されている
+    全部の盤面がその日から拘束される。2本目は周2・周3 を知らない時点で
+    校正されていたので、併合した瞬間に「3×3 の入れ替え表」で落ちた。
+    """
+    sc = any_scenario
+    data = balance.report(sc)
+    bad = [c["name"] + ": " + c["detail"] for c in data["checks"] if not c["ok"]]
+    assert not bad, f"{sc.meta.id} で落ちた判定:\n" + "\n".join(bad)
+    # 判定の本数そのものが減っていないこと（盤面に無い要素は検査も出ない）
+    assert len(data["checks"]) >= 20, f"{sc.meta.id}: 判定が {len(data['checks'])} 本しか出ていない"
+
+
+def test_the_two_scenarios_are_not_the_same_shape():
+    """2本目は、1本目の写しではないこと。
+
+    幅を足すというのは、同じ盤面の色を塗り替えることではない。
+    ここで見るのは「別の形か」だけで、良し悪しではない。
+
+    - 誤導の棄却が別の型であること（時刻の近さ ／ 利用実績の比較）は
+      機械では見えないので、見えるところだけを見張る
+    - `destroys` を持つ出来事の割合（世界が奪う量）は、
+      「自分の手で消す」型と「待っていると消える」型を分ける
+    """
+    a = load_scenario("ransomware-initial-response-01")
+    b = load_scenario("oauth-consent-abuse-01")
+
+    # 資産の種類が違う（端末とサーバ ／ テナントとアカウントと連携アプリ）
+    assert not ({x.id for x in a.world.assets} & {x.id for x in b.world.assets})
+
+    # 世界が奪う量。1本目は自分の手で消す型、2本目は待っていると消える型
+    def world_takes(sc):
+        return sum(len(e.destroys) for e in sc.timeline)
+
+    def own_hand_pairs(sc):
+        # 調査の排他の「組」の数。1件で2つ消す手と、2手で1つずつ消す盤面は
+        # 学習者にとって別物なので、消えた証拠の数ではなく手の数で数える
+        return sum(1 for x in sc.actions
+                   if x.type.value == "investigate" and x.destroys)
+
+    assert world_takes(b) > world_takes(a), "2本目のほうが時計に奪われること"
+    assert own_hand_pairs(a) > own_hand_pairs(b), "1本目のほうが自分の手で消すこと"
+    # どちらの型にも、最低1組は反対側がある（片方だけの盤面にしない）
+    assert own_hand_pairs(b) >= 1 and world_takes(a) >= 1
+
+
+def test_the_tenant_wide_signout_is_forbidden_where_the_model_cannot_charge_it(balance):
+    """盤面で表せない費用は、方針が名指しで禁じる（SPEC 5.10 / v1.41）。
+
+    2本目の「全利用者のトークンを一括失効」は、全社をその場で
+    サインアウトさせる。だが業務影響の積分が数えるのは
+    **復旧まで止まったままの資産**だけなので（6.3）、数分で戻るこの止め方は
+    帳簿の上では2つのアプリぶんの値段しか付かない。結果、業務継続最優先が
+    自分の案を他方針の案より高く採点しなかった（開き 3点 / 狙い 5点）。
+
+    **帯を狭めて数字を作らなかった。** `business_impact.worst` は
+    「盤面で到達できる範囲を覆う」ことになっており（v1.39）、
+    そこを触るのは測定側を緩めることである。禁止で表した。
+
+    見張り方は、**その禁止を外すと 3×3 の入れ替え表が落ちること**。
+    落ちないなら、この制約は書いてあるだけで何もしていない。
+    """
+    import copy
+
+    import yaml
+
+    from irdojo.loader import SCENARIO_DIR, load_scenario_text
+
+    raw = yaml.safe_load(
+        (SCENARIO_DIR / "oauth-consent-abuse-01.yaml").read_text(encoding="utf-8")
+    )
+    data = copy.deepcopy(raw)
+    for pol in data["policies"]:
+        if pol["id"] != "business_continuity":
+            continue
+        pol["constraints"] = [
+            c for c in pol["constraints"]
+            if "act_purge_tenantwide" not in c.get("action_ids", [])
+        ]
+
+    loose = load_scenario_text(yaml.safe_dump(data, allow_unicode=True))
+    assert not _named(balance.report(loose), "同じ行動列が方針で違う評価になる")["ok"]
+
+
+def _best_plan_damage(balance, sc, policy_id: str) -> tuple[int, float]:
+    """その方針の最良の封じ込めで解いたときの（経過, 被害）。
+
+    3×3 の入れ替え表（`policy_swap`）が採るのと同じ組・同じ前提を採る。
+    講評の文言を測るには点ではなく生の被害が要るので、ここだけ別に組む。
+    """
+    from irdojo import retrospective, scoring
+
+    pol = next(p for p in sc.policies if p.id == policy_id)
+    base = balance._skilled(sc)
+    covering = {
+        c: v for c, v in balance.containment_sweep(sc).items()
+        if balance._covers_compromised(sc, c)
+    }
+    combo = max(covering.items(), key=lambda kv: kv[1][policy_id])[0]
+    prep = retrospective.policy_prerequisites(sc, pol, base, list(combo))
+    e = balance._play(sc, base + prep, [], stop=False, patience=None,
+                      weighs_refutations=True, contains_everything=False,
+                      containment=list(combo))
+    return e.state.elapsed_minutes, scoring.score(e.state, sc, pol).consequences.total_damage
+
+
+def test_the_second_scenario_replay_hint_is_not_a_lie(balance):
+    """2本目の講評も「その分だけ被害が伸びます」と書いている（v1.41）。
+
+    1本目で同じ嘘を1度ついている（v1.40。実測は 93/93/94 で伸びていなかった）。
+    **画面が学習者に嘘をつくのは、点数がずれることより重い。**
+
+    2本目は周1 の盤面で書かれたので、証拠保全の制約が v1.39 型の
+    `require_before` のままだった。あれは前提タグの付いた手を盤面のどこかで
+    1つ押していれば満たすので、監査記録を1回書き出せば受信箱の中身を
+    控えずに止めてよくなる — 伸びは 0.8%（5,169 対 5,126）で、
+    講評は字義どおりには本当だが、学習者が確かめられる差ではなかった。
+    `require_capture_of_target` に変えて 18% になった。
+
+    見張るのは向きではなく**幅**である。向きだけを見る検査は、
+    分単位の丸めで裏返るまで何も言わない。
+    """
+    sc = load_scenario("oauth-consent-abuse-01")
+    bc_min, bc_dmg = _best_plan_damage(balance, sc, "business_continuity")
+    ep_min, ep_dmg = _best_plan_damage(balance, sc, "evidence_preservation")
+
+    assert ep_min > bc_min, f"証拠保全のほうが短く済んでいる: {ep_min} vs {bc_min}"
+    assert ep_dmg > bc_dmg * 1.05, (
+        f"「その分だけ被害が伸びます」の分が測れない: {ep_dmg:.0f} vs {bc_dmg:.0f}"
+    )
+
+
+def test_the_free_form_of_the_preservation_constraint_makes_that_hint_hollow(balance):
+    """`require_before` に戻すと、その伸びが測れなくなること（v1.41）。
+
+    **落ちない検査は、書いていないのと同じである。** 上の 5% は
+    たまたま満たされている数字ではなく、制約型を選び直したことの結果である
+    ことを、壊して確かめる。
+
+    設計の判定（8.3）はどちらの形でも 27/27 を通る — 順位も入れ替え表も
+    通ってしまう。**計器が見ていないところで講評だけが空洞になる**ので、
+    ここは計器ではなく講評の側から見張るしかない。
+    """
+    import copy
+
+    import yaml
+
+    from irdojo.loader import SCENARIO_DIR, load_scenario_text
+
+    data = copy.deepcopy(yaml.safe_load(
+        (SCENARIO_DIR / "oauth-consent-abuse-01.yaml").read_text(encoding="utf-8")
+    ))
+    for pol in data["policies"]:
+        if pol["id"] != "evidence_preservation":
+            continue
+        for c in pol["constraints"]:
+            if c["type"] == "require_capture_of_target":
+                c["type"] = "require_before"
+
+    old = load_scenario_text(yaml.safe_dump(data, allow_unicode=True))
+    _bc_min, bc_dmg = _best_plan_damage(balance, old, "business_continuity")
+    _ep_min, ep_dmg = _best_plan_damage(balance, old, "evidence_preservation")
+    assert ep_dmg <= bc_dmg * 1.05, (
+        "自由な形の制約でも伸びが測れてしまう。制約型の選び直しは効いていない"
+    )
