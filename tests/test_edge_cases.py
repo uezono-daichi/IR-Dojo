@@ -497,3 +497,129 @@ def test_loader_does_not_police_the_summary(raw):
     data = copy.deepcopy(raw)
     _evidence(data, "ev_013")["summary"] = "ws-113 に攻撃の痕跡は認められない"
     build(data)  # 例外が出ないこと
+
+
+# ─────────── 封じ込めと業務停止の分離（SPEC 6.3） ───────────
+
+
+def test_loader_rejects_a_compromise_that_cannot_be_stopped(raw):
+    """侵害資産を直接止める手が無いシナリオを拒否する。
+
+    封じ込めは依存連鎖しない。上流の dc01 を落としても fs01 の
+    暗号化プロセスは止まらないので、fs01 を名指しで止める手が
+    どこにも無いと `containment_completeness` は誰にも 1.0 に届かず、
+    5.8 の `on_correct_containment` が永久に使われない。
+    そのシナリオでは「正しく止める」ことが定義上できない。
+    """
+    data = copy.deepcopy(raw)
+    gone = ("act_shutdown_fs01", "act_block_smb_fs01")
+    data["actions"] = [a for a in data["actions"] if a["id"] not in gone]
+    for pol in data["policies"]:
+        for c in pol.get("constraints", []):
+            c["action_ids"] = [i for i in c.get("action_ids", []) if i not in gone]
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "直接止める手が無い侵害資産" in str(exc.value)
+    assert "fs01" in str(exc.value)
+
+
+def test_loader_rejects_a_block_that_erases_without_stopping(raw):
+    """業務を止めない封じ込めは、稼働中の痕跡を消せない。
+
+    `side_effects.business_impact: false` は「資産は動き続ける」という宣言で、
+    動いている資産から揮発性の情報が消える理由は無い。ここを許すと
+    「業務影響ゼロで証拠だけ消える」手が書け、業務継続からも証拠保全からも
+    一方的に安い抜け道になる。消したいなら止めること。
+    """
+    data = copy.deepcopy(raw)
+    for a in data["actions"]:
+        if a["id"] == "act_block_smb_fs01":
+            a["destroys"] = ["ev_010"]      # fs01 の稼働中プロセス（volatile）
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "揮発性の証拠を消しています" in str(exc.value)
+
+
+def test_stopping_the_root_does_not_contain_what_hangs_off_it(scenario):
+    """依存の根を落としても、その先の攻撃は止まらない。
+
+    `depends_on` が答えているのは「どの資産で仕事ができなくなるか」であって
+    「どの資産で攻撃が止まるか」ではない。ここを1つの集合で表していた頃は、
+    dc01 の電源を落とすだけで fs01 も ws-042 も封じ込めたことになり、
+    生きている Run キーと動き続ける暗号化プロセスが
+    `on_correct_containment` を引いていた。
+    """
+    e = Engine(scenario, "damage_minimization", None)
+    e.decide(Decision(kind="declare_assessment", assessment=["dc01"]))
+    e.decide(Decision(kind="action", action_id="act_shutdown_dc01"))
+    e.decide(Decision(kind="finish"))
+
+    assert set(e.state.contained_at) == {"dc01"}
+    assert set(e.state.halted_at) == {"dc01", "fs01", "ws-042", "ws-107", "ws-113"}
+
+    c = scoring.consequences(e.state, scenario)
+    assert c.containment_completeness == 0.0    # 侵害資産は1つも止まっていない
+    assert c.business_impact > 0                # 業務は全部止まっている
+
+
+def test_a_block_that_keeps_the_asset_running_costs_no_business_impact(scenario):
+    """同じ資産を止める2つの手が、違う代償を持つこと。
+
+    fs01 を落とせば安いが業務が止まり、稼働中の痕跡も消える。
+    境界で遮断すれば高いがサーバは動き続ける。どちらも封じ込めとしては
+    同じだけ効く — 差が出るのは帰結の側であり、その重み付けは方針が持つ。
+    ここが同じになると、対応フェーズに判断が無くなる。
+    """
+    def stop(action_id):
+        e = Engine(scenario, "damage_minimization", None)
+        e.decide(Decision(kind="declare_assessment", assessment=["fs01"]))
+        e.decide(Decision(kind="action", action_id=action_id))
+        e.decide(Decision(kind="finish"))
+        return e
+
+    blocked = stop("act_block_smb_fs01")
+    powered_off = stop("act_shutdown_fs01")
+
+    # 封じ込めとしては同じだけ効く
+    assert set(blocked.state.contained_at) == set(powered_off.state.contained_at)
+
+    cb = scoring.consequences(blocked.state, scenario)
+    cp = scoring.consequences(powered_off.state, scenario)
+    assert cb.containment_completeness == cp.containment_completeness
+
+    # 代償は違う
+    assert cb.business_impact == 0.0
+    assert cp.business_impact > 0.0
+    assert blocked.state.lost_evidence == []
+    assert powered_off.state.lost_evidence == ["ev_010"]
+    # 遮断のほうが時間がかかる（夜間の変更管理と実機確認）
+    assert blocked.state.elapsed_minutes > powered_off.state.elapsed_minutes
+
+
+def test_neither_way_of_stopping_fs01_wins_under_every_policy(scenario):
+    """fs01 の2つの手は、方針をまたいで一律には順位が付かない。
+
+    ここが一致してしまうと、選択肢が2つあっても判断は1つしかない
+    （常に同じほうを押せばよい）。原則4「正解を一つに定めない」は、
+    盤面のこの性質でしか担保できない。
+    """
+    def stop(action_id):
+        e = Engine(scenario, "damage_minimization", None)
+        e.decide(Decision(kind="declare_assessment", assessment=["fs01", "ws-042"]))
+        e.decide(Decision(kind="action", action_id="act_block_c2"))
+        e.decide(Decision(kind="action", action_id=action_id))
+        e.decide(Decision(kind="finish"))
+        return e.state
+
+    blocked = stop("act_block_smb_fs01")
+    powered_off = stop("act_shutdown_fs01")
+
+    winners = set()
+    for pol in scenario.policies:
+        b = scoring.score(blocked, scenario, pol).composite_score
+        o = scoring.score(powered_off, scenario, pol).composite_score
+        assert b != o, f"{pol.id}: どちらを選んでも同じ評価になっている"
+        winners.add("blocked" if b > o else "powered_off")
+    assert winners == {"blocked", "powered_off"}, (
+        f"どの方針でも同じ手が勝っている: {winners}"
+    )

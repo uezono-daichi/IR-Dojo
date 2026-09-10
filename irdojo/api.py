@@ -134,6 +134,9 @@ def decide(sid: str, body: Decision) -> dict[str, Any]:
             "revealed_evidence": [],
             "unlocked_count": 0,
             "contained": [],
+            "halted": [],
+            "already": [],
+            "halts_business": False,
             "business_impact_delta": 0.0,
             "events": [],
             "finished": False,
@@ -162,17 +165,33 @@ def decide(sid: str, body: Decision) -> dict[str, Any]:
         # この発見で新たに調べられるようになったものの件数。
         # 何が開いたかは一覧を見れば分かるので、件数だけ返す
         "unlocked_count": len(outcome.unlocked),
-        # 封じ込めで止まった資産。依存で波及した分も含めて告げる。
-        # 構成は既に開示しているので、波及を伝えても漏洩にはならない（7.6.7）
+        # 封じ込めで止まった資産（直接指定した分）。
         "contained": [
+            {"id": a, "label": engine.scenario.asset_by_id[a].label}
+            for a in outcome.contained
+            if a in engine.scenario.asset_by_id
+        ],
+        # 業務が止まった資産。依存で波及した分も含めて告げる。
+        # 構成は既に開示しているので、波及を伝えても漏洩にはならない（7.6.7）。
+        # 止めることと業務が止まることは別なので、別の箱で返す（6.3）
+        "halted": [
             {
                 "id": a,
                 "label": engine.scenario.asset_by_id[a].label,
                 "cascaded": a in outcome.cascaded,
             }
-            for a in outcome.contained
+            for a in outcome.halted
             if a in engine.scenario.asset_by_id
         ],
+        # 押す前から止まっていた targets。空振りではないので別に返す
+        "already": [
+            {"id": a, "label": engine.scenario.asset_by_id[a].label}
+            for a in outcome.already
+            if a in engine.scenario.asset_by_id
+        ],
+        # その手が業務を止める種類のものか。description が既に言っている
+        # 機構であって、答えではない（「端末は動いたまま、通信だけを止める」）
+        "halts_business": bool(acted and acted.side_effects.business_impact),
         "business_impact_delta": outcome.business_impact_delta,
         # 実行の様子。何をしたのかを見せる（SPEC 7.6.8）
         # 向こうから入ってきたこと。証拠ではないので、別枠で返す

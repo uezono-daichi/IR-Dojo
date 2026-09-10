@@ -48,6 +48,7 @@ def plays(balance):
             patience=prof.patience_minutes,
             weighs_refutations=prof.weighs_refutations,
             contains_everything=prof.contains_everything,
+            contains_root=prof.contains_root,
         )
         for prof in balance.PROFILES
     }
@@ -121,3 +122,124 @@ def test_the_misled_control_differs_only_in_the_declaration(plays):
     bad, ok = runs["wanderer"], runs["wanderer_clear"]
     assert investigated(bad) == investigated(ok)
     assert set(bad.state.assessment) != set(ok.state.assessment)
+
+
+# ─────────── 対応フェーズ（サイクル3で足した軸） ───────────
+
+
+def test_some_play_stops_the_root_of_the_dependency_graph(plays):
+    """依存の根を止める手を、誰かが押していること。
+
+    像が「自分が名指しした資産に届く手」しか押さないと、盤面で最も
+    高くつく資産（依存の根）は一度も止まらない。すると復旧地平も
+    業務影響も、その資産については常に 0 で測られる。
+
+    構成図は開始0分から画面に出ていて、根が dc01 であることは見えている。
+    「根を落とせば全部止まる」は、それを見た人が普通に思いつく手である。
+    """
+    sc, runs = plays
+    roots = {
+        a.id for a in sc.world.assets
+        if not a.depends_on and any(a.id in b.depends_on for b in sc.world.assets)
+    }
+    assert roots, "依存の根が無い（この検査が意味を持たない盤面）"
+    stopped_root = [k for k, e in runs.items() if roots & set(e.state.contained_at)]
+    assert stopped_root, f"どの像も依存の根 {roots} を止めていない"
+    # 根を止めた像では、業務が資産の数だけ止まっていること。
+    # ここが効いていないと、封じ込めの費用の上限が測れない
+    for key in stopped_root:
+        st = runs[key].state
+        assert len(st.halted_at) == len(sc.world.assets), key
+
+
+def test_no_play_presses_two_actions_at_the_same_asset(plays):
+    """既定の像は、同じ資産に二重に手を打たない。
+
+    fs01 を停止した**うえで**その fs01 への SMB 遮断の変更承認を
+    待つ人はいない。押せる手を全部押す像は `exhaustive` が受け持つ。
+    ここが緩むと、対応フェーズの取捨選択が「全部やる」に潰れる。
+    """
+    sc, runs = plays
+    from irdojo.schema import ActionType
+
+    for key, e in runs.items():
+        if key == "exhaustive":
+            continue        # 取捨選択をしない像。ここだけは二重に打つ
+        seen: dict[str, str] = {}
+        for aid in e.state.executed_actions:
+            act = sc.action_by_id[aid]
+            if act.type != ActionType.CONTAIN:
+                continue
+            for t in act.targets:
+                assert t not in seen, f"{key}: {t} に {seen.get(t)} と {aid} の二重"
+                seen[t] = aid
+
+
+def _named(data, name):
+    return next(c for c in data["checks"] if c["name"] == name)
+
+
+def test_the_response_phase_is_not_measured_by_time(balance):
+    """対応フェーズを時間比では測らない（SPEC 3.8）。
+
+    フェーズ総コストの 2〜3倍検査は、対応フェーズには効かない —
+    対応は定義上 L のあとに始まるので、折れ点までの予算は調査が
+    使い切っている。同じ150分を二重に数えていて、何をしても1倍を切る。
+    2倍に届かせるには封じ込め1手あたり60分が必要で、
+    それは被害モデルが罰したいことと正反対の設計になる。
+    """
+    sc = load_scenario("ransomware-initial-response-01")
+    data = balance.report(sc)
+    check = _named(data, "最終より前のフェーズは全部やれない")
+    assert check["ok"]
+    assert sc.phases[-1].label in check["detail"]
+    # 最終フェーズの取捨選択は、不可逆性で測る3本が受け持つ
+    for name in (
+        "封じ込めに取捨選択がある",
+        "封じ込めの最良手が方針ごとに違う",
+        "何も止めないプレイは正しく止めたプレイに負ける",
+    ):
+        assert _named(data, name)["ok"], name
+
+
+def test_the_replacement_checks_are_not_slack(balance, monkeypatch):
+    """置き換えた検査が「通るように緩めた検査」になっていないこと。
+
+    測定側を緩めて数字を動かしたのなら、盤面を元に戻しても通るはずである。
+    2本について、それぞれが見張っている変更を外すと実際に落ちることを示す。
+    """
+    import copy
+
+    import yaml
+
+    from irdojo.loader import SCENARIO_DIR, load_scenario_text
+
+    raw = yaml.safe_load(
+        (SCENARIO_DIR / "ransomware-initial-response-01.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    # (1) fs01 の手を1つに戻すと、最良手は全方針で一致する
+    data = copy.deepcopy(raw)
+    data["actions"] = [a for a in data["actions"] if a["id"] != "act_block_smb_fs01"]
+    for pol in data["policies"]:
+        for c in pol.get("constraints", []):
+            c["action_ids"] = [
+                i for i in c.get("action_ids", []) if i != "act_block_smb_fs01"
+            ]
+    one_way = load_scenario_text(yaml.safe_dump(data, allow_unicode=True))
+    assert not _named(
+        balance.report(one_way), "封じ込めの最良手が方針ごとに違う"
+    )["ok"], "選択肢が1つでも「方針ごとに違う」が通ってしまう"
+
+    # (2) 復旧地平を外すと、「何も止めない」が勝つ
+    from irdojo import scoring
+
+    monkeypatch.setattr(
+        scoring.damage_mod, "project", lambda *a, **k: [], raising=True
+    )
+    sc = load_scenario("ransomware-initial-response-01")
+    assert not _named(
+        balance.report(sc), "何も止めないプレイは正しく止めたプレイに負ける"
+    )["ok"], "地平が無くても「何も止めない」が負けている"

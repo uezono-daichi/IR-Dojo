@@ -234,6 +234,12 @@ tr.me td { color: #fff; }
 .narrative p { margin: 0 0 1em; }
 ul.lessons { padding-left: 1.3em; }
 ul.lessons li { margin-bottom: 8px; }
+/* 被害の二段表示。実線の分と破線の分を、色で対応させる */
+.damage-split { margin: 10px 0 4px; font-size: 14px; }
+.damage-split .k { color: var(--fg-faint); font-size: 13px; }
+.damage-split .v { font-family: var(--mono); color: var(--fg); }
+.damage-split .v.proj { color: #f7768e; }
+
 .legend {
   display: flex; flex-wrap: wrap; gap: 4px 20px;
   font-size: 12px; color: var(--fg-faint); margin-top: 8px;

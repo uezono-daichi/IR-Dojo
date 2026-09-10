@@ -10,6 +10,7 @@ from collections.abc import Callable
 
 from pydantic import BaseModel
 
+from . import damage as damage_mod
 from .engine import GameState
 from .schema import Policy, Scenario
 
@@ -24,7 +25,11 @@ def safe_ratio(num: float, den: float, default: float = 0.0) -> float:
 
 class Consequences(BaseModel):
     elapsed_minutes: int
-    total_damage: float
+    # 演習中に実際に積み上がった分。プレイ画面が出しているのはこの数字
+    accumulated_damage: float
+    # 手を止めた時点の封じ込め状態のまま、復旧地平 H まで伸ばした分
+    projected_damage: float
+    total_damage: float          # 上の2つの和。方針の重みが見るのはこれ
     business_impact: float
     evidence_preserved: float
     containment_completeness: float
@@ -42,23 +47,42 @@ def consequences(state: GameState, scenario: Scenario) -> Consequences:
     total_evidence = len(scenario.evidence)
     preserved = 1.0 - safe_ratio(len(state.lost_evidence), total_evidence)
 
+    # 完全度が見るのは contained_at（直接止めた資産）だけ。
+    # 依存連鎖を混ぜると「dc01 を落としたので ws-042 も封じ込めた」ことになり、
+    # 生きている Run キーを封じ込め成立と数えることになる（SPEC 6.3）
     contained = set(state.contained_at)
     compromised = set(truth.compromised)
     completeness = safe_ratio(len(contained & compromised), len(compromised))
 
+    # 業務影響が見るのは halted_at。止めたことと仕事が止まることは別の問い
     horizon = scenario.scoring.consequence_layer.business_impact_horizon_minutes
     assets = scenario.asset_by_id
     impact = 0.0
-    for asset_id, entered in state.contained_at.items():
+    for asset_id, entered in state.halted_at.items():
         asset = assets.get(asset_id)
         if asset is None:
             continue
         minutes = max(0, (state.elapsed_minutes + horizon) - entered)
         impact += asset.business_impact_per_hour * minutes / 60.0
 
+    # 復旧地平（SPEC 5.8 / 6.3）。演習が終わってもインシデントは終わらない。
+    # 手を止めた時点の封じ込め状態のまま H 分だけ積分を延長する。
+    # business_impact と同じ H を使う — 「復旧まで」という前提は1つしかない。
+    projected = sum(
+        damage_mod.project(
+            scenario.damage,
+            truth,
+            state.contained_at.keys(),
+            state.elapsed_minutes,
+            horizon,
+        )
+    )
+
     return Consequences(
         elapsed_minutes=state.elapsed_minutes,
-        total_damage=state.accumulated_damage,
+        accumulated_damage=state.accumulated_damage,
+        projected_damage=projected,
+        total_damage=state.accumulated_damage + projected,
         business_impact=impact,
         evidence_preserved=preserved,
         containment_completeness=completeness,

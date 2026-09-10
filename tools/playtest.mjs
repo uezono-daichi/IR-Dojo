@@ -257,6 +257,27 @@ if (!(await page.$('#screen-debrief.active'))) {
   await checkCanvasStable('debrief');
   await page.evaluate(() => window.scrollTo(0, 0));
   await screen('09-debrief');
+
+  // 被害のグラフは画面の中ほどにある。上端と下端だけを撮ると一度も写らない。
+  // ここは講評の主役の1つ（実線＝積み上がった分、破線＝復旧までの見込み）
+  const damage = await page.evaluate(() => {
+    const el = document.querySelector('.damage-split');
+    if (!el) return null;
+    el.scrollIntoView({ block: 'center' });
+    const cv = el.parentElement.querySelector('canvas');
+    return {
+      text: el.innerText.replace(/\s+/g, ' ').trim(),
+      canvas: cv ? `${cv.getAttribute('height')}x${cv.width}` : null,
+    };
+  });
+  await page.waitForTimeout(200);
+  if (!damage) {
+    note('error', 'debrief', '被害の二段表示（累積／復旧までの見込み）が無い');
+  } else {
+    if (!damage.canvas) note('error', 'debrief', '被害グラフが無い');
+    await shot('09b-debrief-damage');
+  }
+
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   await page.waitForTimeout(200);
   await screen('10-debrief-bottom');

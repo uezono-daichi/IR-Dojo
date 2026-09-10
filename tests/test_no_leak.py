@@ -877,18 +877,106 @@ def test_world_losses_are_attributed_in_the_debrief(client):
         assert l["obtainable_by"], "どうすれば取れたか言えていない"
 
 
-def test_notice_result_is_not_rendered_as_a_blank():
-    """連絡は証拠を産まないが、空振りではない（SPEC 7.6.8）。
+def test_the_two_places_that_decide_nothing_happened_agree():
+    """「空振り」の判定は、エンジンと画面の二重にある（SPEC 7.6.8）。
 
-    エンジン側と画面側で「空振り」の判定が二重にあるので、
-    片方だけ直すと「何も出てこなかった」が残る。
+    片方だけ直すと、緑の完了メッセージの下にオレンジの
+    「何も出てこなかった」が並ぶ。実際に2回それをやっている:
+    連絡（証拠を産まない）と、既に止めてある資産への2手目
+    （同じ資産に手が2つあるので普通に起きる）。
+
+    ここで見張るのは文言ではなく、**両方が同じ項目を数えていること**。
+    """
+    root = pathlib.Path(__file__).resolve().parents[1]
+    app_js = (root / "web" / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function renderResult(")
+    end = app_js.index("\nfunction ", start + 1)
+    body = app_js[start:end]
+    i = body.index("var empty =")
+    statement = body[i:body.index(";", i)]
+
+    for name in ("revealed", "stopped", "halted", "already", "prevented"):
+        assert name in statement, f"画面側の空振り判定が {name} を数えていない"
+
+    # エンジン側（ActionOutcome.empty）と項目が揃っていること
+    engine_py = (root / "irdojo" / "engine.py").read_text(encoding="utf-8")
+    j = engine_py.index("    def empty(self)")
+    prop = engine_py[j:engine_py.index("\n\n", j)]
+    for name in ("revealed", "contained", "halted", "already", "prevented"):
+        assert f"self.{name}" in prop, f"エンジン側の空振り判定が {name} を数えていない"
+
+
+def test_the_projection_is_never_shown_during_play(client):
+    """「この先こう伸びる」は講評でしか言わない（原則5 / SPEC 7.6.9）。
+
+    復旧地平の分は、手を止めた時点の封じ込め状態が決める。プレイ中に
+    出すと「まだ止めていないもの」の代償を先に告げることになり、
+    盤面を見ずに数字だけを追う遊びになる。ここは損失の開示と同じ扱いで、
+    講評で初めて開ける。
+
+    プレイ中の `accumulated_damage` と講評の `total_damage` は
+    別の数字なので、講評は二段で出す必要がある — 片方だけ直すと
+    「グラフの終点」と「講評の被害額」が食い違ったまま残る。
+    """
+    sc = load_scenario("ransomware-initial-response-01")
+    sid = client.post("/api/session", json={"scenario_id": sc.meta.id}).json()[
+        "session_id"
+    ]
+
+    def act(aid):
+        return client.post(
+            f"/api/session/{sid}/decide", json={"kind": "action", "action_id": aid}
+        ).json()
+
+    act("act_collect_evtx_fs01")
+    body = act("act_smb_session_fs01")
+    text = json.dumps(body, ensure_ascii=False)
+    assert "projected" not in text, "プレイ中に復旧地平の被害を出している"
+    assert "projection" not in text
+    view = body["view"]
+    assert "accumulated_damage" in view
+    assert "total_damage" not in view
+
+    client.post(
+        f"/api/session/{sid}/decide",
+        json={"kind": "declare_assessment", "assessment": ["fs01", "ws-042"]},
+    )
+    act("act_shutdown_fs01")
+    client.post(f"/api/session/{sid}/decide", json={"kind": "finish"})
+
+    rep = client.get(f"/api/session/{sid}/report").json()
+    cons = rep["score"]["consequences"]
+    assert cons["projected_damage"] > 0, "講評でも地平を出していない"
+    assert cons["total_damage"] == pytest.approx(
+        cons["accumulated_damage"] + cons["projected_damage"], abs=0.01
+    )
+    # グラフの破線。実線の終端から続き、講評にしか無い
+    assert rep["damage_projection"], "延長線が講評に無い"
+    assert rep["damage_projection"][0] >= rep["damage_history"][-1]
+    assert len(rep["damage_projection"]) == rep["recovery_horizon_minutes"]
+
+
+def test_the_debrief_shows_the_damage_in_two_tiers():
+    """講評の被害は二段で出す（SPEC 7.6.9）。
+
+    プレイ中に見えていたのは積分の本体だけで、破線の分は
+    手を止めた時点の封じ込め状態が決めている。1つの数字に丸めると、
+    封じ込めの巧拙が数字から消え、講評だけ跳ねたように見える。
     """
     app_js = (pathlib.Path(__file__).resolve().parents[1] / "web" / "app.js").read_text(
         encoding="utf-8"
     )
-    start = app_js.index("function renderResult(")
+    start = app_js.index("function blockTruth(")
     end = app_js.index("\nfunction ", start + 1)
     body = app_js[start:end]
-    line = [l for l in body.splitlines() if "var empty =" in l]
-    assert len(line) == 1
-    assert "o.prevented" in line[0], "画面側の空振り判定が連絡を数えていない"
+    assert "accumulated_damage" in body, "累積被害を出していない"
+    assert "projected_damage" in body, "復旧までの見込みを出していない"
+    assert "total_damage" in body, "合計を出していない"
+    assert "projection: rep.damage_projection" in body, "グラフに延長線を渡していない"
+
+    chart_js = (
+        pathlib.Path(__file__).resolve().parents[1] / "web" / "chart.js"
+    ).read_text(encoding="utf-8")
+    assert "setLineDash" in chart_js
+    # 破線の下は塗らない。積み上がった被害と見分けが付かなくなる
+    assert "ctx.lineTo(px(series.length - 1), padT + h);" in chart_js

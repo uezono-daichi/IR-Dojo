@@ -52,7 +52,10 @@ def test_playthrough_state(scenario):
 def test_consequences(scenario):
     c = scoring.score(play_spec_68(scenario).state, scenario).consequences
     assert c.elapsed_minutes == 190
-    assert c.total_damage == pytest.approx(1850, abs=1)
+    # 被害は二段。演習中に積み上がった分と、復旧地平 H の分（SPEC 5.8 / 6.3）
+    assert c.accumulated_damage == pytest.approx(1458, abs=1)
+    assert c.projected_damage == pytest.approx(4356, abs=1)
+    assert c.total_damage == pytest.approx(5814, abs=1)
     assert c.business_impact == pytest.approx(424.33, abs=0.01)
     assert c.evidence_preserved == pytest.approx(0.947, abs=0.001)
     assert c.containment_completeness == pytest.approx(1.000, abs=0.001)
@@ -70,23 +73,32 @@ def test_fact_metrics(scenario):
 
 def test_composite(scenario):
     r = scoring.score(play_spec_68(scenario).state, scenario)
-    assert r.policy_score == pytest.approx(0.714, abs=0.001)
-    assert r.composite_score == pytest.approx(0.642, abs=0.001)
-    assert round(r.composite_score * 100) == 64
+    assert r.policy_score == pytest.approx(0.661, abs=0.001)
+    assert r.composite_score == pytest.approx(0.626, abs=0.001)
+    assert round(r.composite_score * 100) == 63
 
 
 def test_dependency_chain_variant(scenario):
-    """dc01 を止めると、それに依存する全資産が同じ時刻で巻き込まれる。"""
+    """dc01 を止めると業務は全部止まるが、封じ込めたのは dc01 だけ。
+
+    依存連鎖が答えているのは「どの資産で仕事ができなくなるか」であって
+    「どの資産で攻撃が止まるか」ではない（SPEC 6.3）。dc01 の電源を
+    落としても fs01 上の暗号化プロセスは動き続ける。
+    """
     e = play_spec_68(scenario, contain_first="act_shutdown_dc01")
-    # ws-042 は 190分に直接隔離したが、dc01 経由で 180分に繰り上がる
-    assert e.state.contained_at == {
+    # 封じ込めは直接止めた分だけ。fs01 は入らない
+    assert e.state.contained_at == {"dc01": 180, "ws-042": 190}
+    # 業務は依存で全部止まる。ws-042 は 190分の隔離より早い 180分に繰り上がる
+    assert e.state.halted_at == {
         "dc01": 180, "fs01": 180, "ws-042": 180, "ws-107": 180, "ws-113": 180,
     }
     r = scoring.score(e.state, scenario)
     assert r.consequences.business_impact == pytest.approx(1127.00, abs=0.01)
     assert r.consequences.evidence_preserved == pytest.approx(1.000, abs=0.001)
-    assert r.policy_score == pytest.approx(0.573, abs=0.001)
-    assert round(r.composite_score * 100) == 60
+    # fs01 が封じ込められていないので完全度は 0.5、減衰も on_partial 止まり
+    assert r.consequences.containment_completeness == pytest.approx(0.500, abs=0.001)
+    assert r.policy_score == pytest.approx(0.290, abs=0.001)
+    assert round(r.composite_score * 100) == 51
 
 
 def test_same_play_scores_differently_per_policy(scenario):
@@ -100,9 +112,9 @@ def test_same_play_scores_differently_per_policy(scenario):
     assert got["damage_minimization"].constraint_violations == 0
     assert got["evidence_preservation"].constraint_violations == 0
 
-    assert round(got["business_continuity"].composite_score * 100) == 64
-    assert round(got["damage_minimization"].composite_score * 100) == 70
-    assert round(got["evidence_preservation"].composite_score * 100) == 70
+    assert round(got["business_continuity"].composite_score * 100) == 63
+    assert round(got["damage_minimization"].composite_score * 100) == 67
+    assert round(got["evidence_preservation"].composite_score * 100) == 69
 
     # 事実認識層は方針に依存しない
     facts = {r.fact_score for r in got.values()}
@@ -376,7 +388,9 @@ def test_containment_reports_what_it_stopped(scenario):
     out = e.decide(Decision(kind="action", action_id="act_shutdown_dc01"))
 
     assert not out.empty                    # 「何も出てこなかった」にならない
-    assert set(out.contained) == {"dc01", "fs01", "ws-042", "ws-107", "ws-113"}
+    # 止めたのは dc01 だけ。業務は依存で5資産すべてが止まる（SPEC 6.3）
+    assert set(out.contained) == {"dc01"}
+    assert set(out.halted) == {"dc01", "fs01", "ws-042", "ws-107", "ws-113"}
     assert set(out.cascaded) == {"fs01", "ws-042", "ws-107", "ws-113"}
     assert out.business_impact_delta > 0
     assert out.revealed == []               # 証拠は産まない
@@ -481,13 +495,24 @@ def test_bend_sits_just_past_a_good_play(scenario):
     書いていた。メニュー全体は巧いプレイの3〜5倍あるので、その4〜5割は
     必ず巧いプレイの先に落ちる。折れ点 270分に対し巧いプレイ 130分。
     被害モデルの主役が一度も画面に出ないまま終わっていた。
+
+    次に、それを `minimal_path` の 1.1〜1.3倍に直したが、**まだずれていた。**
+    `minimal_path` は判断に到達するまでで、封じ込めを含まない。
+    被害モデルが罰したいのは判断の遅れではなく、**被害が止まるまで**の
+    遅れである。折れ点 150分に対し、正しく止めた巧いプレイは 155分 —
+    誰よりも巧く解いた人が、自分で折れ点を踏んでいた。
     """
-    best, _ids, _exact = retrospective.minimal_path(scenario)
+    judged, _ids, _exact = retrospective.minimal_path(scenario)
+    stopped, _stop_ids = retrospective.minimal_containment(scenario)
+    assert judged is not None and stopped is not None
+    best = judged + stopped
     bend = scenario.damage.acceleration.threshold_minutes
-    assert best is not None
     assert 1.1 * best <= bend <= 1.3 * best, (
-        f"折れ点 {bend}分 / 最短経路 {best}分 = {bend / best:.2f}倍"
+        f"折れ点 {bend}分 / L {best}分"
+        f"（判断まで {judged}分＋最安の封じ込め {stopped}分）= {bend / best:.2f}倍"
     )
+    # 巧いプレイが自分で折れ点を踏まないこと。ここが本体
+    assert best <= bend
 
 
 def test_exhaustive_play_crosses_the_bend_early(scenario):
@@ -610,3 +635,91 @@ def test_notice_is_right_or_wrong_depending_on_the_policy(scenario):
     assert e.state.violations_by_policy["business_continuity"]
     assert not e.state.violations_by_policy["evidence_preservation"]
     assert not e.state.violations_by_policy["damage_minimization"]
+
+
+# ── 復旧地平（SPEC 5.8 / 6.3） ──────────────────────────────
+
+
+def _consequences_after(scenario, contain):
+    e = Engine(scenario, "damage_minimization", None)
+    e.decide(Decision(kind="declare_assessment", assessment=["fs01", "ws-042"]))
+    for aid in contain:
+        e.decide(Decision(kind="action", action_id=aid))
+    e.decide(Decision(kind="finish"))
+    return scoring.consequences(e.state, scenario)
+
+
+def test_stopping_nothing_is_never_the_cheapest_way_out(scenario):
+    """「何も止めない」が対応フェーズで最も安い手になっていないこと。
+
+    被害は経過時間の積分なので、演習の終わりで積分を打ち切ると
+    **動かなかったプレイの被害はほぼ 0 になる。** 15分で降りれば被害 89、
+    封じ込めに30分使えば被害はその何倍にもなる — 盤面がそう答えていた。
+
+    演習は終わってもインシデントは終わらない。復旧地平まで積分すると
+    順序が入れ替わる。`containment_effect`（0.2 / 0.6 / 1.0）が
+    実際に効くのはこの区間である。
+    """
+    stopped = _consequences_after(
+        scenario, ["act_block_c2", "act_shutdown_fs01"]
+    )
+    nothing = _consequences_after(scenario, [])
+
+    # 演習中だけを見れば、動かないほうが安い。ここは変えていない
+    assert nothing.accumulated_damage < stopped.accumulated_damage
+    # 地平まで見ると逆転する。しかも僅差ではない
+    assert nothing.total_damage > stopped.total_damage * 2
+
+
+def test_the_recovery_horizon_is_one_assumption_not_two(scenario):
+    """復旧までの前提は1つしかない。被害と業務影響が同じ H を使う。
+
+    独立したフィールドを2つ置くと、「被害は早く収まるが業務は長く止まる」
+    のような、盤面のどこにも根拠のない組み合わせを作者が書けてしまう。
+    H は「封じ込めた資産は復旧までこれだけ止まる」という前提そのもので、
+    それは1つの世界に1つしかない。
+    """
+    short = scenario.model_copy(deep=True)
+    short.scoring.consequence_layer.business_impact_horizon_minutes = 60
+
+    long_h = _consequences_after(scenario, ["act_block_c2", "act_shutdown_fs01"])
+    short_h = _consequences_after(short, ["act_block_c2", "act_shutdown_fs01"])
+
+    assert short_h.projected_damage < long_h.projected_damage
+    assert short_h.business_impact < long_h.business_impact
+
+
+def test_the_projection_hangs_on_what_was_stopped(scenario):
+    """地平の被害は、手を止めた時点の封じ込め状態が決める。
+
+    ここが封じ込めに反応しないなら、対応フェーズの中核パラメータは
+    演習終了までのわずかな残り時間にしか掛からず、盤面上ほぼ効かない。
+    """
+    correct = _consequences_after(scenario, ["act_block_c2", "act_shutdown_fs01"])
+    partial = _consequences_after(scenario, ["act_block_c2"])
+    wrong = _consequences_after(scenario, ["act_isolate_ws107"])
+
+    assert correct.projected_damage < partial.projected_damage < wrong.projected_damage
+
+
+def test_stopping_something_already_stopped_is_not_a_blank(scenario):
+    """既に止めてある資産への2手目は、空振りではない（SPEC 7.6.8）。
+
+    同じ資産に手が2つあるので（境界で遮断する／電源を落とす）、
+    これは事故ではなく普通に起きる。`contained` も `halted` も空になるため、
+    数えないと緑の枠の中にオレンジの「何も出てこなかった」が並ぶ。
+    """
+    e = Engine(scenario, "damage_minimization", None)
+    e.decide(Decision(kind="declare_assessment", assessment=["fs01"]))
+
+    first = e.decide(Decision(kind="action", action_id="act_block_smb_fs01"))
+    assert first.contained == ["fs01"]
+    assert first.already == []
+    assert first.halted == []            # サーバは動き続ける
+    assert not first.empty
+
+    second = e.decide(Decision(kind="action", action_id="act_shutdown_fs01"))
+    assert second.contained == []        # 攻撃は既に止めてある
+    assert second.already == ["fs01"]
+    assert second.halted == ["fs01"]     # だが今度は業務が止まる
+    assert not second.empty

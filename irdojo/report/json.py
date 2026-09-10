@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel
 
+from .. import damage as damage_mod
 from .. import records as records_mod
 from .. import retrospective as retro_mod
 from .. import scoring as scoring_mod
@@ -104,6 +105,11 @@ class Report(BaseModel):
     key_lessons: list[str]
     replay_suggestions: list[dict[str, str]]
     damage_history: list[float]
+    # 手を止めた時点の封じ込め状態のまま伸ばした先（累積で続く）。
+    # **講評でしか出さない。** プレイ中に「この先こう伸びる」と言うのは
+    # 損失を先に告げることであり、原則5 に反する（7.6.9）
+    damage_projection: list[float]
+    recovery_horizon_minutes: int
     markers: list[Marker]
     lost_evidence: list[LostEvidence]
     # 全方針。⑥ が「まだ試していない条件」を名指しするのに要る。
@@ -180,6 +186,22 @@ def build(
             )
         )
 
+    # 復旧地平の延長線（SPEC 5.8）。累積のまま先へ伸ばす。
+    # 「あなたが手を止めた時点で、この先はこう伸びる」は講評でしか言えない。
+    # 何を止めたか（止めなかったか）が、ここで初めて傾きとして見える
+    horizon = scenario.scoring.consequence_layer.business_impact_horizon_minutes
+    running = state.accumulated_damage
+    projection: list[float] = []
+    for inc in damage_mod.project(
+        scenario.damage,
+        scenario.world.ground_truth,
+        state.contained_at.keys(),
+        state.elapsed_minutes,
+        horizon,
+    ):
+        running += inc
+        projection.append(running)
+
     # 取り損ねた証拠。プレイ中は黙っていたものを、ここで初めて言う
     by_ev = scenario.evidence_by_id
     destroyer = {}
@@ -253,6 +275,8 @@ def build(
             for s in scenario.debrief.replay_suggestions
         ],
         damage_history=list(state.damage_history),
+        damage_projection=projection,
+        recovery_horizon_minutes=horizon,
         markers=markers,
         lost_evidence=lost,
         policies=[{"id": p.id, "label": p.label} for p in scenario.policies],

@@ -60,7 +60,15 @@ class GameState(BaseModel):
     resolved_questions: list[str] = []
     assessment: list[str] = []
     assessment_snapshot: AssessmentSnapshot | None = None
-    contained_at: dict[str, int] = {}  # 資産ID → 停止時刻（分）。依存連鎖込み（6.3）
+    # 封じ込めた資産 → その時刻（分）。**直接 targets だけ。依存連鎖しない。**
+    # 「どの資産で攻撃が止まるか」の答え。dc01 の電源を落としても
+    # ws-042 の Run キーは残るし、fs01 上の暗号化プロセスは動き続ける。
+    # containment_completeness と 5.8 の減衰判定はこちらを使う（SPEC 6.3）
+    contained_at: dict[str, int] = {}
+    # 業務が止まった資産 → その時刻（分）。side_effects.business_impact が
+    # true の手だけが入り、depends_on で不動点まで展開される。
+    # 「どの資産で仕事ができなくなるか」の答え。business_impact だけが使う
+    halted_at: dict[str, int] = {}
     phase_transitions: dict[str, int] = {}
     # 方針ごとに違反を記録する。同じ行動列を別方針で採点したとき、
     # その方針の制約で評価し直せるようにするため（SPEC 6.8）。
@@ -93,10 +101,17 @@ class ActionOutcome(BaseModel):
 
     revealed: list[str] = []
     unlocked: list[str] = []  # この発見で新たに調べられるようになったもの
-    # 封じ込めで新たに止まった資産。依存で波及した分を含む。
+    # 封じ込めで新たに止まった資産（直接 targets）。
     # 何をしたのかを告げないと、押しても無言になる。
     contained: list[str] = []
+    # 業務が止まった資産。依存で波及した分を含む。
+    # 止めることと業務が止まることは別なので、別の箱で返す（SPEC 6.3）
+    halted: list[str] = []
     cascaded: list[str] = []          # そのうち依存で巻き込まれた分
+    # 押す前から既に止まっていた targets。**空振りではない。**
+    # 同じ資産に2つの手があるので、2手目はここに落ちる（例: 境界で遮断した
+    # あとに電源を落とす）。数えないと「何も出てこなかった」が出る
+    already: list[str] = []
     business_impact_delta: float = 0.0
     events: list[str] = []            # この間に向こうから入ってきたこと
     averted: list[str] = []           # そのうち、先手が効いて不発に終わった分
@@ -107,7 +122,13 @@ class ActionOutcome(BaseModel):
     def empty(self) -> bool:
         # 出来事は世界の側の話。押した結果が空振りだったかとは別に数える。
         # 45分かけて何も出ず、その間に電話が鳴った、は両方起きうる。
-        return not self.revealed and not self.contained and not self.prevented
+        return (
+            not self.revealed
+            and not self.contained
+            and not self.halted
+            and not self.already
+            and not self.prevented
+        )
 
 
 class Decision(BaseModel):
@@ -435,20 +456,37 @@ class Engine:
             if self._follows_misleading(action, pre_ctx.obtained_evidence):
                 st.misled_follow_minutes += action.cost_minutes
 
-        # 7. 封じ込め。依存連鎖を展開して entered_at を確定する
+        # 7. 封じ込め。**2つの別々の問いを、2つの集合で持つ**（SPEC 6.3）。
+        #
+        #    contained_at … 攻撃が止まった資産。直接 targets のみ。
+        #    halted_at    … 業務が止まった資産。business_impact を持つ手だけが
+        #                   入り、depends_on で波及する。
+        #
+        #    以前は1つの集合で両方を表していた。dc01 の電源を落とすと
+        #    「fs01 と ws-042 も封じ込めた」ことになり、Run キーも
+        #    暗号化プロセスも生きたまま封じ込め成立と数えられていた。
         contained: list[str] = []
+        halted: list[str] = []
         cascaded: list[str] = []
+        already: list[str] = []
         if action.type == ActionType.CONTAIN:
             before_contained = set(st.contained_at)
-            direct = dict(st.contained_at)
+            already = [t for t in action.targets if t in before_contained]
             for asset_id in action.targets:
-                direct.setdefault(asset_id, end)
-            st.contained_at = damage_mod.expand_containment(
-                direct, self.scenario.asset_by_id
-            )
+                st.contained_at.setdefault(asset_id, end)
             contained = [a for a in st.contained_at if a not in before_contained]
-            # 直接指定していないのに止まったもの＝依存で波及した分
-            cascaded = [a for a in contained if a not in action.targets]
+
+            before_halted = set(st.halted_at)
+            if action.side_effects.business_impact:
+                direct = dict(st.halted_at)
+                for asset_id in action.targets:
+                    direct.setdefault(asset_id, end)
+                st.halted_at = damage_mod.expand_containment(
+                    direct, self.scenario.asset_by_id
+                )
+            halted = [a for a in st.halted_at if a not in before_halted]
+            # 直接指定していないのに業務が止まったもの＝依存で波及した分
+            cascaded = [a for a in halted if a not in action.targets]
 
         # 7.5 連絡。以後この出来事は起きなくなる。
         #     効き始めるのは **打ち終わった時刻**（end）から。
@@ -483,7 +521,9 @@ class Engine:
             revealed=revealed,
             unlocked=sorted(after_unlocked - before_unlocked),
             contained=contained,
+            halted=halted,
             cascaded=cascaded,
+            already=already,
             business_impact_delta=st.accumulated_business_impact - impact_before,
             events=events,
             averted=averted,
@@ -578,7 +618,9 @@ class Engine:
         horizon = self.scenario.scoring.consequence_layer.business_impact_horizon_minutes
         assets = self.scenario.asset_by_id
         total = 0.0
-        for asset_id, entered in self.state.contained_at.items():
+        # 見るのは halted_at。止めた（攻撃を断った）ことと
+        # 業務が止まったことは別の問いである（SPEC 6.3）
+        for asset_id, entered in self.state.halted_at.items():
             asset = assets.get(asset_id)
             if asset is None:
                 continue

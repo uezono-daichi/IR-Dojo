@@ -684,6 +684,8 @@ def _validate_scenario(sc: "Scenario") -> None:
 
     _reject_unreachable_actions(sc)
     _reject_criticality_inversion(sc)
+    _reject_uncontainable_compromise(sc)
+    _reject_stops_that_erase_without_stopping(sc)
     _reject_toothless_timeline(sc)
     _reject_questions_that_name_the_truth(sc)
     _reject_commands_that_hand_over_losable_evidence(sc)
@@ -911,6 +913,55 @@ def _reject_criticality_inversion(sc: "Scenario") -> None:
                     f"{b.id}({b.criticality.value}, {b.business_impact_per_hour}/h)。"
                     "学習者には重要度しか見せないため、表示が実態と食い違う"
                 )
+
+
+def _reject_uncontainable_compromise(sc: "Scenario") -> None:
+    """侵害された資産すべてに、それを直接止める手があるか（SPEC 6.3）。
+
+    `contained_at` は依存連鎖しない。「上流の dc01 を落としたので
+    ぶら下がっている資産も封じ込めた」ことにはならない — 電源を落としても
+    端末の永続化は残り、稼働中の暗号化プロセスは動き続けるからである。
+
+    したがって直接止める手が1つも無い資産が compromised にあると、
+    `containment_completeness` は誰にも 1.0 に届かず、
+    5.8 の `on_correct_containment` は永久に使われない。
+    そのシナリオでは「正しく止める」ことが定義上できない。
+    """
+    targeted = {
+        t
+        for a in sc.actions
+        if a.type == ActionType.CONTAIN
+        for t in a.targets
+    }
+    missing = [a for a in sc.world.ground_truth.compromised if a not in targeted]
+    if missing:
+        raise ValueError(
+            f"直接止める手が無い侵害資産があります: {sorted(missing)}。"
+            "封じ込めは依存連鎖しないため（6.3）、上流を止めても代わりにならない"
+        )
+
+
+def _reject_stops_that_erase_without_stopping(sc: "Scenario") -> None:
+    """業務を止めない封じ込めが、稼働中の痕跡を消していないか（SPEC 6.3）。
+
+    `side_effects.business_impact: false` は「資産は動き続ける」という宣言で、
+    境界での遮断や論理的な切り離しがこれに当たる。動いている資産から
+    揮発性の情報が消える理由は無い。
+
+    ここを許すと「業務影響ゼロで証拠だけ消える」手が書けてしまい、
+    業務継続と証拠保全のどちらの方針からも一方的に安い抜け道になる。
+    消したいなら止めること — `business_impact: true` にするのが正しい。
+    """
+    volatile = {e.id for e in sc.evidence if e.volatile}
+    for a in sc.actions:
+        if a.type != ActionType.CONTAIN or a.side_effects.business_impact:
+            continue
+        bad = sorted(set(a.destroys) & volatile)
+        if bad:
+            raise ValueError(
+                f"{a.id}: 業務を止めない封じ込めが揮発性の証拠を消しています: {bad}。"
+                "動き続けている資産から稼働中の痕跡は消えません"
+            )
 
 
 def _reject_toothless_timeline(sc: "Scenario") -> None:

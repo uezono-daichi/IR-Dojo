@@ -105,6 +105,27 @@ def expand_containment(
     return result
 
 
+def project(
+    model: DamageModel,
+    truth: GroundTruth,
+    contained: Iterable[str],
+    end_minute: int,
+    horizon: int,
+) -> list[float]:
+    """演習を終えた時点から復旧地平 H までの、1分刻みの被害量（SPEC 5.8）。
+
+    **演習が終わってもインシデントは終わらない。** 手を止めた時点の
+    封じ込め状態がそのまま続くとみなして、H 分だけ積分を延長する。
+
+    これが無いと「15分で降りる」が最も安い選択肢になり、
+    `containment_effect`（0.2 / 0.6 / 1.0）は演習終了までの
+    わずかな残り時間にしか掛からない — 対応フェーズの中核パラメータが
+    盤面上ほとんど効かなくなる。H は business_impact と共用する
+    （「復旧まで」は同じ1つの前提であり、2つ置くと作者が別々に調整できてしまう）。
+    """
+    return accrue(model, truth, contained, end_minute, end_minute + horizon)
+
+
 def accrue(
     model: DamageModel,
     truth: GroundTruth,

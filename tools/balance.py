@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import sys
 from dataclasses import dataclass, field
@@ -63,6 +64,11 @@ class Profile:
     # 封じ込めの選び方。False なら「自分が名指しした資産に届く手」だけを押す。
     # True は取捨選択をしない像（調査と同じ振る舞いを対応でも取る）
     contains_everything: bool = False
+    # 判定の外でも、依存の根に届く手を押すか。
+    # `depends_on` は構成図として学習者に開示されている（7.6.7）ので、
+    # 「根を落とせば全部止まる」は画面を見た人が普通に思いつく手である。
+    # この像が無いと、盤面で最も高くつく資産が一度も止まらない
+    contains_root: bool = False
 
 
 def _skilled(sc: Scenario) -> list[str]:
@@ -116,6 +122,12 @@ PROFILES = [
             _wanderer, patience_minutes=300),
     Profile("hasty", "調べずに止める", "ブリーフィングだけで名指しして封じ込める",
             _nothing),
+    # 構成図の根が dc01 であることは開始時から画面に出ている。
+    # 「根を落とせば全部止まる」は、それを見た人が普通に思いつく手であり、
+    # **対応フェーズで最も高くつく選択肢**でもある。この像が無いと
+    # 依存の根を止める手が一度も押されず、封じ込めの取捨選択が測れない
+    Profile("decapitate", "根元を落とす", "依存の根を止めれば全部止まると考える",
+            _skilled, contains_root=True),
 ]
 
 
@@ -146,6 +158,8 @@ def _play(
     sc: Scenario, order: list[str], notices: list[str],
     *, stop: bool, patience: int | None,
     weighs_refutations: bool, contains_everything: bool,
+    contains_root: bool = False,
+    containment: list[str] | None = None,
 ) -> Engine:
     """order を実行可能になった順に消化し、宣言して封じ込めるまでを通す。"""
     e = Engine(sc, sc.meta.default_policy, None)
@@ -188,7 +202,13 @@ def _play(
     # ここを呼ばずに終わっていたので、対応フェーズのアクションは
     # 一度も実行されず、containment_completeness は全プレイ 0.00、
     # 被害の減衰係数は全プレイ on_incorrect 固定だった
-    for aid in _containment(sc, assessment, everything=contains_everything):
+    # 封じ込めの組を外から差し替えられるようにしてある。
+    # 対応フェーズの取捨選択は、像を1本足しても測れない — 同じ調査のあとに
+    # 組だけを入れ替えて比べる必要がある（checks の containment_sweep）
+    chosen = containment if containment is not None else _containment(
+        sc, assessment, everything=contains_everything, root=contains_root
+    )
+    for aid in chosen:
         try:
             e.decide(Decision(kind="action", action_id=aid))
         except InvalidDecision:
@@ -223,27 +243,68 @@ def _assess(sc: Scenario, state, *, weighs_refutations: bool) -> list[str]:
     return [a.id for a in sc.world.assets if a.id in named]
 
 
-def _containment(sc: Scenario, assessed: list[str], *, everything: bool) -> list[str]:
+def _dependency_roots(sc: Scenario) -> set[str]:
+    """依存の根。他が依存していて、自分は何にも依存していない資産。
+
+    `depends_on` は構成図として学習者に開示されている（3.10 / 7.6.7）ので、
+    ここを読む像は答えを見ていない。画面を見た人が普通に思いつく手である。
+    """
+    depended = {d for a in sc.world.assets for d in a.depends_on}
+    return {a.id for a in sc.world.assets if a.id in depended and not a.depends_on}
+
+
+def cheapest_cover(sc: Scenario, wanted: set[str]) -> list[str]:
+    """`wanted` の各資産を、最も安い手で1回ずつ覆う（同じ資産に二重に打たない）。
+
+    画面に出ているのは**ラベルと所要**だけなので、方針を知らない像が
+    使える基準は費用しかない。同点は一覧に出る順（作者が書いた順）で決める。
+    """
+    acts = [a for a in sc.actions if a.type == ActionType.CONTAIN and a.targets]
+    order = {a.id: i for i, a in enumerate(acts)}
+    picked: list[str] = []
+    covered: set[str] = set()
+    for asset in [a.id for a in sc.world.assets if a.id in wanted]:
+        if asset in covered:
+            continue
+        cands = [a for a in acts if asset in a.targets and set(a.targets) <= wanted]
+        if not cands:
+            continue
+        best = min(cands, key=lambda a: (a.cost_minutes, order[a.id]))
+        picked.append(best.id)
+        covered |= set(best.targets)
+    return picked
+
+
+def _containment(
+    sc: Scenario, assessed: list[str], *, everything: bool, root: bool = False
+) -> list[str]:
     """封じ込めで実際に押す手。
 
-    既定は「自分が名指しした資産に届く手を全部押す」。C2 の遮断も端末の隔離も
-    どちらもやるのは実務として普通で、片方だけ選ぶ理由は学習者の側に無い。
+    既定は「自分が名指しした資産を、**1資産につき1手**で止める」。
+    同じ資産に二重に手を打つ像は実在しない — fs01 を停止した**うえで**
+    その fs01 への SMB 遮断の変更承認を待つ人はいない。
+    どちらを選ぶかは、方針を知らない像には費用でしか決められない。
+
     `everything` は取捨選択をしない像 — 調査で全部押した人は対応でも全部押す。
+    `root` は「根元を落とせば全部止まる」と読む像 — 判定の外でも
+    依存の根に届く手を押す。既定の像だけだと盤面で最も高くつく資産
+    （依存の根）が一度も止まらず、封じ込めの費用が測れない。
     """
-    acts = [a for a in sc.actions if a.type == ActionType.CONTAIN]
     if everything:
-        return [a.id for a in acts]
-    judged = set(assessed)
+        return [a.id for a in sc.actions if a.type == ActionType.CONTAIN]
     # targets が判定の外へはみ出す手は押さない。
     # 「dc01 を止めれば全部止まる」は、dc01 を疑っていない人の手ではない
-    return [a.id for a in acts if a.targets and set(a.targets) <= judged]
+    # — ただし構成図を見て根を落としに行く人はいる（root=True）
+    reachable = set(assessed) | (_dependency_roots(sc) if root else set())
+    return cheapest_cover(sc, reachable)
 
 
 def run_profile(sc: Scenario, prof: Profile, notices: list[str]) -> Run:
     e = _play(sc, prof.order(sc), notices,
               stop=prof.stop_when_confident, patience=prof.patience_minutes,
               weighs_refutations=prof.weighs_refutations,
-              contains_everything=prof.contains_everything)
+              contains_everything=prof.contains_everything,
+              contains_root=prof.contains_root)
     st = e.state
     r = Run(
         profile=prof.key,
@@ -271,6 +332,44 @@ def run_profile(sc: Scenario, prof: Profile, notices: list[str]) -> Run:
     return r
 
 
+# ─────────── 封じ込めの取捨選択（SPEC 3.8 / 8.3） ───────────
+
+
+def containment_sweep(sc: Scenario) -> dict[tuple[str, ...], dict[str, int]]:
+    """同じ調査のあとに、封じ込めの組だけを総当たりで入れ替えて採点する。
+
+    **対応フェーズの排他は時間比では測れない。**
+    フェーズの総コストが「そこで使える時間の2〜3倍」という検査（8.2 手順7）は
+    調査フェーズのためのもので、対応フェーズには効かない — 対応は定義上
+    L のあとに始まるので、折れ点までの予算は調査が使い切っている。
+    同じ時間を二重に数えているだけで、封じ込め1手あたり60分にでもしない限り
+    2倍には届かない。それは被害モデルが罰したいことと正反対の設計になる。
+
+    SPEC 3.8 が答えを持っている — 「時間で罰することはできない — 排他で閉じる」。
+    対応フェーズの排他は**不可逆性**（止めたものは復旧地平の間ずっと止まり、
+    消した揮発性証拠は戻らない）なので、測るなら組ごとの帰結を比べるしかない。
+    """
+    order = _skilled(sc)
+    acts = [a.id for a in sc.actions if a.type == ActionType.CONTAIN]
+    out: dict[tuple[str, ...], dict[str, int]] = {}
+    for r in range(len(acts) + 1):
+        for combo in itertools.combinations(acts, r):
+            e = _play(sc, order, [], stop=True, patience=None,
+                      weighs_refutations=True, contains_everything=False,
+                      containment=list(combo))
+            out[combo] = {
+                pol.id: round(scoring.score(e.state, sc, pol).composite_score * 100)
+                for pol in sc.policies
+            }
+    return out
+
+
+def _covers_compromised(sc: Scenario, combo: tuple[str, ...]) -> bool:
+    by_id = sc.action_by_id
+    stopped = {t for aid in combo for t in by_id[aid].targets}
+    return set(sc.world.ground_truth.compromised) <= stopped
+
+
 # ─────────── 判定 ───────────
 
 
@@ -283,7 +382,12 @@ class Check:
 
 def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
     out: list[Check] = []
-    best, _ids, _exact = retrospective.minimal_path(sc)
+    judged, _ids, _exact = retrospective.minimal_path(sc)
+    stopped, _stop_ids = retrospective.minimal_containment(sc)
+    # 折れ点が基準にする「巧いプレイの長さ」L は、**被害が止まるまで**の長さ。
+    # minimal_path は判断に到達するまでで、封じ込めを含まない。
+    # 被害モデルが罰したいのは判断の遅れではなく、止まるまでの遅れである
+    best = (judged + stopped) if (judged is not None and stopped is not None) else judged
     accel = sc.damage.acceleration
 
     # SPEC 8.2 手順7: 折れ点は巧いプレイの 1.1〜1.3 倍
@@ -292,7 +396,8 @@ def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
         out.append(Check(
             1.1 <= ratio <= 1.3,
             "折れ点の位置",
-            f"最短 {best}分 / 折れ点 {accel.threshold_minutes}分 = {ratio:.2f}倍（狙い 1.1〜1.3）",
+            f"判断まで {judged}分＋最安の封じ込め {stopped}分 = L {best}分"
+            f" / 折れ点 {accel.threshold_minutes}分 = {ratio:.2f}倍（狙い 1.1〜1.3）",
         ))
         sk = runs[("skilled", False)]
         out.append(Check(
@@ -306,6 +411,20 @@ def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
             ex.minutes > accel.threshold_minutes,
             "全部押すと折れ点を踏む",
             f"{ex.minutes}分 vs 折れ点 {accel.threshold_minutes}分",
+        ))
+
+    # SPEC 8.2 手順7 / 8.3: 巧いプレイの累積被害が worst の2〜3割。
+    # 1割を切ると被害の差が潰れ、5割を超えると何をしても赤くなる。
+    # **8.3 に項目があるのに実装されていなかった。** 復旧地平を入れる前は
+    # 1216/14000 = 8.7% で、8.3 自身が「潰れる」と名指しした側に居た
+    bounds = sc.scoring.consequence_layer.normalization.get("total_damage")
+    if bounds is not None and bounds.worst:
+        sk = runs[("skilled", False)]
+        share = sk.damage / bounds.worst
+        out.append(Check(
+            0.2 <= share <= 0.3,
+            "巧いプレイの被害が正規化の帯に入る",
+            f"{sk.damage:.0f} / worst {bounds.worst:.0f} = {share:.1%}（狙い 2〜3割）",
         ))
 
     # SPEC 8.3: 網羅と巧いプレイの差が10点以上
@@ -411,18 +530,61 @@ def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
     # 1倍を切るとそのフェーズは全部やれてしまい、取捨選択が発生しない。
     # 「使える時間」はシナリオが明示している唯一の予算＝折れ点までの時間。
     # 見るのは下限だけにする — 上振れ（メニューが厚い）は 8.1 の規模の目安が
-    # 受け持っており、取捨選択という性質を壊すのは下振れの側だけである
-    if accel is not None:
+    # 受け持っており、取捨選択という性質を壊すのは下振れの側だけである。
+    #
+    # **最終フェーズは対象から外す。** 対応フェーズは定義上 L のあとに
+    # 始まるので、折れ点までの予算は調査フェーズが使い切っている。
+    # 同じ時間を二重に数えていて、何をしても1倍を切る。2倍に届かせるには
+    # 封じ込め1手あたり60分が必要で、被害モデルが罰したいことと正反対になる。
+    # 最終フェーズの取捨選択は、下の3本（不可逆性で測る）が受け持つ
+    if accel is not None and len(sc.phases) > 1:
         budget = accel.threshold_minutes
         ratios = {}
-        for ph in sc.phases:
+        for ph in sc.phases[:-1]:
             cost = sum(a.cost_minutes for a in sc.actions if a.phase == ph.id)
             ratios[ph.label] = (cost, cost / budget)
         out.append(Check(
             all(r >= 2.0 for _c, r in ratios.values()),
-            "どのフェーズも全部はやれない",
+            "最終より前のフェーズは全部やれない",
             "".join(f"{lab} {c}分={r:.2f}倍 " for lab, (c, r) in ratios.items())
-            + f"/ 使える時間 {budget}分（狙い 2〜3倍）",
+            + f"/ 使える時間 {budget}分（狙い 2〜3倍）"
+            + f"。最終フェーズ「{sc.phases[-1].label}」は時間比では測らない",
+        ))
+
+    # SPEC 3.8: 対応フェーズの排他は**不可逆性**で閉じる。
+    # 止めたものは復旧地平の間ずっと止まり、消した揮発性証拠は戻らない。
+    # 同じ調査のあとに封じ込めの組だけを入れ替えて、帰結の差を見る
+    sweep = containment_sweep(sc)
+    all_contain = tuple(a.id for a in sc.actions if a.type == ActionType.CONTAIN)
+    covering = {c: v for c, v in sweep.items() if _covers_compromised(sc, c)}
+    if covering and all_contain in sweep:
+        best = {
+            pol.id: max(covering.items(), key=lambda kv: kv[1][pol.id])
+            for pol in sc.policies
+        }
+        gaps = {pid: b[1][pid] - sweep[all_contain][pid] for pid, b in best.items()}
+        out.append(Check(
+            max(gaps.values()) >= 5,
+            "封じ込めに取捨選択がある",
+            f"最良の組と「全部押す」の差: {gaps}（どれか 5点以上）",
+        ))
+
+        shapes = {pid: b[0] for pid, b in best.items()}
+        out.append(Check(
+            len(set(shapes.values())) >= 2,
+            "封じ込めの最良手が方針ごとに違う",
+            " / ".join(
+                f"{pid}: {'＋'.join(ids) or '（何も止めない）'}"
+                for pid, ids in shapes.items()
+            ),
+        ))
+
+        nothing = sweep[()]
+        losses = {pid: b[1][pid] - nothing[pid] for pid, b in best.items()}
+        out.append(Check(
+            min(losses.values()) >= 10,
+            "何も止めないプレイは正しく止めたプレイに負ける",
+            f"最良の組との差: {losses}（どの方針でも 10点以上）",
         ))
 
     # 方針を差し替えると評価が変わる（原則3）

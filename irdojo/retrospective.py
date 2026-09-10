@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from .engine import GameState
 from .questions import is_resolved
-from .schema import Action, Scenario
+from .schema import Action, ActionType, Scenario
 
 # 全探索の上限。これを超えたら貪欲法に落として近似であることを明示する。
 EXHAUSTIVE_LIMIT = 22
@@ -125,6 +125,49 @@ def minimal_path(scenario: Scenario) -> tuple[int | None, list[str], bool]:
     if best["cost"] is None:
         return None, [], True
     return int(best["cost"]), list(best["ids"]), True  # type: ignore[arg-type]
+
+
+def minimal_containment(scenario: Scenario) -> tuple[int | None, list[str]]:
+    """`compromised` を覆う最安の封じ込め集合（SPEC 8.2 手順7）。
+
+    **学習者には出さない内部値である。** 講評に出るのは 6.6 の
+    `minimal_path`（判断に到達するまでの参照値）だけで、こちらは
+    折れ点を置くための校正にしか使わない。混ぜると講評の文言が変わる。
+
+    折れ点を `minimal_path` だけで校正すると、**封じ込めの時間が
+    予算に入っていない**折れ点になる。被害モデルが罰したいのは
+    判断の遅れではなく、被害が止まるまでの遅れである。
+
+    「封じ込め手の合計」ではなく「compromised を覆う最安の集合」で定義する。
+    合計にすると、手を1つ足すたびに折れ点が動く循環になる。
+    """
+    acts = [a for a in scenario.actions if a.type == ActionType.CONTAIN and a.targets]
+    need = set(scenario.world.ground_truth.compromised)
+    if not need:
+        return 0, []
+
+    # 各資産について最も安い手を選ぶ貪欲でよい場面が多いが、
+    # 1手が複数資産を覆う定義もありうるので集合被覆として解く。
+    # 封じ込め手は 8.1 の上限で 5〜7 個なので全探索で足りる。
+    best: tuple[int, list[str]] | None = None
+
+    def dfs(i: int, chosen: list[Action], cost: int, covered: set[str]) -> None:
+        nonlocal best
+        if best is not None and cost >= best[0]:
+            return
+        if need <= covered:
+            best = (cost, [a.id for a in chosen])
+            return
+        if i >= len(acts):
+            return
+        for j in range(i, len(acts)):
+            a = acts[j]
+            dfs(j + 1, chosen + [a], cost + a.cost_minutes, covered | set(a.targets))
+
+    dfs(0, [], 0, set())
+    if best is None:
+        return None, []
+    return best[0], best[1]
 
 
 def _greedy(scenario: Scenario, actions: list[Action]) -> list[Action]:

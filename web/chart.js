@@ -52,12 +52,20 @@
 
     if (!series || series.length < 2) { return; }
 
+    // 復旧地平の延長（講評のみ）。実線の終端から破線で続く。
+    // x 軸は実線と破線を合わせた全長で割る — 別々に割ると傾きが嘘になる
+    var proj = opts.projection || [];
+
     var maxY = 0;
     for (var i = 0; i < series.length; i++) {
       if (series[i] > maxY) { maxY = series[i]; }
     }
+    for (var pi = 0; pi < proj.length; pi++) {
+      if (proj[pi] > maxY) { maxY = proj[pi]; }
+    }
     if (maxY <= 0) { maxY = 1; }
-    var maxX = series.length - 1;
+    var maxX = series.length - 1 + proj.length;
+    if (maxX <= 0) { maxX = 1; }
 
     function px(i) { return padL + (i / maxX) * w; }
     function py(v) { return padT + h - (v / maxY) * h; }
@@ -66,7 +74,8 @@
     ctx.beginPath();
     ctx.moveTo(px(0), padT + h);
     for (var j = 0; j < series.length; j++) { ctx.lineTo(px(j), py(series[j])); }
-    ctx.lineTo(px(maxX), padT + h);
+    // 面を閉じるのは実線の終端。maxX まで引くと、破線の下まで塗ってしまう
+    ctx.lineTo(px(series.length - 1), padT + h);
     ctx.closePath();
     ctx.fillStyle = 'rgba(122, 162, 247, .13)';
     ctx.fill();
@@ -80,6 +89,31 @@
     ctx.strokeStyle = opts.color || '#7aa2f7';
     ctx.lineWidth = 1.6;
     ctx.stroke();
+
+    // 復旧地平の延長。破線で、面は塗らない。
+    // 「まだ起きていないこと」を実線と同じ強さで描くと、
+    // 積み上がった被害と見分けが付かなくなる
+    if (proj.length) {
+      ctx.beginPath();
+      ctx.setLineDash([4, 3]);
+      ctx.moveTo(px(series.length - 1), py(series[series.length - 1]));
+      for (var q = 0; q < proj.length; q++) {
+        ctx.lineTo(px(series.length + q), py(proj[q]));
+      }
+      ctx.strokeStyle = opts.projectionColor || '#f7768e';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // 手を止めた位置に細い区切りを入れる。
+      // ここから先は「起きること」であって「起きたこと」ではない
+      ctx.beginPath();
+      ctx.moveTo(px(series.length - 1), padT);
+      ctx.lineTo(px(series.length - 1), padT + h);
+      ctx.strokeStyle = '#2b323c';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
 
     // 注釈（判定した時点・封じ込めた時点）
     ctx.font = '10px ui-monospace, monospace';

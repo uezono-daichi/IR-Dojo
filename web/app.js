@@ -629,6 +629,9 @@ function decide(payload) {
       S.lastOutcome.revealed = (res.revealed_evidence || []).length;
       S.lastOutcome.unlocked = res.unlocked_count || 0;
       S.lastOutcome.contained = res.contained || [];
+      S.lastOutcome.halted = res.halted || [];
+      S.lastOutcome.already = res.already || [];
+      S.lastOutcome.haltsBusiness = !!res.halts_business;
       S.lastOutcome.impact = res.business_impact_delta || 0;
       S.lastOutcome.prevented = res.prevented_count || 0;
       S.lastOutcome.command = res.command || S.lastOutcome.command;
@@ -868,10 +871,16 @@ function renderResult(v) {
   }
 
   var stopped = (o.contained || []).length;
-  // 連絡は証拠を産まないが、空振りではない。世界のふるまいが変わっている
-  var empty = !o.revealed && !stopped && !o.prevented;
+  var halted = o.halted || [];
+  var already = o.already || [];
+  // 連絡は証拠を産まないが、空振りではない。世界のふるまいが変わっている。
+  // 既に止めてある資産をもう一度止めた回も空振りではない（同じ資産に
+  // 手が2つあるので普通に起きる）。エンジン側 ActionOutcome.empty と揃える
+  var empty = !o.revealed && !stopped && !halted.length && !already.length
+              && !o.prevented;
   var note = el('div', 'outcome'
-    + (stopped || o.prevented ? ' outcome-contained'
+    + (stopped || halted.length || already.length || o.prevented
+        ? ' outcome-contained'
                               : (empty ? ' outcome-empty' : '')));
 
   note.appendChild(outcomeHead(o.type, o.label,
@@ -894,20 +903,52 @@ function renderResult(v) {
       o.contained.length + ' 件を止めた。'));
     var row = el('div', 'outcome-cascade');
     o.contained.forEach(function (a) {
-      row.appendChild(el('span', 'chip' + (a.cascaded ? ' cascaded' : ''),
-        a.id + '　' + a.label));
+      row.appendChild(el('span', 'chip', a.id + '　' + a.label));
     });
     note.appendChild(row);
-    var casc = o.contained.filter(function (a) { return a.cascaded; });
-    if (casc.length) {
+  }
+  // 既に止めてある資産に2手目を打った回。無言にすると
+  // 「何も出てこなかった」と同じ見た目になり、押した意味が消える
+  if (!stopped && already.length) {
+    note.appendChild(el('div', 'outcome-msg stopped',
+      already.length + ' 件は既に止まっている。'));
+    var arow = el('div', 'outcome-cascade');
+    already.forEach(function (a) {
+      arow.appendChild(el('span', 'chip', a.id + '　' + a.label));
+    });
+    note.appendChild(arow);
+  }
+  // 業務が止まったことは、止めたことと別に告げる。
+  // 同じ「止める」でも、通信だけを断つ手は仕事を止めない（SPEC 6.3）
+  if (stopped || halted.length || already.length) {
+    if (halted.length) {
+      note.appendChild(el('div', 'outcome-msg sub',
+        '業務が止まったのは ' + halted.length + ' 件。'));
+      var hrow = el('div', 'outcome-cascade');
+      halted.forEach(function (a) {
+        hrow.appendChild(el('span', 'chip' + (a.cascaded ? ' cascaded' : ''),
+          a.id + '　' + a.label));
+      });
+      note.appendChild(hrow);
+      var casc = halted.filter(function (a) { return a.cascaded; });
+      if (casc.length) {
+        note.appendChild(el('div', 'outcome-cascade',
+          '橙は依存によって一緒に止まったものです（' + casc.length + ' 件）。'));
+      }
+    } else if (o.haltsBusiness) {
+      // 止める手ではあるが、その資産の業務は既に止まっていた
       note.appendChild(el('div', 'outcome-cascade',
-        '橙は依存によって一緒に止まったものです（' + casc.length + ' 件）。'));
+        '業務は既に止まっている。'));
+    } else {
+      note.appendChild(el('div', 'outcome-cascade',
+        '資産は動いたままなので、業務は止まっていない。'));
     }
     if (o.impact) {
       note.appendChild(el('div', 'outcome-msg sub',
         '業務影響が ' + Math.round(o.impact).toLocaleString('ja-JP') + ' 増えた。'));
     }
-  } else if (empty) {
+  }
+  if (empty) {
     note.appendChild(el('div', 'outcome-msg gone', '何も出てこなかった。'));
   }
   if (fresh.length) {
@@ -1054,7 +1095,8 @@ function renderActions(v) {
           S.lastOutcome = {
             label: a.label, cost: a.cost_minutes, type: a.type,
             command: '', running: true,
-            revealed: 0, unlocked: 0, contained: [], impact: 0, prevented: 0
+            revealed: 0, unlocked: 0, contained: [], halted: [], already: [],
+            haltsBusiness: false, impact: 0, prevented: 0
           };
           // 走らせている間もその場で見せる。押した瞬間に何か起きる
           renderResult(S.view);
@@ -1324,6 +1366,25 @@ function blockTruth(rep) {
     var canvas = el('canvas');
     canvas.setAttribute('height', '150');
     b.appendChild(canvas);
+
+    // 被害は二段で出す。プレイ中に見えていたのは実線の分だけで、
+    // 破線の分は**手を止めた時点の封じ込め状態**が決めている。
+    // ここを1つの数字に丸めると、封じ込めの巧拙が数字から消える
+    var cq = rep.score.consequences;
+    var two = el('p', 'damage-split');
+    two.appendChild(el('span', 'k', '累積被害 '));
+    two.appendChild(el('span', 'v', num(cq.accumulated_damage)));
+    two.appendChild(el('span', 'k', '　／　復旧までの見込み '));
+    two.appendChild(el('span', 'v proj', num(cq.projected_damage)));
+    two.appendChild(el('span', 'k', '　＝　合計 '));
+    two.appendChild(el('span', 'v', num(cq.total_damage)));
+    b.appendChild(two);
+    b.appendChild(el('p', 'faint',
+      '破線は、あなたが手を止めた時点の封じ込め状態がそのまま続いた場合の' +
+      '伸びです（復旧まで ' + Math.round(rep.recovery_horizon_minutes / 60) +
+      '時間と置いています）。演習が終わってもインシデントは終わりません。' +
+      'プレイ中に出していたのは実線の部分だけです。'));
+
     var legend = el('div', 'legend');
     rep.markers.forEach(function (m) {
       var world = m.kind === 'world';
@@ -1338,6 +1399,7 @@ function blockTruth(rep) {
     // 描画は DOM 挿入後（clientWidth が要る）
     setTimeout(function () {
       DamageChart.draw(canvas, rep.damage_history, {
+        projection: rep.damage_projection,
         // グラフ上は短い名前だけ。全文は下の凡例に出す
         markers: rep.markers.map(function (m) {
           return { minute: m.minute, label: m.short || m.label, kind: m.kind };
