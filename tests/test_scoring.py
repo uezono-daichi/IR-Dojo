@@ -1409,3 +1409,140 @@ def test_a_notice_that_arrives_too_late_is_not_reported_as_a_dead_end(scenario):
     assert out.prevented == []      # もう防ぐものが残っていない
     assert not out.empty            # それでも空振りではない
     assert out.kind.value == "communicate"
+
+
+# ─────────── 2周目に狙う層（SPEC 3.11 / 7.6.13） ───────────
+
+
+def _played(scenario, policy="damage_minimization", fact=1.0, pol=0.5):
+    """その条件で1回遊んだことにする記録を1件置く。"""
+    from datetime import datetime, timezone
+
+    from irdojo import records as records_mod
+    from irdojo.schema import AssistLevel
+
+    records_mod.save(
+        records_mod.Record(
+            scenario_id=scenario.meta.id,
+            scenario_title=scenario.meta.title,
+            scenario_version=scenario.meta.version,
+            policy_id=policy,
+            policy_label=scenario.policy_by_id[policy].label,
+            assist_level=AssistLevel.ASSISTED,
+            played_at=datetime.now(timezone.utc),
+            is_first_play=True,
+            fact_score=fact,
+            policy_score=pol,
+            composite_score=(fact + pol) / 2,
+            metrics={},
+            elapsed_minutes=100,
+            total_damage=1000.0,
+            business_impact=0.0,
+            evidence_preserved=1.0,
+            containment_completeness=1.0,
+            assessment=[],
+            unresolved_at_decision=[],
+            constraint_violations=0,
+        )
+    )
+
+
+def _finished(scenario, policy="damage_minimization"):
+    e = Engine(scenario, policy, None)
+    e.decide(Decision(kind="action", action_id="act_netflow_overview"))
+    e.decide(Decision(kind="declare_assessment", assessment=["ws-042"]))
+    e.decide(Decision(kind="finish"))
+    return e.state
+
+
+def test_the_first_play_is_not_told_what_to_aim_at(scenario):
+    """初回には次の的を出さない。
+
+    **初回の的は講評そのものである。** まだ何も知らない人に「次はこの層」と
+    言っても、比べる先が無いので意味を成さない。
+    3.11 の「2周目以降は事実認識が信用できない」から始まる話なので、
+    1周目には成立しない。
+    """
+    from irdojo.report import json as report_json
+
+    rep = report_json.build(_finished(scenario), scenario, persist=True)
+    assert rep.is_first_play
+    assert rep.next_target is None
+
+
+def test_the_replay_is_aimed_at_the_layer_memory_cannot_move(scenario):
+    """2周目の的は方針適合の層になる。
+
+    SPEC 3.11 は「2周目以降は答えを覚えているので事実認識は信用できない」と
+    認めているが、**では何を目指すのかを言っていなかった。**
+
+    信用できる層はある。方針適合は「名乗った方針が優先すると言っているものを、
+    実際の手が優先できていたか」を見るので、盤面の答えを覚えていても上がらない。
+    3.11 を否定せず、的を信用できる側へ移す。
+    """
+    from irdojo.report import json as report_json
+
+    _played(scenario, fact=1.0, pol=0.84)
+    rep = report_json.build(_finished(scenario), scenario, persist=True)
+    assert not rep.is_first_play
+    assert rep.next_target is not None
+    assert rep.next_target.layer == "policy"
+    assert "方針適合" in rep.next_target.headline
+    # 事実認識を的にしない
+    assert "事実認識を" not in rep.next_target.note
+
+
+def test_the_line_never_names_a_number_to_beat(scenario):
+    """**数字を主語にしない。**
+
+    「84 → 90 を狙う」と書いた瞬間に、次のプレイはスコア最大化ゲームになる。
+    測るのは根拠の健全さであって点ではない（1.3）。
+
+    数字が1つも文面に無いことを機械的に見る。ここが緩むと、
+    次に書く人は必ず「あと6点」を足したくなる。
+    """
+    import re
+
+    from irdojo.report import json as report_json
+
+    for fact, pol in ((1.0, 0.84), (0.6, 0.99), (1.0, 1.0)):
+        _played(scenario, fact=fact, pol=pol)
+        rep = report_json.build(_finished(scenario), scenario, persist=True)
+        if rep.next_target is None:
+            continue
+        text = rep.next_target.headline + rep.next_target.note
+        assert not re.search(r"[0-9０-９]", text), f"文面に数字がある: {text}"
+
+
+def test_the_line_never_names_a_move(scenario):
+    """どの手を選べとは言わない。
+
+    方針適合を上げる道は盤面に具体的にある（3方針に対応した3つの手、
+    対になった根絶の手）。**それを言えば答えである**（原則2）。
+    言うのは層の名前と、その層が何を見ているかまで。
+    """
+    from irdojo.report import json as report_json
+
+    _played(scenario, fact=1.0, pol=0.84)
+    rep = report_json.build(_finished(scenario), scenario, persist=True)
+    text = rep.next_target.headline + rep.next_target.note
+    for a in scenario.actions:
+        assert a.label not in text, f"手を名指ししている: {a.label}"
+    for asset in scenario.world.assets:
+        assert asset.id not in text, f"資産を名指ししている: {asset.id}"
+
+
+def test_an_exhausted_condition_is_sent_to_another_policy(scenario):
+    """その条件で方針適合まで取り切ったら、的は条件のほうへ移る。
+
+    同じ条件をもう一度やっても、確かめられるものが残っていない。
+    残っているのは「同じ行動列が、別の方針では違う評価になる」ほうで、
+    それは記録の比較表がもともと見せようとしているもの（3.11）。
+    """
+    from irdojo.report import json as report_json
+
+    _played(scenario, fact=1.0, pol=1.0)
+    _played(scenario, fact=1.0, pol=1.0)
+    rep = report_json.build(_finished(scenario), scenario, persist=True)
+    assert rep.next_target.layer == "condition"
+    assert "方針を変えて" in rep.next_target.headline

@@ -138,7 +138,6 @@
       <span class="policy" id="play-policy"></span>
     </div>
     <div>
-      <button id="btn-show-topo">構成</button>
       <button id="btn-show-legend">画面の見方</button>
       <button id="btn-show-policy">方針を再表示</button>
       <button id="btn-show-assessment" style="display:none">被疑判定</button>
@@ -165,6 +164,10 @@
   </div>
   <div class="wrap-wide play-main">
     <ol class="phase-bar" id="play-phase"></ol>
+
+    <!-- 資産盤。構成図をプレイ中も置き、そこに自分の手の当たり方を重ねる。
+         中身は JS が組み立てる — 同じ関数で凡例の見本も作るため（SPEC 7.6.7） -->
+    <div id="play-board"></div>
 
     <!-- 結果とアクションを横に並べる。縦に積むと、ログが出たとたんに
          アクションが画面外へ押し出される（実測 1266px） -->
@@ -255,18 +258,6 @@
   </div>
 </div>
 
-<!-- モーダル: 環境の構成 -->
-<div class="modal-bg" id="modal-topo">
-  <div class="modal" style="max-width:760px">
-    <h2>この環境の構成</h2>
-    <div class="topo" id="play-topo"></div>
-    <p class="faint">線は依存を表します。上のものが止まると、下のものも実質止まります。<br>
-       色と印は「止めたときに業務が受ける影響の大きさ」です。侵害の有無とは無関係です。</p>
-    <div class="btn-row right">
-      <button data-close="modal-topo">閉じる</button>
-    </div>
-  </div>
-</div>
 
 <!-- モーダル: 画面の見方。ブリーフィングと同じものを、プレイ中も開けるようにする。
      ●/○ の意味も、琥珀色になる条件も、開始前にしか読めないなら思い出せない -->

@@ -167,6 +167,37 @@ class RecordGroup(BaseModel):
     stale: bool                # シナリオが更新される前の記録を含むか
 
 
+# 層を「取り切った」と見なす線。0〜100 に直したあとの値で見る。
+# **文面には出さない。** 学習者に渡すのは層の名前であって目標値ではない（3.11）。
+LAYER_CEILING = 95
+
+
+class NextTarget(BaseModel):
+    """2周目以降に狙う層を1行で言う（SPEC 3.11 / 7.6.13）。
+
+    同一シナリオを再プレイすると、学習者は答えを覚えている。3.11 は
+    「事実認識スコアは信用できない」とだけ言って止まっていた。
+    **では2周目に何を目指すのかが定義されていなかった。**
+
+    信用できる層はある。方針適合は「名乗った方針が優先すると言っているものを、
+    実際に選んだ手が優先できていたか」を見るので、**盤面の答えを覚えていても
+    上がらない。** 3.11 を否定せず、的を信用できる層のほうへ移す。
+
+    **数字を主語にしない。** 「84 → 90 を狙う」と書くと、そこから先は
+    スコア最大化ゲームになる（1.3 が測らないと言っているもの）。
+    言うのは層の名前と、その層が何を見ているかまで。
+    **どの手を選べとは言わない** — それは答えである（原則2）。
+
+    機械的に守る形は「**学習者に見せる文に算用数字を1文字も書かない**」である
+    （`test_the_line_never_names_a_number_to_beat`）。だから周回の数え方も
+    「二周目」と漢数字で書く。緩めた瞬間に、次に書く人は「あと6点」を足したくなる。
+    """
+
+    layer: str          # "policy"（方針適合の層） / "condition"（条件を変える）
+    headline: str
+    note: str
+
+
 def _display(key: str, value: float, state: GameState) -> str:
     """実測値を、単位の分かる形にする。
 
@@ -270,6 +301,8 @@ class Report(BaseModel):
     records: list[RecordRow]    # 直近のみ。全件は records_total
     records_total: int
     is_first_play: bool
+    # 2周目以降に狙う層。初回は None（SPEC 3.11 / 7.6.13）
+    next_target: NextTarget | None
 
 
 def build(
@@ -519,6 +552,7 @@ def build(
         policy_terms=policy_terms(report_score, state, scenario),
         policies=[{"id": p.id, "label": p.label} for p in scenario.policies],
         record_groups=groups,
+        next_target=_next_target(groups, is_first),
         records=rows,
         records_total=len(all_records),
         is_first_play=is_first,
@@ -604,6 +638,54 @@ def _group_records(
     # 総合の高い順。条件の比較が目的なので、時系列ではなく到達水準で並べる
     out.sort(key=lambda g: (-g.composite_score, g.policy_label, g.assist_level))
     return out
+
+
+def _next_target(
+    groups: list[RecordGroup], is_first: bool
+) -> NextTarget | None:
+    """次に狙う層を1行で返す（SPEC 3.11 / 7.6.13）。
+
+    初回は返さない。**初回の的は講評そのもの**で、まだ何も知らない人に
+    「次はこの層」と言っても意味を成さない。
+
+    2周目以降は、その条件でこれまでに届いた方針適合を見る。まだ余地があるなら
+    そこを名指しし、取り切っているなら条件のほうを変えてもらう。
+    事実認識は的にしない — 答えを覚えているぶんだけ上がるので、
+    伸びたかどうかを確かめる的にならない（3.11）。
+    """
+    if is_first:
+        return None
+    here = [g for g in groups if g.is_current]
+    if not here:
+        return None
+    g = here[0]
+
+    if g.policy_score < LAYER_CEILING:
+        lead = "事実認識はこの条件で取り切っています。" if g.fact_score >= LAYER_CEILING else ""
+        return NextTarget(
+            layer="policy",
+            headline=lead + "次に狙うのは方針適合の層です。",
+            note=(
+                "方針適合が低いのは、方針の名乗りと違う手を選んでいるからです。"
+                "この層が見るのは、名乗った方針が「これを優先する」と言っているものを、"
+                "実際の手がそのとおり優先できていたか、それだけです。"
+                "盤面の答えを覚えていても上がりません — "
+                "だから二周目以降に確かめられるのは、こちらの層です。"
+            ),
+        )
+
+    return NextTarget(
+        layer="condition",
+        headline="この条件では、方針適合の層まで取り切っています。"
+        "次は方針を変えて、同じ盤面をもう一度解いてください。",
+        note=(
+            "同じ行動列でも、名乗る方針が変われば評価は変わります。"
+            "見る番なのは「どの手が正しいか」ではなく"
+            "「どの方針の下で正しくなるか」です。"
+            "事実認識の側は、二周目以降は答えを覚えているぶんだけ上がるので、"
+            "伸びたかどうかを確かめる的にはなりません。"
+        ),
+    )
 
 
 def _to_record(

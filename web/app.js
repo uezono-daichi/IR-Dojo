@@ -392,9 +392,39 @@ function fitLabel(text, px) {
   return out;
 }
 
-function renderTopology(host, assets) {
+/* 盤の記号の意味。**盤の中でも凡例でも、ここ1箇所から出す。**
+   意味を言わないまま数字を出さない（SPEC 7.6.7 / 7.6.16） */
+function boardKey() {
+  return '線 = 依存（上が止まると下も実質止まる）　'
+       + '手 = あなたが押した手のうち、この資産に手を当てた数　'
+       + '証 = 手元の証拠のうち、この資産を名指ししている数　'
+       + '止 = 止めた　除 = 取り除いた　破線の箱 = いま業務が止まっている';
+}
+
+/* 盤ひとそろい（見出し・記号の説明・図の入れ物）を組み立てる。
+   プレイ画面と凡例の見本が同じ関数から出る。見本を別に書くと必ず腐る
+   （フェーズ帯で一度腐らせている。SPEC 7.6.7）。 */
+function boardBox() {
+  var d = el('details', 'board');
+  var sm = el('summary');
+  sm.appendChild(el('span', 'board-title', '環境の構成と、手の当たり方'));
+  sm.appendChild(el('span', 'board-key', boardKey()));
+  d.appendChild(sm);
+  var host = el('div', 'topo');
+  d.appendChild(host);
+  return { box: d, host: host };
+}
+
+/* 構成図と資産盤。opts.marks を立てると、各資産に自分の手の当たり方を重ねる。
+
+   **重ねるのは学習者自身の行動と、手元の証拠の数え直しだけである。**
+   侵害の有無も、まだ押していない手が何を見に行くかも、ここには出ない
+   （SPEC 7.6.16）。0 を赤くしないのも同じ理由 — 盤が「押せ」と促すと、
+   網羅が正解だと教えることになる（SPEC 6.6）。 */
+function renderTopology(host, assets, opts) {
   clear(host);
   if (!assets || !assets.length) { return; }
+  var marks = !!(opts && opts.marks);
 
   // 依存の深さで段に分ける。循環はローダが弾いているので必ず収束する
   var byId = {};
@@ -421,7 +451,9 @@ function renderTopology(host, assets) {
   });
 
   var W = Math.max(host.clientWidth - 34, 320);
-  var GAP = 14, BH = 50, VGAP = 46, PAD = 10;
+  // 印を重ねる盤は1行ぶん背が高い。段の間は詰める — 盤は常設なので、
+  // ここで取った高さがそのまま押した結果の箱を画面外へ押し出す
+  var GAP = 14, BH = marks ? 56 : 50, VGAP = marks ? 24 : 46, PAD = 10;
   var widest = Math.max.apply(null, levels.map(function (r) { return r.length; }));
   var BW = Math.min(168, Math.floor((W - (widest - 1) * GAP) / widest));
   var totalW = widest * BW + (widest - 1) * GAP;
@@ -459,9 +491,13 @@ function renderTopology(host, assets) {
 
   assets.forEach(function (a) {
     var p = pos[a.id];
+    var cls = 'node ' + (CRIT_CLASS[a.criticality] || '');
+    // 業務が止まっている資産は薄くする。**印を1つ増やさずに状態を出す** —
+    // 「止めた（封じ込め）」と「止まった（業務）」に同じ字を使うと、
+    // 画面の中で「止」の意味が2つになる
+    if (marks && a.halted) { cls += ' halted'; }
     root.appendChild(svg('rect', {
-      'class': 'node ' + (CRIT_CLASS[a.criticality] || ''),
-      x: p.x, y: p.y, width: BW, height: BH, rx: 5
+      'class': cls, x: p.x, y: p.y, width: BW, height: BH, rx: 5
     }));
     var id = svg('text', { 'class': 'id', x: p.x + 11, y: p.y + 21 });
     id.textContent = a.id;
@@ -476,6 +512,25 @@ function renderTopology(host, assets) {
     // ラベルの長さは作者の自由なので、描く側で畳む
     nm.textContent = fitLabel(a.label, BW - 22);
     root.appendChild(nm);
+    if (!marks) { return; }
+
+    // 自分の注意の写像。触れていない資産は 0 のまま薄く出る
+    var n = a.touched || 0, m = a.mentions || 0;
+    var cnt = svg('text', {
+      'class': 'tally' + (n || m ? '' : ' none'), x: p.x + 11, y: p.y + 50
+    });
+    cnt.textContent = '手 ' + n + '  証 ' + m;
+    root.appendChild(cnt);
+
+    var done = [];
+    if (a.contained) { done.push('止'); }
+    if (a.eradicated) { done.push('除'); }
+    if (done.length) {
+      var dn = svg('text', { 'class': 'done-tag', x: p.x + BW - 11, y: p.y + 50,
+                             'text-anchor': 'end' });
+      dn.textContent = done.join(' ');
+      root.appendChild(dn);
+    }
   });
 
   host.appendChild(root);
@@ -562,13 +617,34 @@ function renderLegend(view, mini, notes) {
   }
   mini.appendChild(strip);
 
+  // ── フェーズ帯と資産盤は画面いっぱいに敷いてある。凡例でも同じ並びにする
+  var row = el('div', 'mini-row');
+  row.appendChild(region(phaseBar(view.phases),
+    'いま何段目かを示します。進むのはあなたが宣言したときだけで、' +
+    '一度進むと戻れません。'));
+
+  var board = null;
+  if (view.show_topology) {
+    board = boardBox();
+    board.box.open = true;
+    row.appendChild(region(board.box,
+      '環境の構成に、あなたの手の当たり方を重ねた盤です。' +
+      '線は依存で、上のものが止まると下のものも実質止まります。' +
+      '「重要」などの印は止めたときに業務が受ける影響の大きさで、' +
+      '侵害の有無とは関係ありません。' +
+      '「手」はあなたが押した手のうちその資産に手を当てた数、' +
+      '「証」は手元の証拠のうちその資産を名指ししている数です。' +
+      'どちらもあなたの行動と手元の資料を数えただけで、' +
+      '数が多いことも 0 であることも、当たりでも外れでもありません。' +
+      '止めた資産には「止」、取り除いた資産には「除」が付き、' +
+      '業務が止まっている資産は箱が破線になります — '
+      + '止めた資産が上流なら、下流もつられて破線になります。'));
+  }
+  mini.appendChild(row);
+
   // ── 本体
   var cols = el('div', 'mini-cols');
   var left = el('div', 'mini-left');
-
-  left.appendChild(region(phaseBar(view.phases),
-    'いま何段目かを示します。進むのはあなたが宣言したときだけで、' +
-    '一度進むと戻れません。'));
 
   var oc = el('div', 'outcome');
   oc.appendChild(outcomeHead('investigate', '押したアクション', '30分を使った'));
@@ -616,11 +692,16 @@ function renderLegend(view, mini, notes) {
   mini.appendChild(cols);
 
   // 描画は組み立ててから。非表示のままだと clientWidth が 0 になる
-  if (cv) {
+  if (cv || board) {
     setTimeout(function () {
-      var s = [], v = 0;
-      for (var i = 0; i < 90; i++) { v += 1 + Math.pow(i / 30, 3); s.push(v); }
-      DamageChart.draw(cv, s, {});
+      if (cv) {
+        var s = [], v = 0;
+        for (var i = 0; i < 90; i++) { v += 1 + Math.pow(i / 30, 3); s.push(v); }
+        DamageChart.draw(cv, s, {});
+      }
+      // 見本も本物の盤と同じ関数・同じビューから描く。
+      // 開始前なら「手 0 証 0」が並ぶ — それが実際に最初に見る盤である
+      if (board) { renderTopology(board.host, view.assets, { marks: true }); }
     }, 0);
   }
 }
@@ -697,13 +778,31 @@ function decide(payload) {
     });
     if (res.finished) { loadReport(); return res; }
     renderPlay();
-    if (S.lastOutcome) { window.scrollTo(0, 0); }
+    if (S.lastOutcome) { scrollAfterAction(); }
     if (S.pendingFinish && S.view.current_assessment.length) {
       S.pendingFinish = false;
       openFinish();
     }
     return res;
   }).catch(fail);
+}
+
+/* 押したあとの視点。**盤の頭に戻す** — 盤・結果の順に見えるところまで。
+
+   画面の一番上（帯の上）まで戻すと、追従している帯のぶんだけ空振りする。
+   逆に結果の箱まで送ると、押すたびに盤が視界の外へ出てしまい、
+   盤を常設にした意味が無くなる。**盤は押した直後に動く** —
+   手の数が 1 つ増えるのを見るのがこの盤の役目である（SPEC 7.6.16）。
+   結果の箱の頭は盤のすぐ下に来るので、押した意味も同じ画面に残る。
+   盤を畳めば、以前と同じく結果が画面の先頭に来る。 */
+function scrollAfterAction() {
+  var cols = document.querySelector('.play-main');
+  if (!cols) { window.scrollTo(0, 0); return; }
+  var css = getComputedStyle(document.documentElement);
+  var off = (parseInt(css.getPropertyValue('--header-h'), 10) || 66)
+          + (parseInt(css.getPropertyValue('--strip-h'), 10) || 140);
+  var y = window.pageYOffset + cols.getBoundingClientRect().top - off - 10;
+  window.scrollTo(0, Math.max(0, y));
 }
 
 function renderPlay() {
@@ -727,7 +826,6 @@ function renderPlay() {
     adv.style.display = 'none';
   }
   $('btn-show-assessment').style.display = v.current_assessment.length ? '' : 'none';
-  $('btn-show-topo').style.display = v.show_topology ? '' : 'none';
   show('screen-play');
 
   // ヘッダと帯の高さを実測して追従位置に反映する。帯の高さはアシストレベルで
@@ -744,6 +842,26 @@ function renderPlay() {
   var wrapEl = chart.parentNode;
   wrapEl.style.display = v.damage_history ? 'flex' : 'none';
   if (v.damage_history) { DamageChart.draw(chart, v.damage_history, {}); }
+  renderBoard(v);
+}
+
+/* 資産盤。プレイ中ずっと出しておく（SPEC 7.6.16）。
+
+   **hard では出さない。** 盤は自分の行動を1枚に消化して見せる装置で、
+   消化された見せ方は hard が奪う側にある（SPEC 3.10）。依存関係そのものは
+   被疑判定モーダルに文字で残るので、世界の事実は取り上げていない。
+   畳んだ／開いたは <details> 自身が覚えるので、再描画で戻らない。 */
+function renderBoard(v) {
+  var slot = $('play-board');
+  clear(slot);
+  slot.hidden = !v.show_topology;
+  if (!v.show_topology) { return; }
+  var b = boardBox();
+  b.box.open = S.boardOpen !== false;
+  b.box.addEventListener('toggle', function () { S.boardOpen = b.box.open; });
+  slot.appendChild(b.box);
+  // 画面に入れてから描く。非表示のままだと clientWidth が 0 になる
+  renderTopology(b.host, v.assets, { marks: true });
 }
 
 /* いま何段目か。凡例と本体で同じ関数から描く（SPEC 7.6.7）。
@@ -1195,7 +1313,7 @@ function renderActions(v) {
           };
           // 走らせている間もその場で見せる。押した瞬間に何か起きる
           renderResult(S.view);
-          window.scrollTo(0, 0);
+          scrollAfterAction();
           decide({ kind: 'action', action_id: a.id });
         });
       }
@@ -1827,6 +1945,16 @@ function blockRecords(rep) {
     '※ ★ 以外は答えを知った状態でのプレイです。' +
     '事実認識スコアの上昇は学習効果とは限りません。'));
 
+  /* 2周目以降に狙う層を1行で言う（SPEC 3.11 / 7.6.13）。
+     **数字を主語にしない。** 文面はサーバが作る — 画面で組み立てられる形に
+     しておくと、いつか「あと6点」と書きたくなる */
+  if (rep.next_target) {
+    var aim = el('div', 'aim');
+    aim.appendChild(el('p', 'aim-head', rep.next_target.headline));
+    aim.appendChild(el('p', 'aim-note', rep.next_target.note));
+    b.appendChild(aim);
+  }
+
   // まだ試していない条件を名指しする。空白のほうが誘いになる
   var tried = {};
   rep.record_groups.forEach(function (g) { tried[g.policy_id + '/' + g.assist_level] = true; });
@@ -1924,12 +2052,6 @@ function init() {
   $('btn-finish-confirm').addEventListener('click', function () {
     closeModal('modal-finish');
     decide({ kind: 'finish' });
-  });
-
-  $('btn-show-topo').addEventListener('click', function () {
-    openModal('modal-topo');
-    // 表示してから描く。非表示のままだと幅が 0 になる
-    renderTopology($('play-topo'), S.view.assets);
   });
 
   // 凡例はプレイ中も開ける。●/○ の意味を思い出したいのは、開始前ではなく最中である

@@ -844,6 +844,7 @@ def _validate_scenario(sc: "Scenario") -> None:
     _reject_unsatisfiable_capture_requirement(sc)
     _reject_policies_that_forbid_every_stop(sc)
     _reject_unreachable_actions(sc)
+    _reject_assets_no_action_can_touch(sc)
     _reject_criticality_inversion(sc)
     _reject_uncontainable_compromise(sc)
     _reject_uneradicable_persistence(sc)
@@ -857,6 +858,34 @@ def _validate_scenario(sc: "Scenario") -> None:
 
     # 被害モデルの params
     _validate_damage_params(sc.damage)
+
+
+def _reject_assets_no_action_can_touch(sc: "Scenario") -> None:
+    """どの手も触れない資産を拒否する（SPEC 7.6.16）。
+
+    資産盤は各資産に「あなたが押した手のうち、この資産に手を当てた数」を出す。
+    盤に並んでいるのに `targets` にも `investigates` にも `eradicates` にも
+    一度も現れない資産があると、そこは**何をしても 0 のまま**になる。
+    学習者は自分の怠慢だと読むが、実際には触りに行く手が盤面に存在しない。
+
+    盤が無かった頃も同じことは起きていた — その資産は被疑判定の選択肢に
+    並ぶのに、根拠を取りに行く手段が1つも無い。**名指しを求めておいて
+    調べさせない**のは、判断ではなく勘を測っている。盤はそれを見えるように
+    しただけで、規則そのものは前からあるべきだった。
+
+    数えるのはフェーズも解放条件も無視した全アクションである。到達可能性は
+    `_reject_unreachable_actions` が別に見ている。
+    """
+    touchable: set[str] = set()
+    for a in sc.actions:
+        touchable |= set(a.targets) | set(a.investigates) | set(a.eradicates)
+    orphans = sorted(a.id for a in sc.world.assets if a.id not in touchable)
+    if orphans:
+        raise ValueError(
+            f"どのアクションも触れない資産があります: {orphans}。"
+            "被疑判定の選択肢に並ぶ資産には、targets / investigates / eradicates の"
+            "どれかで手を当てられる手が1つは要ります"
+        )
 
 
 def _validate_clears(sc: "Scenario", e: "Evidence", asset_ids: set[str]) -> None:
@@ -882,6 +911,11 @@ def _validate_clears(sc: "Scenario", e: "Evidence", asset_ids: set[str]) -> None
     5. 棄却経路がその資産を名指しに戻さないこと。`refuted_by` のどれかが
        その資産を `points_to` に持っていなければ、棄却できても
        **名指しは戻らない** — 再現率は下がったままで、罠に出口が無い
+    6. `content` がその資産を名指ししていないこと（v1.44）。白と読ませる
+       誤導は、読み手が**その資産の話だと分かって初めて**成立する。本文が
+       名前を出さないなら、誰も「この端末は白だ」と一般化しない。
+       資産盤の「言及」も `content` の文字列照合で数えるので（7.6.16）、
+       名指しの無い `clears` は盤にも読み手にも現れないまま罠だけが残る
     """
     for a in e.clears:
         if a not in asset_ids:
@@ -921,6 +955,11 @@ def _validate_clears(sc: "Scenario", e: "Evidence", asset_ids: set[str]) -> None
                 f"{e.id}: clears に書いた {asset} を points_to に持つ非誤導証拠が"
                 " refuted_by にありません。棄却できても名指しが戻らないので、"
                 "再現率は下がったままになります"
+            )
+        if not names_asset(e.content, sc.asset_by_id[asset]):
+            raise ValueError(
+                f"{e.id}: clears に書いた {asset} を content が名指ししていません。"
+                "白と読ませる誤導は、読み手がその資産の話だと分かって初めて成立します"
             )
 
 

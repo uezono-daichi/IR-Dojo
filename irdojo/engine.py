@@ -20,6 +20,7 @@ from .schema import (
     AssistProfile,
     Criticality,
     Scenario,
+    names_asset,
 )
 
 
@@ -246,18 +247,39 @@ class PhaseView(BaseModel):
 
 
 class AssetView(BaseModel):
-    """資産。被疑判定の選択肢であり、環境の構成図の材料でもある。
+    """資産。被疑判定の選択肢であり、資産盤（7.6.16）の材料でもある。
 
     `depends_on` は隠さない。自組織の構成は担当者が知っていて当然のもので、
     伏せると「構成を知らない人だけが上流を止めて痛い目を見る」という、
     判断ではなく知識を測る形になる（3.10）。
     `business_impact_per_hour` は採点の内部値なので渡さない。
+
+    後半の5つは**注意の配分の写像**である（7.6.16）。真実は一切使わない —
+    どれも「学習者が何をしたか」「学習者が手元に何を持っているか」の数え直しで、
+    盤面の側の事実は1つも入っていない。
     """
 
     id: str
     label: str
     criticality: Criticality
     depends_on: list[str]
+
+    # 自分が実行した手のうち、この資産に手を当てた数（targets ∪ investigates
+    # ∪ eradicates）。**押した手だけを数える。** 押していない手の射程は
+    # 決して漏らさないので、開始時点では全資産が 0 になる。
+    # 自分の履歴を数え直した消化なので、hard では None（3.10）
+    touched: int | None
+    # 手元の証拠のうち、本文がこの資産を名指ししている数。
+    # **`points_to` は使わない。** 使うのは `content` の文字列照合だけで、
+    # 学習者が自分で Ctrl-F すれば得られるものしか出さない（7.4 / 7.6.16）。
+    # hard では None
+    mentions: int | None
+    # 止めた・取り除いた・業務が止まった。**この3つは常に渡す** —
+    # 押した瞬間に `ActionOutcome` が全レベルで告げている事実であり、
+    # 盤に出しても新しいことは何も渡していない
+    contained: bool
+    eradicated: bool
+    halted: bool
 
 
 class PlayerView(BaseModel):
@@ -796,6 +818,27 @@ def build_view(
         if a.phase in unlocked and _unlocked_by(a, got, done)
     ]
 
+    # ── 注意の配分（SPEC 7.6.16）。真実は使わない ──
+    # 押した手だけを数える。押していない手の射程は数に現れないので、
+    # 「まだ選べる手が何を見に行くか」は盤からは読めない
+    touched: dict[str, int] = {}
+    for aid in dict.fromkeys(state.executed_actions):
+        act = scenario.action_by_id.get(aid)
+        if act is None:
+            continue
+        for asset_id in set(act.targets) | set(act.investigates) | set(act.eradicates):
+            touched[asset_id] = touched.get(asset_id, 0) + 1
+
+    # 手元の証拠の本文が名指ししている数。`points_to` は見ない —
+    # 学習者が自分で読めば分かることしか出さない（7.4）
+    mentions: dict[str, int] = {}
+    for asset in scenario.world.assets:
+        mentions[asset.id] = sum(
+            1
+            for eid in state.obtained_evidence
+            if eid in by_id and names_asset(by_id[eid].content, asset)
+        )
+
     phase_ids = [p.id for p in scenario.phases]
     idx = phase_ids.index(state.current_phase)
     current = scenario.phases[idx]
@@ -837,6 +880,11 @@ def build_view(
                 label=a.label,
                 criticality=a.criticality,
                 depends_on=list(a.depends_on),
+                touched=touched.get(a.id, 0) if profile.show_topology else None,
+                mentions=mentions.get(a.id, 0) if profile.show_topology else None,
+                contained=(a.id in state.contained_at),
+                eradicated=(a.id in state.eradicated_at),
+                halted=(a.id in state.halted_at),
             )
             for a in scenario.world.assets
         ],

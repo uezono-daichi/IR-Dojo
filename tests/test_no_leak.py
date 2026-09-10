@@ -1331,3 +1331,96 @@ def test_the_debrief_says_when_nothing_was_left_behind(client):
     assert c["still_persistent"] == []
     assert c["eradicated"]
     assert c["factor"] == c["best_factor"]
+
+
+# ─────────── 資産盤（SPEC 7.6.16） ───────────
+
+
+def test_the_board_counts_mentions_from_the_text_not_from_points_to(any_scenario):
+    """盤の「証」は、学習者が自分でやれる文字列探しと同じ数になる。
+
+    `points_to` は「この証拠はどの資産を示唆するか」という**構造化された答え**で、
+    要約より強いヒントになる（SPEC 7.4）。盤に出すために向こう側を覗くと、
+    キー名を検査するだけの漏洩テストは素通りしたまま、答えの形だけが漏れる。
+
+    見分けが付くのは、`points_to` に載っているのに本文が名前を出していない
+    証拠である。そこを数えていたら、盤は本文以上のことを知っている。
+    """
+    from irdojo.engine import Engine
+    from irdojo.schema import names_asset
+
+    e = Engine(any_scenario)
+    # 全部手に入れた状態を作る（盤の数が最大になるところで比べる）
+    e.state.obtained_evidence = [ev.id for ev in any_scenario.evidence]
+    board = {a.id: a.mentions for a in e.view().assets}
+
+    by_id = any_scenario.asset_by_id
+    text_only = {
+        aid: sum(1 for ev in any_scenario.evidence if names_asset(ev.content, by_id[aid]))
+        for aid in board
+    }
+    assert board == text_only, "盤の数が本文の照合と一致しない"
+
+
+
+def test_at_least_one_bundled_board_can_tell_the_two_apart():
+    """上の検査に歯があること。
+
+    本文が名指ししていないのに `points_to` に載っている証拠が同梱の
+    どこかに無いと、「本文を数えた」と「構造を数えた」が同じ数になり、
+    実装を取り違えても誰も気づかない。**1本目にはこの形が無い** —
+    2本目の mailbox がそれで、指しているのに本文は別の言葉で書いている。
+
+    ここが空になったら、上の検査は通っていても意味を失っている。
+    """
+    from irdojo.schema import names_asset
+
+    found = []
+    for sid in ("ransomware-initial-response-01", "oauth-consent-abuse-01"):
+        sc = load_scenario(sid)
+        by_id = sc.asset_by_id
+        for ev in sc.evidence:
+            for aid in ev.points_to:
+                if not names_asset(ev.content, by_id[aid]):
+                    found.append((sid, ev.id, aid))
+    assert found, "本文が名指ししない points_to が同梱に1つも無く、検査に歯が無い"
+
+
+def test_counting_mentions_does_not_find_the_answer(any_scenario):
+    """「言及の多い資産を名指しする」は、正解の近道にならない。
+
+    盤に数を出す以上、学習者はそれを強さの目安に使う。使えてしまうなら、
+    盤はログを読まずに点が取れる装置になり、原則2 を破る。
+
+    見るのは、全証拠を手に入れた最良の状態で、言及の多い順に
+    侵害と同じ数だけ名指ししたときに真実と一致しないこと。
+    **一致する盤面を出荷したら、この検査が落ちる。**
+
+    同梱1本目では dc01（4件）と ws-113（5件）が無実のまま上位に来て、
+    侵害されている ws-055 は3件で下にいる。数の多さは注意の量であって、
+    疑いの強さではない。
+    """
+    from irdojo.engine import Engine
+
+    e = Engine(any_scenario)
+    e.state.obtained_evidence = [ev.id for ev in any_scenario.evidence]
+    board = {a.id: a.mentions for a in e.view().assets}
+
+    truth = set(any_scenario.world.ground_truth.compromised)
+    ranked = sorted(board, key=lambda aid: (-board[aid], aid))
+    guess = set(ranked[: len(truth)])
+    assert guess != truth, f"言及数の上位がそのまま答えになっている: {sorted(guess)}"
+
+
+def test_the_board_never_shows_the_reach_of_a_hand_not_yet_pressed(client):
+    """まだ押していない手が何を見に行くかは、盤にも API にも出さない。
+
+    `investigates` / `targets` を渡さないのは「押す前に配ると選択が賭けで
+    なくなる」からである（SPEC 7.4）。盤はそれを**押したあとに**数え直すので、
+    1手も押していない時点では、どの資産も 0 でなければならない。
+    """
+    sc = load_scenario("oauth-consent-abuse-01")
+    created = client.post("/api/session", json={"scenario_id": sc.meta.id}).json()
+    assert_clean(created, "POST /api/session")
+    assert [a["touched"] for a in created["view"]["assets"]] == [0] * len(sc.world.assets)
+    assert [a["mentions"] for a in created["view"]["assets"]] == [0] * len(sc.world.assets)

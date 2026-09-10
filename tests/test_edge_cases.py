@@ -1285,3 +1285,112 @@ def test_loader_rejects_a_deadlock_that_crosses_the_two_gates(raw):
         build(data)
     assert "到達できない" in str(exc.value)
     assert "act_memory_analyze_ws042" in str(exc.value)
+
+
+# ─────────── 資産盤（SPEC 7.6.16） ───────────
+
+
+def test_the_loader_rejects_an_asset_no_action_can_touch(raw):
+    """どの手も触れない資産を拒否する。
+
+    盤は資産ごとに「あなたが押した手のうち、この資産に手を当てた数」を出す。
+    触りに行く手が盤面に1つも無い資産があると、そこは**何をしても 0 のまま**で、
+    学習者は自分が飛ばしたのだと読む。実際には飛ばしようがない。
+
+    盤が無かった頃も同じ穴は開いていた — 被疑判定の選択肢には並ぶのに、
+    根拠を取りに行く手段が無い。名指しを求めておいて調べさせないのは、
+    判断ではなく勘を測っている。
+    """
+    data = copy.deepcopy(raw)
+    data["world"]["assets"].append({
+        "id": "ws-900",
+        "label": "総務部端末 (未使用)",
+        "criticality": "low",
+        "business_impact_per_hour": 100,
+        "depends_on": ["dc01"],
+    })
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "どのアクションも触れない資産" in str(exc.value)
+    assert "ws-900" in str(exc.value)
+
+
+def test_the_loader_rejects_a_clears_that_never_names_its_asset(raw):
+    """白と読ませる誤導は、その資産を本文で名指ししていること。
+
+    読み手が「この端末の話だ」と分かって初めて「この端末は白だ」に化ける。
+    本文が名前を出さないなら、誰もその一般化をしない — 罠は置かれているのに、
+    誰も踏まない。**盤の「言及」も本文の文字列照合で数える**ので、
+    名指しの無い `clears` は盤にも読み手にも現れない。
+    """
+    data = copy.deepcopy(raw)
+    ev = _set_ev(data, "ev_020")
+    ev["content"] = ev["content"].replace("ws-055", "当該端末").replace(
+        "WS-055", "当該端末"
+    )
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "content が名指ししていません" in str(exc.value)
+
+
+def test_the_board_counts_only_the_hands_the_learner_pressed(scenario):
+    """盤の数は、押した手の写像でしかない。
+
+    **押していない手の射程は盤に出ない。** 出せば「この手は dc01 を見に行く」と
+    押す前に教えることになり、選択が賭けでなくなる（SPEC 7.4）。
+    開始時点でどの資産も 0 であること、1手押したらその手が触れた資産だけが
+    増えることを見る。
+    """
+    e = Engine(scenario, "business_continuity", None)
+    before = {a.id: a.touched for a in e.view().assets}
+    assert set(before.values()) == {0}, "押す前から数がある"
+
+    act = scenario.action_by_id["act_dc_authlog"]
+    hit = set(act.targets) | set(act.investigates) | set(act.eradicates)
+    assert hit, "前提が崩れている（この手はどの資産にも触れない）"
+
+    e.decide(Decision(kind="action", action_id=act.id))
+    after = {a.id: a.touched for a in e.view().assets}
+    grew = {aid for aid in after if after[aid] > before[aid]}
+    assert grew == hit, f"増えた資産が手の射程と違う: {sorted(grew)} ≠ {sorted(hit)}"
+    assert all(after[aid] == 1 for aid in grew), "1手で2つ以上数えている"
+
+
+def test_the_board_is_withheld_where_digested_views_are(scenario):
+    """hard には盤の数を渡さない。世界の事実は取り上げない。
+
+    盤は**自分の行動を1枚に消化して見せる装置**である。消化された見せ方は
+    hard が奪う側にあり、構成図・被害グラフ・論点一覧と同じ扱いになる（3.10）。
+
+    取り上げないのは世界の側の事実 — `depends_on` は hard でも渡す。
+    両方消すと、hard だけが構成を知らずに上流を止めて事故る演習になる。
+    """
+    from irdojo.schema import AssistLevel
+
+    e = Engine(scenario, "business_continuity", AssistLevel.HARD)
+    e.decide(Decision(kind="action", action_id="act_dc_authlog"))
+    for a in e.view().assets:
+        assert a.touched is None and a.mentions is None, f"{a.id} に数が出ている"
+    assert any(a.depends_on for a in e.view().assets), "依存関係まで消えている"
+
+
+def test_the_board_only_repeats_what_the_outcome_already_said(scenario):
+    """止めた・取り除いた・止まったは、押した瞬間に告げてある事実。
+
+    盤はそれを並べ直すだけで、新しいことを1つも渡さない。だから
+    hard でも隠さない。ここが食い違うと、盤が結果の箱より先に
+    何かを知っていることになる。
+    """
+    e = Engine(scenario, "business_continuity", None)
+    e.decide(Decision(kind="action", action_id="act_netflow_overview"))
+    e.decide(Decision(kind="declare_assessment", assessment=["ws-042"]))
+    out = e.decide(Decision(kind="action", action_id="act_shutdown_fs01"))
+
+    board = {a.id: a for a in e.view().assets}
+    for aid in out.contained:
+        assert board[aid].contained, f"{aid} を止めたのに盤が言わない"
+    for aid in out.halted:
+        assert board[aid].halted, f"{aid} が止まったのに盤が言わない"
+    # 告げていないものを盤が勝手に足していないこと
+    said = set(out.contained)
+    assert {a.id for a in board.values() if a.contained} == said

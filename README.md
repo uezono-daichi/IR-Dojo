@@ -109,7 +109,7 @@ critical 論点の数、証拠数からローダが算出する。
 
 ```
 pip install -e ".[dev]"
-pytest                                   # 240本
+pytest                                   # 261本
 ```
 
 - `tests/test_scoring.py` — SPEC 6.8 の計算例をそのまま検証する
@@ -125,6 +125,7 @@ python tools/balance.py                  # 設計の均衡（SPEC 8.3 のチェ�
 python tools/balance.py <シナリオID>     # 同梱のどれでも
 npm install
 node tools/playtest.mjs --dpr 2 --scenario <シナリオID>   # 実際に遊ぶ＋スクショ
+node tools/playtest.mjs --dpr 2 --assist hard            # hard は画面の作りが一番変わる
 ```
 
 `tools/balance.py` はプレイ像（巧い / 止めるだけ / 全部押す / 誤導を追う /
@@ -144,6 +145,8 @@ node tools/playtest.mjs --dpr 2 --scenario <シナリオID>   # 実際に遊ぶ�
 canvas の暴走・アクションの画面外への押し出しを拾ってスクリーンショットを撮る。
 **canvas を含む画面は dpr 2 でも必ず確認する** — dpr 1 だけの検証は
 Retina で必ず起きる不具合を素通りさせる（SPEC 7.6.9）。
+`--assist hard` も通す — グラフも論点も資産盤も出ないので、
+他のレベルで整っていても hard だけ崩れることがある。
 
 ### Claude Code で作業する
 

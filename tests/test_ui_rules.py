@@ -293,3 +293,90 @@ def test_the_screen_does_not_decide_which_way_the_misdirection_went(app_js):
     assert "cf.direction" in block, "向きの分岐が direction を読んでいない"
     assert "assessment" not in block, "画面が名指しから向きを判定している"
 
+
+
+# ── 資産盤（SPEC 7.6.16） ──────────────────────────────
+
+
+def test_the_topology_is_drawn_in_exactly_one_place(app_js, index_html):
+    """構成図の描き先は1つに畳んだ。**モーダルは廃した**（v1.44）。
+
+    プレイ中の構成図はヘッダの「構成」から開くモーダルにあり、
+    開かない限り存在しないのと同じだった。学習者は「120分使って
+    dc01 に一度も触れていない」ことに最後まで気づけない。
+
+    盤に統合したので、モーダルとボタンは残さない。残すと同じ図が
+    2つの経路から描かれ、片方だけ古くなる。
+    """
+    body = strip_comments(app_js)
+    assert "modal-topo" not in index_html and "btn-show-topo" not in index_html, (
+        "構成のモーダルが残っている"
+    )
+    assert "modal-topo" not in body and "btn-show-topo" not in body
+    # 盤の入れ物を組み立てる場所は1つ
+    assert body.count("el('details', 'board')") == 1, "盤の枠を作る場所が1つではない"
+
+
+def test_the_board_and_its_sample_come_from_the_same_function(app_js):
+    """凡例の盤も、本物と同じ関数から出る（SPEC 7.6.7）。
+
+    ここは一度腐らせている（フェーズ帯が3段のまま残った）。盤は記号が
+    4つある — 手・証・止・除 — ので、見本を手で書くと必ずどれかが古くなる。
+    """
+    body = strip_comments(app_js)
+    legend = body[body.index("function renderLegend"):body.index("function renderFlow")]
+    assert "boardBox(" in legend, "凡例が盤の部品を使っていない"
+    assert "renderTopology(" in legend, "凡例が本物の図を描いていない"
+    play = body[body.index("function renderBoard"):]
+    play = play[: play.index("\n}\n") + 3]
+    assert "boardBox(" in play and "renderTopology(" in play
+
+
+def test_the_meaning_of_every_mark_is_stated_in_one_place(app_js):
+    """記号の意味は1箇所で言う（SPEC 7.6.7「画面の記号に意味を与える」）。
+
+    盤の中の説明と凡例の説明が別々に書けると、片方だけ直したときに
+    「止」の意味が画面の中で2つになる。意味を作る関数は1つに畳んでおく。
+    """
+    body = strip_comments(app_js)
+    assert body.count("function boardKey") == 1
+    key = body[body.index("function boardKey"):]
+    key = key[: key.index("\n}")]
+    for mark in ("線", "手", "証", "止", "除"):
+        assert mark in key, f"記号 {mark} の意味が盤の中で言われていない"
+
+
+def test_the_board_does_not_urge_the_learner_to_press_more(app_js):
+    """盤は促さない。0 を警告色にしない（SPEC 6.6）。
+
+    網羅は「高くつく」べきであって「正解」ではない。触れていない資産を
+    赤や琥珀で立てると、盤が「全部押せ」と教えることになる。
+    薄くするところまでが写像で、そこから先は指示である。
+    """
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    line = [ln for ln in css.split("\n") if ".tally.none" in ln]
+    assert line, "触れていない資産の見せ方が決まっていない"
+    assert "--bad" not in line[0] and "--warn" not in line[0], (
+        "触れていない資産が警告色になっている: " + line[0]
+    )
+
+
+# ── 次に狙う層（SPEC 3.11 / 7.6.13） ─────────────────────
+
+
+def test_the_screen_does_not_compose_the_next_target_line(app_js):
+    """次の的の文面は、画面が組み立てない（v1.44）。
+
+    画面で作れる形にしておくと、いつか誰かが「方針適合 84 → 90」を足す。
+    **数字を主語にした瞬間、次のプレイはスコア最大化ゲームになる**（1.3）。
+    サーバ側には算用数字を1文字も書かせない検査があるので、
+    組み立てをそちらに寄せておけば、規則が1箇所で効く。
+    """
+    body = strip_comments(app_js)
+    i = body.index("if (rep.next_target)")
+    block = body[i : body.index("\n  }", i)]
+    assert "headline" in block and "note" in block, "サーバの文面を使っていない"
+    for forbidden in ("fact_score", "policy_score", "composite_score", "+ '"):
+        assert forbidden not in block, (
+            f"画面が次の的の文面を組み立てている: {forbidden}"
+        )

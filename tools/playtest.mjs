@@ -23,6 +23,9 @@ const OUT = args.out || '.playtest';
 const BASE = args.base || 'http://127.0.0.1:8000';
 const PROFILE = args.profile || 'wanderer';
 const SCENARIO = args.scenario || '(一覧の先頭)';
+// アシストレベル。**hard は画面の作りが一番変わる** — グラフも論点も資産盤も
+// 出ないので、他のレベルで整っていても hard だけ崩れることがある
+const ASSIST = args.assist || '(既定)';
 
 mkdirSync(OUT, { recursive: true });
 
@@ -38,8 +41,10 @@ page.on('pageerror', e => note('error', 'js', e.message));
 page.on('console', m => { if (m.type() === 'error') note('error', 'console', m.text()); });
 page.on('requestfailed', r => note('error', 'network', `${r.url()} ${r.failure()?.errorText}`));
 
+const TAG = args.assist ? `${args.assist}.dpr${DPR}` : `dpr${DPR}`;
+
 async function shot(name) {
-  const path = join(OUT, `${name}.dpr${DPR}.png`);
+  const path = join(OUT, `${name}.${TAG}.png`);
   await page.screenshot({ path, fullPage: false });
   shots.push(path);
   return path;
@@ -177,6 +182,15 @@ if (args.scenario) {
     if (!on) note('error', 'select', `カードを押しても選択が切り替わらない（${args.scenario}）`);
   }
 }
+if (args.assist) {
+  const sel = `#assist-list input[value="${args.assist}"]`;
+  if (!(await page.$(sel))) {
+    note('error', 'select', `アシスト ${args.assist} が選べない`);
+  } else {
+    await page.check(sel);
+    await page.waitForTimeout(80);
+  }
+}
 await screen('02-select');
 
 await page.click('#btn-start');
@@ -259,6 +273,11 @@ for (let i = 0; i < 10; i++) {
   if (!b) break;
   await b.click(); await page.waitForTimeout(140);
 }
+// 止めた・取り除いたが盤に出ている状態。**ここでしか撮れない** —
+// 講評へ進むと盤は消え、答え合わせの側の表示に変わる（SPEC 7.6.16）
+await page.evaluate(() => window.scrollTo(0, 0));
+await page.waitForTimeout(150);
+await screen('08b-contained');
 await page.click('#btn-finish').catch(() => {});
 await page.waitForTimeout(300);
 await page.click('#btn-finish-confirm').catch(() => {});
@@ -336,14 +355,14 @@ if (!(await page.$('#screen-debrief.active'))) {
 }
 
 const summary = {
-  dpr: DPR, profile: PROFILE, scenario: SCENARIO, base: BASE,
+  dpr: DPR, profile: PROFILE, assist: ASSIST, scenario: SCENARIO, base: BASE,
   moves: log.length, log, shots,
   findings,
   passed: !findings.some(f => f.severity === 'error'),
 };
-writeFileSync(join(OUT, `playtest.dpr${DPR}.json`), JSON.stringify(summary, null, 2));
+writeFileSync(join(OUT, `playtest.${TAG}.json`), JSON.stringify(summary, null, 2));
 
-console.log(`■ プレイ ${log.length} 手 / dpr ${DPR} / シナリオ ${SCENARIO}`);
+console.log(`■ プレイ ${log.length} 手 / dpr ${DPR} / アシスト ${ASSIST} / シナリオ ${SCENARIO}`);
 for (const e of log) {
   if (e.incoming.length) console.log(`  ${e.at}  ★ ${e.incoming.join(' / ')}`);
 }
@@ -351,7 +370,7 @@ console.log(`\n■ 機械的に拾えたもの`);
 if (!findings.length) console.log('  なし');
 for (const f of findings) console.log(`  [${f.severity}] ${f.where}: ${f.what}`);
 console.log(`\n  スクリーンショット: ${OUT}/  （${shots.length}枚）`);
-console.log(`  詳細: ${join(OUT, `playtest.dpr${DPR}.json`)}`);
+console.log(`  詳細: ${join(OUT, `playtest.${TAG}.json`)}`);
 
 await browser.close();
 process.exit(summary.passed ? 0 : 1);
