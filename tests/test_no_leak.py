@@ -26,6 +26,9 @@ FORBIDDEN_KEYS = {
     # 答えそのもの
     "ground_truth", "compromised", "persistence", "innocent",
     "patient_zero", "attack_narrative", "misleading", "refuted_by",
+    # 棄却の条件も答えの側。「2つ揃わないと棄却できない」と分かれば、
+    # その誤導が誤導であることを言ったのと同じになる
+    "refutation_mode",
     # 選択を賭けでなくする構造化情報
     "points_to", "yields", "destroys", "investigates", "targets",
     # 何を防げるかは答えの側。ラベルが世界の言葉で何をするかを言えば足りる

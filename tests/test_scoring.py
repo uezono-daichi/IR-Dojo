@@ -100,9 +100,9 @@ def test_fact_metrics(scenario):
 
 def test_composite(scenario):
     r = scoring.score(play_spec_68(scenario).state, scenario)
-    assert r.policy_score == pytest.approx(0.554, abs=0.001)
-    assert r.composite_score == pytest.approx(0.563, abs=0.001)
-    assert round(r.composite_score * 100) == 56
+    assert r.policy_score == pytest.approx(0.578, abs=0.001)
+    assert r.composite_score == pytest.approx(0.570, abs=0.001)
+    assert round(r.composite_score * 100) == 57
 
 
 def test_dependency_chain_variant(scenario):
@@ -120,11 +120,11 @@ def test_dependency_chain_variant(scenario):
         "dc01": 180, "fs01": 180, "ws-042": 180, "ws-107": 180, "ws-113": 180,
     }
     r = scoring.score(e.state, scenario)
-    assert r.consequences.business_impact == pytest.approx(1127.00, abs=0.01)
+    assert r.consequences.business_impact == pytest.approx(1339.33, abs=0.01)
     assert r.consequences.evidence_preserved == pytest.approx(1.000, abs=0.001)
     # fs01 が封じ込められていないので完全度は 0.5、減衰も on_partial 止まり
     assert r.consequences.containment_completeness == pytest.approx(0.500, abs=0.001)
-    assert r.policy_score == pytest.approx(0.301, abs=0.001)
+    assert r.policy_score == pytest.approx(0.317, abs=0.001)
     assert round(r.composite_score * 100) == 49
 
 
@@ -139,7 +139,7 @@ def test_same_play_scores_differently_per_policy(scenario):
     assert got["damage_minimization"].constraint_violations == 0
     assert got["evidence_preservation"].constraint_violations == 0
 
-    assert round(got["business_continuity"].composite_score * 100) == 56
+    assert round(got["business_continuity"].composite_score * 100) == 57
     assert round(got["damage_minimization"].composite_score * 100) == 58
     assert round(got["evidence_preservation"].composite_score * 100) == 61
 
@@ -167,6 +167,57 @@ def test_counterfactual_reports_held_refutation(scenario):
     assert cfs[0].evidence_id == "ev_007"
     assert cfs[0].refuting_evidence == []       # ev_003 は取得済み
     assert cfs[0].refuting_obtained == ["ev_003"]
+
+
+def test_refutation_needs_every_piece_when_mode_is_all(scenario):
+    """揃って初めて棄却できる誤導は、片方だけ持っていても棄却されない。
+
+    ev_005（ws-113 の深夜の管理者ログオン）は、承認済みの作業予定（ev_008）と
+    端末側の実行履歴（ev_013）が揃って初めて取り下げられる。台帳が言うのは
+    「その時間帯に作業が承認されていた」ことであって、記録されたログオンが
+    その作業だったことではない — 攻撃者が保守作業の時間帯に紛れるのは
+    実務でよくある形である。逆に端末側だけでも足りない（収集範囲の外に
+    メモリ上の痕跡と手動操作が残っている）。
+
+    片方で棄却できてしまうと、この誤導は台帳1枚（10分）で畳めることになり、
+    盤面が教えたいこと（否定の材料は1つでは閉じない）が消える。
+    """
+    ev = scenario.evidence_by_id["ev_005"]
+    assert ev.refutation_mode == "all"
+    assert not ev.is_refuted({"ev_008"})
+    assert not ev.is_refuted({"ev_013"})
+    assert ev.is_refuted({"ev_008", "ev_013"})
+
+    # 同じ盤面に「1つで足りる」型も居ること。どちらか一方しか無い盤面では、
+    # refutation_mode は書いてあるだけで何も分けていない
+    one_shot = scenario.evidence_by_id["ev_007"]
+    assert one_shot.refutation_mode == "any"
+    assert one_shot.is_refuted({"ev_003"})
+
+
+def test_counterfactual_does_not_call_a_half_refutation_enough(scenario):
+    """all の誤導で片方しか持っていない人に「材料は手元にあった」と言わない。
+
+    講評の言い回しは refuted（棄却できたか）で決まる。ここを画面側が
+    「未取得が残っているか」で判断すると、any で候補が2つある誤導に
+    「これだけでは足りません」と出る。条件を知っているのは
+    Evidence.is_refuted だけなので、結論はエンジン側で出して渡す。
+    """
+    e = Engine(scenario, "business_continuity", None)
+    e.decide(Decision(kind="action", action_id="act_dc_authlog"))      # ev_005
+    e.decide(Decision(kind="action", action_id="act_asset_inventory"))  # ev_008
+    e.decide(Decision(kind="declare_assessment", assessment=["ws-113"]))
+    e.decide(Decision(kind="finish"))
+
+    cfs = [c for c in retrospective.build(e.state, scenario).counterfactuals
+           if c.evidence_id == "ev_005"]
+    assert len(cfs) == 1
+    cf = cfs[0]
+    assert cf.refutation_mode == "all"
+    assert cf.refuted is False               # 台帳だけでは足りていない
+    assert cf.refuting_obtained == ["ev_008"]
+    assert cf.refuting_evidence == ["ev_013"]
+    assert cf.obtainable_by                   # 取りに行ける手が盤面にある
 
 
 def test_assist_level_does_not_change_scoring(scenario):
@@ -306,7 +357,7 @@ def test_complexity_ignores_orthogonal_findings(scenario):
     from irdojo.schema import bearing_evidence, compute_complexity
 
     assert len(bearing_evidence(scenario)) < len(scenario.evidence)
-    assert compute_complexity(scenario) == 2
+    assert compute_complexity(scenario) == 3
 
 
 def test_action_labels_carry_no_parenthetical_hints(scenario):

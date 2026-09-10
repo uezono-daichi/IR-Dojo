@@ -1455,15 +1455,30 @@ function blockCounterfactuals(rep) {
       '⚠ ' + cf.evidence_id + '（' + cf.evidence_summary + '）を根拠に ' +
       cf.asset_id + ' を被疑と判定しました。'));
     if (cf.explanation) { prose(note.appendChild(el('div')), cf.explanation, 'dim'); }
-    if (cf.refuting_evidence.length) {
-      note.appendChild(el('p', null,
-        '→ ' + cf.refuting_evidence.join(', ') + ' を取得していれば棄却できました。' +
-        (cf.obtainable_by.length ? '（' + cf.obtainable_by.join(' / ') + '）' : '')));
-    }
-    if (cf.refuting_obtained.length) {
+    /* 棄却の条件は誤導ごとに違う（refutation_mode）。**足りたかどうかは
+       画面が判定しない** — cf.refuted が答えを持っている。未取得が
+       残っているかで画面が決めていると、候補が2つある any の誤導
+       （1つ持てば足りる）に「これだけでは足りません」と出てしまう */
+    var every = cf.refutation_mode === 'all';
+    if (cf.refuted) {
       note.appendChild(el('p', null,
         '→ ' + cf.refuting_obtained.join(', ') +
         ' は取得済みでした。棄却の材料は手元にありました。'));
+    } else if (cf.refuting_evidence.length) {
+      if (cf.refuting_obtained.length) {
+        note.appendChild(el('p', null,
+          '→ ' + cf.refuting_obtained.join(', ') +
+          ' は取得済みでしたが、これだけでは棄却に足りませんでした。'));
+      }
+      /* 「すべて」と言ってよいのは、残りが2件以上あるときだけ。
+         1件しか足りていない人に「すべて取得していれば」と言うと、
+         何件足りないのかが読めなくなる */
+      var tail = cf.refuting_evidence.length > 1 && every ? ' をすべて取得していれば'
+        : cf.refuting_obtained.length ? ' も取得していれば'
+        : ' を取得していれば';
+      note.appendChild(el('p', null,
+        '→ ' + cf.refuting_evidence.join(', ') + tail + '棄却できました。' +
+        (cf.obtainable_by.length ? '（' + cf.obtainable_by.join(' / ') + '）' : '')));
     }
     b.appendChild(note);
   });

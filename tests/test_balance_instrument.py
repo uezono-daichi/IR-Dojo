@@ -459,3 +459,110 @@ def test_the_cheapest_cover_reaches_for_eradication_when_asked(balance):
     # 根絶まで行くほうが高い。安いほうが選ばれていないことの裏取り
     assert (sum(by_id[a].cost_minutes for a in purging)
             > sum(by_id[a].cost_minutes for a in plain))
+
+
+def test_the_play_image_reads_refutation_the_same_way_the_engine_does(balance):
+    """棄却の条件を読む場所を1つにする（Evidence.is_refuted）。
+
+    複雑度の算出（SPEC 3.12）は refuted_by を「2つ揃って初めて棄却できる」＝
+    AND と読み、この像の `_assess` は「どれか1つで棄却できる」＝ OR と
+    読んでいた（v1.38 まで）。現行シナリオは誤導の refuted_by がどちらも
+    1件だったので露出していなかっただけで、all の誤導を1つ置いた瞬間に
+    「複雑度は多段と数えているのに、実測は台帳1枚で棄却できている」
+    という食い違いになる。
+
+    見張り方は、**片方だけ持った像が名指しを取り下げないこと**。
+    ここが取り下げるなら、像は棄却の条件を独自に読んでいる。
+    """
+    from irdojo.engine import Decision, Engine
+
+    sc = load_scenario("ransomware-initial-response-01")
+
+    def named(*action_ids):
+        e = Engine(sc, sc.meta.default_policy, None)
+        for aid in action_ids:
+            e.decide(Decision(kind="action", action_id=aid))
+        return set(balance._assess(sc, e.state, weighs_refutations=True))
+
+    # ev_005 だけ → ws-113 を名指しする
+    assert "ws-113" in named("act_dc_authlog")
+    # ＋台帳（ev_008）。all の誤導なので、まだ取り下げられない
+    assert "ws-113" in named("act_dc_authlog", "act_asset_inventory")
+    # ＋端末のトリアージ（ev_013）で揃う
+    assert "ws-113" not in named(
+        "act_dc_authlog", "act_asset_inventory", "act_triage_ws113"
+    )
+    # any の誤導は1つで足りる（同じ像が両方の型を正しく読む）
+    assert "ws-107" in named("act_netflow_overview")
+    assert "ws-107" not in named("act_netflow_overview", "act_backup_config")
+
+
+def test_the_price_of_stopping_an_innocent_asset_has_teeth(balance):
+    """「無実の資産を止めることに値段がある」が、値段の無い盤面で落ちること。
+
+    v1.38 の端末は一律 2〜4/h で、帯の worst が 1200 だった。無実の端末を
+    8時間止めても業務継続最優先で 0.2点しか動かず、**誤導に乗って
+    無関係な部署を止めたことが、業務継続を選んだ学習者にさえ
+    返っていなかった。** その盤面をそのまま復元して、検査が落ちることを見る。
+
+    落ちない検査は、書いていないのと同じである。
+    """
+    import copy
+
+    import yaml
+
+    from irdojo.loader import SCENARIO_DIR, load_scenario_text
+
+    raw = yaml.safe_load(
+        (SCENARIO_DIR / "ransomware-initial-response-01.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    data = copy.deepcopy(raw)
+    for a in data["world"]["assets"]:
+        if a["id"] == "ws-107":
+            a["business_impact_per_hour"] = 2
+        if a["id"] == "ws-113":
+            a["business_impact_per_hour"] = 4
+    data["scoring"]["consequence_layer"]["normalization"]["business_impact"]["worst"] = 1200
+
+    cheap = load_scenario_text(yaml.safe_dump(data, allow_unicode=True))
+    report = balance.report(cheap)
+    assert not _named(report, "無実の資産を止めることに値段がある")["ok"]
+
+
+def test_the_price_of_an_innocent_stop_is_not_the_price_of_ten_more_minutes(balance):
+    """値段の測定に、その手にかかった時間の分を混ぜない。
+
+    素朴に「押した場合」と「押さなかった場合」を比べると、`cost_minutes`
+    の分だけ時計が進む。実測では 195分 → 205分 で 200分の出来事
+    （現場の再起動）を跨ぎ、証拠保全が 1.00 → 0.75 に落ちて 2.09点の差に
+    なっていた。**それは時計に歯があることの測定**であって、
+    無実の資産を止めた代価ではない。混ざったままだと、
+    per_hour を 0 にしても検査は通ってしまう。
+
+    見張り方は、**業務影響を持たない資産にしたら検査が落ちること**。
+    時間の分が混ざっていれば、per_hour が 0 でも差は残る。
+    """
+    import copy
+
+    import yaml
+
+    from irdojo.loader import SCENARIO_DIR, load_scenario_text
+
+    raw = yaml.safe_load(
+        (SCENARIO_DIR / "ransomware-initial-response-01.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    data = copy.deepcopy(raw)
+    for a in data["world"]["assets"]:
+        if a["id"] in ("ws-042", "ws-107"):
+            a["business_impact_per_hour"] = 0
+
+    free = load_scenario_text(yaml.safe_dump(data, allow_unicode=True))
+    costs = balance.innocent_containment_cost(free)
+    assert costs, "無実の資産を止める手が盤面から消えている"
+    for _aid, deltas in costs.items():
+        for pid, delta in deltas.items():
+            assert abs(delta) < 0.01, f"{pid}: 停止の値段が 0 でないのに per_hour は 0"

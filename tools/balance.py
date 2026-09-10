@@ -296,9 +296,15 @@ def _assess(sc: Scenario, state, *, weighs_refutations: bool) -> list[str]:
       - 手元の証拠が指す資産
 
     `refuted_by` は学習者に渡らないが、**棄却の材料そのもの**（定時ジョブの
-    台帳、パッチ作業の予定表）は証拠として手元にある。それを読んで
-    名指しを取り下げるかどうかが、この像の分かれ目である。
+    台帳、パッチ作業の予定表、当の端末を調べた結果）は証拠として手元にある。
+    それを読んで名指しを取り下げるかどうかが、この像の分かれ目である。
     `misleading` は見ない — 見た瞬間に「答えを知っている像」になる。
+
+    **棄却できたかどうかの判定は `Evidence.is_refuted` に持たせている。**
+    ここで `set(ev.refuted_by) & got` と書いていた頃は、複雑度の算出が
+    AND と読んでいる同じフィールドを、この像だけが OR で読んでいた。
+    2つ揃って初めて棄却できる誤導を置いた瞬間に、片方だけ持った像が
+    「棄却できた」ことになる（v1.39 で統一）。
     """
     got = set(state.obtained_evidence)
     by_id = sc.evidence_by_id
@@ -307,7 +313,7 @@ def _assess(sc: Scenario, state, *, weighs_refutations: bool) -> list[str]:
         ev = by_id.get(eid)
         if ev is None:
             continue
-        if weighs_refutations and set(ev.refuted_by) & got:
+        if weighs_refutations and ev.is_refuted(got):
             continue
         named |= set(ev.points_to)
     return [a.id for a in sc.world.assets if a.id in named]
@@ -624,6 +630,88 @@ def eradication_choice(sc: Scenario) -> dict[str, dict[str, int]]:
         combo = tuple(sorted(set(base) | {a.id}, key=order.index))
         if combo in sweep:
             out[a.id] = sweep[combo]
+    return out
+
+
+# ─────────── 無実の資産を止める代価（SPEC 6.3 / 8.3） ───────────
+
+
+def _score_combo(sc: Scenario, order: list[str], combo: tuple[str, ...]) -> dict[str, float]:
+    """同じ調査のあと、封じ込めの組だけを差し替えて 0〜100 で返す（丸めない）。
+
+    `containment_sweep` は整数に丸めているので、1点未満の差を見る用途には
+    使えない。**丸めた数字で「値段が付いている」を判定すると、
+    0.4点の差が 0点にも 1点にも見える。**
+    """
+    e = _play(sc, order, [], stop=True, patience=None,
+              weighs_refutations=True, contains_everything=False,
+              containment=list(combo))
+    return {
+        pol.id: scoring.score(e.state, sc, pol).composite_score * 100
+        for pol in sc.policies
+    }
+
+
+def innocent_containment_cost(sc: Scenario) -> dict[str, dict[str, float]]:
+    """最良の封じ込めに「無実の資産を止める手」を足したとき、**その停止**が幾らか。
+
+    **誤導に乗った代価は、方針適合層に現れなければならない。** 事実認識層
+    （適合率）は名指しの誤りを咎めるが、それは「そう書いた」ことへの罰で
+    あって、「無関係な部署の仕事を8時間止めた」ことへの罰ではない。
+    v1.38 の実測では、無実の端末を1台隔離しても業務継続最優先で
+    0.22点しか動かなかった（per_hour = 2、帯の worst = 1200）。
+    誤導を追うプレイが無実の端末を止めているのに、**業務継続を選んだ
+    学習者にさえ、その手が高くついたことが返っていなかった。**
+
+    上限も要る。ここが大きすぎると「隔離すること自体が損」になり、
+    根拠が固まる前でも止めてよいと言っている被害最小化最優先が
+    機能しなくなる。値段は付くが、隔離を禁じるほどではないこと。
+
+    **測るのは停止の分だけで、余分に使った10分の分は測らない。**
+    素朴に「押した場合」と「押さなかった場合」を比べると、その手の
+    `cost_minutes` の分だけ時計が進み、出来事を1つ跨いだかどうかが
+    差の大半を占める（実測では 195分→205分 で 200分の再起動を跨ぎ、
+    証拠保全が 1.00 → 0.75 に落ちて 2.09点の差になった）。それは
+    **時計に歯があること**の測定であって、既に別の検査が受け持っている。
+    ここが混ざると、per_hour を 0 にしても検査は通ってしまう。
+
+    同じ行動列・同じ時刻のまま、**無実の資産の業務だけが止まって
+    いなかったことにして**採点し直し、その差を取る。
+    """
+    innocent = set(sc.world.ground_truth.innocent)
+    extra = [
+        a.id for a in sc.actions
+        if a.type == ActionType.CONTAIN and a.targets and set(a.targets) <= innocent
+    ]
+    if not extra:
+        return {}
+    order_ids = [a.id for a in sc.actions if a.type == ActionType.CONTAIN]
+    plan = _skilled(sc)
+    sweep = containment_sweep(sc)
+    covering = {c: v for c, v in sweep.items() if _covers_compromised(sc, c)}
+    if not covering:
+        return {}
+
+    out: dict[str, dict[str, float]] = {}
+    for aid in extra:
+        deltas: dict[str, float] = {}
+        for pol in sc.policies:
+            base = max(covering.items(), key=lambda kv: kv[1][pol.id])[0]
+            if aid in base:
+                continue
+            plus = tuple(sorted(set(base) | {aid}, key=order_ids.index))
+            e = _play(sc, plan, [], stop=True, patience=None,
+                      weighs_refutations=True, contains_everything=False,
+                      containment=list(plus))
+            stopped = scoring.score(e.state, sc, pol).composite_score * 100
+            spared_state = e.state.model_copy(deep=True)
+            spared_state.halted_at = {
+                a: t for a, t in spared_state.halted_at.items() if a not in innocent
+            }
+            spared = scoring.score(spared_state, sc, pol).composite_score * 100
+            deltas[pol.id] = spared - stopped
+        if deltas:
+            out[aid] = deltas
     return out
 
 
@@ -981,6 +1069,27 @@ def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
                 + "・".join(f"{p.id[:4]} {choice[a][p.id]}" for p in sc.policies)
                 for a in ids
             ),
+        ))
+
+    # 無実の資産を止めることに値段が付いているか。
+    # 事実認識層は「そう書いた」ことを咎めるが、方針適合層が動かないと
+    # 「無関係な部署の仕事を8時間止めた」ことは誰にも返らない
+    innocent_cost = innocent_containment_cost(sc)
+    if innocent_cost:
+        top = max(
+            ((aid, pid, d) for aid, ds in innocent_cost.items() for pid, d in ds.items()),
+            key=lambda t: t[2],
+        )
+        out.append(Check(
+            0.5 <= top[2] <= 1.5,
+            "無実の資産を止めることに値段がある",
+            " / ".join(
+                f"{aid.replace('act_', '')}: "
+                + "・".join(f"{p[:4]} {d:+.2f}" for p, d in ds.items())
+                for aid, ds in innocent_cost.items()
+            )
+            + f"（最大 {top[2]:.2f}点 = {top[1]}。狙い 0.5〜1.5点。"
+            "下を割ると誤導の代価が方針に現れず、上を超えると隔離そのものが損になる）",
         ))
 
     # 方針を差し替えると評価が変わる（原則3）

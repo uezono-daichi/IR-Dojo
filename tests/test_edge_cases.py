@@ -175,6 +175,12 @@ def test_assessment_editable_but_snapshot_kept(scenario):
         (lambda d: [e.__setitem__("misleading", False) for e in d["evidence"]], "誤導証拠"),
         (lambda d: d["meta"].__setitem__("default_policy", "nope"), "default_policy"),
         (lambda d: d["evidence"][6].__setitem__("refuted_by", []), "棄却不能"),
+        # refutation_mode は誤導の棄却条件。誤導でない証拠に書いても効かない
+        (lambda d: d["evidence"][7].__setitem__("refutation_mode", "any"),
+         "misleading: true の証拠にのみ"),
+        # 候補1件の all は any と同じ挙動になるのに、複雑度だけがずれる
+        (lambda d: d["evidence"][6].__setitem__("refutation_mode", "all"),
+         "2件以上"),
         (lambda d: d["actions"][0].__setitem__("yields", ["ev_999"]), "未定義の証拠"),
         (lambda d: d["actions"][0].__setitem__("phase", "nope"), "未定義のフェーズ"),
         (lambda d: d["actions"][0].__setitem__("type", "communicate"), "communicate"),
@@ -202,7 +208,9 @@ def test_loader_ignores_author_written_complexity(raw):
     raw["meta"]["complexity"] = 5
     with pytest.warns(UserWarning, match="complexity"):
         sc = build(raw)
-    assert sc.complexity == 2  # 内容から算出した値が使われる
+    # 作者の書いた 5 ではなく、内容から算出した値が使われる
+    assert sc.complexity == compute_complexity(sc)
+    assert sc.complexity != 5
 
 
 def test_loader_uses_safe_load_only():
@@ -241,23 +249,51 @@ def test_expand_containment_takes_earliest_time():
 def test_complexity_matches_spec_table(raw):
     """SPEC 3.12 の想定表と一致するか。"""
     sc = build(raw)
-    assert compute_complexity(sc) == 2
+    assert compute_complexity(sc) == 3
 
     data = copy.deepcopy(raw)
     for e in data["evidence"]:
         if e.get("misleading"):
             e["plausibility"] = "high"
-    assert compute_complexity(build(data)) == 2
+    assert compute_complexity(build(data)) == 3
 
     # 誤導を増やすと上がる（作者が狙って設計できる）
     data = copy.deepcopy(raw)
     for e in data["evidence"]:
-        if e["id"] == "ev_013":          # ネガティブ所見を誤導に仕立て直す
+        if e["id"] in ("ev_017", "ev_019"):   # ネガティブ所見を誤導に仕立て直す
             e["misleading"] = True
             e["plausibility"] = "high"
             e["points_to"] = ["ws-113"]
             e["refuted_by"] = ["ev_008"]
-    assert compute_complexity(build(data)) == 3
+    assert compute_complexity(build(data)) == 4
+
+
+def test_complexity_counts_multi_step_by_mode_not_by_count(raw):
+    """「棄却に2つ以上の証拠を要する誤導」は refutation_mode が決める。
+
+    `len(refuted_by) >= 2` で数えていた頃は、**逃げ道が2本ある易しい誤導**
+    （any で候補が2つ）を多段と数えていた。棄却の材料が増えるほど
+    複雑度が上がるのは向きが逆で、作者が狙って設計できない。
+
+    この盤面では ev_005 が all の多段（台帳と端末が揃って初めて棄却できる）。
+    同じ refuted_by のまま any に倒すと、多段の項 1.0 が消えて★が1つ下がる。
+    """
+    assert compute_complexity(build(raw)) == 3
+
+    # 材料は同じで、条件だけ any に倒す → 多段ではなくなる
+    data = copy.deepcopy(raw)
+    for e in data["evidence"]:
+        if e["id"] == "ev_005":
+            e["refutation_mode"] = "any"
+    assert compute_complexity(build(data)) == 2
+
+    # 候補を1つに減らしても同じ（any で1件と、any で2件は同じ難しさ）
+    data = copy.deepcopy(raw)
+    for e in data["evidence"]:
+        if e["id"] == "ev_005":
+            e["refutation_mode"] = "any"
+            e["refuted_by"] = ["ev_008"]
+    assert compute_complexity(build(data)) == 2
 
 
 def test_repeated_action_rejected(scenario):

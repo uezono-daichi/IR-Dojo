@@ -163,7 +163,7 @@ class QuestionView(BaseModel):
 class EvidenceView(BaseModel):
     """学習者に見せる証拠。
 
-    misleading / refuted_by / points_to を含めない。
+    misleading / refuted_by / refutation_mode / points_to を含めない。
     points_to は「この証拠がどの資産を示唆するか」という構造化された答えであり、
     summary より強いヒントになる。
     """

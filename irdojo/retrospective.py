@@ -35,6 +35,16 @@ class Counterfactual(BaseModel):
     obtainable_by: list[str]          # その証拠を得られたアクションのラベル
     refuting_obtained: list[str]      # 取得済みだったのに反映されなかった証拠
     refuting_obtained_summaries: list[str]
+    # any = どれか1つで棄却できた / all = すべて揃って初めて棄却できた。
+    # **講評の言い回しが変わる。** all の誤導で片方だけ持っていた人に
+    # 「棄却の材料は手元にありました」と言うのは事実に反する
+    refutation_mode: str = "any"
+    # 宣言の時点の手元で、この誤導を棄却できたか。
+    # **画面に判定を書かせない。** 「未取得が残っているか」で画面が判断すると、
+    # any の誤導で候補が2つあるとき（1つ持っていれば足りる）に
+    # 「これだけでは足りませんでした」と出る。条件を知っているのは
+    # Evidence.is_refuted だけなので、結論はこちらで出して渡す
+    refuted: bool = False
 
 
 class UnresolvedItem(BaseModel):
@@ -246,6 +256,8 @@ def counterfactuals(state: GameState, scenario: Scenario) -> list[Counterfactual
                     refuting_obtained_summaries=[
                         by_id[r].summary for r in held if r in by_id
                     ],
+                    refutation_mode=ev.refutation_mode,
+                    refuted=ev.is_refuted(state.obtained_evidence),
                 )
             )
     return out

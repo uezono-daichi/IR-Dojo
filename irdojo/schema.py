@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from enum import Enum
 from typing import Literal
 
@@ -134,6 +135,38 @@ class Evidence(Strict):
     # 「だからこの資産は侵害されている」という推論は書かない（それは答え）。
     reading: str = ""
     refuted_by: list[str] = []
+    # 棄却の条件。`open_questions.resolution_mode` と同じ形で読む。
+    #   any … どれか1つ持っていれば棄却できる（既定）
+    #   all … すべて揃って初めて棄却できる
+    # `misleading: true` の証拠にだけ意味がある（ローダが他での指定を拒否する）。
+    refutation_mode: Literal["any", "all"] = "any"
+
+    def is_refuted(self, held: Collection[str]) -> bool:
+        """手元の証拠 `held` で、この誤導を棄却できるか。
+
+        **この判定を2箇所で別々に書いてはいけない。** 複雑度の算出（3.12）は
+        `refuted_by` を「2つ揃って初めて棄却できる」＝ AND と読み、
+        `tools/balance.py` のプレイ像は「どれか1つで棄却できる」＝ OR と
+        読んでいた（v1.38 まで）。同じフィールドを逆の意味で読む2箇所が
+        あると、誤導の型を1つ増やした瞬間に、複雑度と実測が食い違う。
+        条件は `refutation_mode` が言い、読むのはこの1本だけにする。
+        """
+        if not self.refuted_by:
+            return False
+        got = set(held)
+        if self.refutation_mode == "all":
+            return set(self.refuted_by) <= got
+        return bool(set(self.refuted_by) & got)
+
+    @property
+    def needs_every_refutation(self) -> bool:
+        """棄却に2つ以上の証拠を要する誤導か（SPEC 3.12 の「多段」）。
+
+        `any` で候補が2つあるのは**多段ではなく、逃げ道が2本ある**という
+        ことで、むしろ易しい。数え方を `len(refuted_by) >= 2` にしていた頃は
+        易しい誤導ほど複雑度を押し上げていた。
+        """
+        return self.refutation_mode == "all" and len(self.refuted_by) >= 2
 
 
 class OpenQuestion(Strict):
@@ -476,7 +509,9 @@ def compute_complexity(sc: "Scenario") -> int:
     """シナリオ内容から 1〜5 を算出する。YAML には書かせない。"""
     misleading = [e for e in sc.evidence if e.misleading]
     crit = [q for q in sc.open_questions if q.critical]
-    multi_step = [e for e in misleading if len(e.refuted_by) >= 2]
+    # 「棄却に2つ以上の証拠を要する誤導」は refutation_mode が決める。
+    # 件数だけで数えると、逃げ道が2本ある易しい誤導を多段と数えてしまう
+    multi_step = [e for e in misleading if e.needs_every_refutation]
     raw = (
         1.0 * len(misleading)
         + 0.5 * sum(PLAUSIBILITY_SCORE[e.plausibility] for e in misleading)
@@ -680,6 +715,20 @@ def _validate_scenario(sc: "Scenario") -> None:
                 raise ValueError(f"{e.id}: 自分自身を refuted_by に指定しています")
         if e.misleading and not e.refuted_by:
             raise ValueError(f"{e.id}: 誤導証拠に refuted_by がありません（棄却不能）")
+        # refutation_mode は「誤導をどう棄却するか」の条件なので、
+        # 誤導でない証拠に書いてあっても何も意味しない。黙って無視すると
+        # 作者は効いているつもりで書き続ける
+        if "refutation_mode" in e.model_fields_set and not e.misleading:
+            raise ValueError(
+                f"{e.id}: refutation_mode は misleading: true の証拠にのみ意味があります"
+            )
+        # 候補が1つしかない all は any と同じ挙動になる。書けてしまうと
+        # 複雑度の「多段」の数え方（3.12）だけが作者の意図とずれる
+        if e.refutation_mode == "all" and len(e.refuted_by) < 2:
+            raise ValueError(
+                f"{e.id}: refutation_mode: all には refuted_by が2件以上必要です"
+                "（1件なら any と同じ）"
+            )
 
     # 論点
     for q in sc.open_questions:
