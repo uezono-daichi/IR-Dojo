@@ -1,0 +1,195 @@
+"""画面が、自分の規則を守っているかを見張る（SPEC 7.6.15）。
+
+ここで見ているのは見た目ではなく、**画面が自分で自分の規則を教えられる形になっているか**である。
+
+- 押せるものには同じ記号が付いているか（片方だけ記号が消えていないか）
+- 見本は本物から作られているか（手で書いたモックは必ず腐る）
+- 数字が何であるかを、その数字の隣で言っているか
+
+実際に描いた DOM どうしの突き合わせは `tools/playtest.mjs` が行う
+（凡例と実画面のフェーズ帯・束の見出し・帯の見出しを比較する）。
+こちらは**そもそも二重に書ける形になっていないか**を、原稿の側で見る。
+"""
+
+import re
+from pathlib import Path
+
+import pytest
+
+WEB = Path(__file__).resolve().parent.parent / "web"
+
+
+@pytest.fixture(scope="module")
+def app_js() -> str:
+    return (WEB / "app.js").read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def index_html() -> str:
+    return (WEB / "index.html").read_text(encoding="utf-8")
+
+
+def strip_comments(js: str) -> str:
+    """コメントを落とす。規則の理由はコメントに書くので、検査の対象から外す。
+
+    行の途中の `//` も落とす。文字列の中に `//` を含むのは
+    名前空間 URL の1件だけで、その行が途中で切れても検査には響かない。
+    """
+    js = re.sub(r"/\*.*?\*/", "", js, flags=re.S)
+    return "\n".join(line.split("//")[0] for line in js.split("\n"))
+
+
+def literals(js: str) -> list[str]:
+    """JS の文字列リテラルを、行をまたがずに拾う。"""
+    out: list[str] = []
+    for line in strip_comments(js).split("\n"):
+        out += re.findall(r"'((?:[^'\\\n]|\\.)*)'", line)
+        out += re.findall(r'"((?:[^"\\\n]|\\.)*)"', line)
+    return out
+
+
+# ── 押せるものの記号 ────────────────────────────────────
+
+
+def test_open_marks_come_from_one_helper(app_js):
+    """開く記号は1箇所でしか作らない。
+
+    畳んだ連絡はシェブロンを消してあり、hover の色変化しか手がかりが無かった。
+    同じ画面の証拠カードには ▸ が付いていたので、画面の中で
+    「押せるもの」の記号規則が食い違っていた。連絡は全プレイで3〜4件しかなく、
+    そのすべてが「1手見逃したら二度と読めない」状態に置かれていた。
+
+    場所ごとに記号を書けるようにしておくと、また片方だけ消える。
+    """
+    body = strip_comments(app_js)
+    assert body.count("'▸'") == 1, "▸ を作る場所が1つではない"
+    assert body.count("'▾'") == 1, "▾ を作る場所が1つではない"
+    helper = re.search(r"function caret\(open\)[^\n]*\n?", body)
+    assert helper and "'▾'" in helper.group(0) and "'▸'" in helper.group(0), (
+        "記号を作っているのが caret() ではない"
+    )
+
+
+def test_everything_foldable_uses_the_shared_mark(app_js):
+    """畳めるものは、証拠・アクションの束・連絡のどれも caret() を通る。
+
+    「押せば開く」と分かるかどうかが、盤面が動いた唯一の証拠を
+    読めるかどうかを決める。
+    """
+    body = strip_comments(app_js)
+    for func in ("evidenceCard", "phaseGroupHead", "renderIncoming"):
+        start = body.index("function " + func)
+        chunk = body[start : start + 2200]
+        assert "caret(" in chunk, f"{func} が共通の記号を使っていない"
+
+
+# ── 見本は本物から作る ──────────────────────────────────
+
+
+def test_legend_does_not_copy_scenario_content(app_js, index_html, scenario):
+    """凡例がシナリオの中身を書き写していないこと（SPEC 7.6.7）。
+
+    実際に腐った: 凡例には「初動トリアージ › 本格調査 › 封じ込め・対応」の
+    3段が手で書かれていたが、実画面は2段になっていた。凡例で見たものが
+    プレイ画面に無いので、初見の学習者は「自分は何かを飛ばしたのか」と思う。
+
+    フェーズ名・アクション名・束の名前・資産名は、その時のビューから描く。
+    画面の原稿にそれらが literal で現れたら、また同じことが起きる。
+    """
+    forbidden = set()
+    for p in scenario.phases:
+        forbidden.add(p.label)
+    for a in scenario.actions:
+        forbidden.add(a.label)
+        if a.group:
+            forbidden.add(a.group)
+    for a in scenario.world.assets:
+        forbidden.update({a.id, a.label})
+    for q in scenario.open_questions:
+        forbidden.add(q.label)
+    for e in scenario.evidence:
+        forbidden.add(e.summary)
+
+    found = sorted(set(literals(app_js)) & forbidden)
+    assert not found, f"画面の原稿にシナリオの中身が書き写されている: {found}"
+
+    # HTML は静的なので、ここは部分一致で見る（資産 id は短く紛れやすい）
+    text = re.sub(r"<!--.*?-->", "", index_html, flags=re.S)
+    hits = sorted(w for w in forbidden if len(w) >= 4 and w in text)
+    assert not hits, f"index.html にシナリオの中身が書かれている: {hits}"
+
+
+def test_legend_and_screen_share_their_parts(app_js):
+    """凡例と本体は、同じ関数から同じ部品を描く。
+
+    見本を別に書けるようにしておくと、画面を直したときに凡例だけ古くなる。
+    フェーズ帯・アクションカード・束の見出し・押した結果の見出しの4つが対象。
+    """
+    body = strip_comments(app_js)
+    # 部品を組み立てる場所は、それぞれ1つだけ
+    assert body.count("'phase-bar'") == 1, "フェーズ帯を組み立てる場所が2つある"
+    assert body.count("'act-group-head'") == 1, "束の見出しを組み立てる場所が2つある"
+    assert body.count("'outcome-act'") == 1, "結果の見出しを組み立てる場所が2つある"
+    assert body.count("'未実行 '") == 1, "未実行の数え方が2箇所にある"
+
+    legend = body[body.index("function renderLegend") : body.index("function renderFlow")]
+    for part in ("phaseBar(view.phases)", "phaseGroupHead(", "actionCard(",
+                 "outcomeHead(", "evidenceCard(", "cloneWithoutIds("):
+        assert part in legend, f"凡例が本体の部品を使っていない: {part}"
+
+
+def test_legend_is_reachable_during_play(app_js, index_html):
+    """凡例はプレイ中も開ける（SPEC 7.6.15）。
+
+    ●/○ の意味も、箱が琥珀色になる条件も、思い出したいのは開始前ではなく最中である。
+    開始前にしか出ないなら、その説明は無いのと同じ。
+    """
+    assert 'id="btn-show-legend"' in index_html
+    assert 'id="modal-legend"' in index_html
+    body = strip_comments(app_js)
+    assert "openModal('modal-legend')" in body
+    # 同じ関数が、ブリーフィングとモーダルの両方を描く
+    hosts = set()
+    for line in body.split("\n"):
+        if "renderLegend(" not in line or "function renderLegend" in line:
+            continue
+        hosts.update(re.findall(r"\$\('([a-z-]+)'\)", line))
+    assert hosts == {"brief-mini", "brief-legend", "legend-mini", "legend-notes"}, (
+        f"凡例の描き先が2つない: {hosts}"
+    )
+
+
+# ── 数字が何であるかを、その隣で言う ──────────────────────
+
+
+def test_elapsed_time_is_marked_everywhere(app_js):
+    """経過時間には印を付ける（SPEC 7.6.15）。
+
+    画面には2種類の hh:mm が混ざる。ブリーフィングの「03:12」とログの
+    「02:19:41」は壁時計、ヘッダの「08:50」は開始からの経過である。
+    実プレイで「経過時間 08:50」を朝の8時50分と読み、講評の
+    「あなたの経過時間: 610分」を見て初めて8時間50分だと分かった、が報告されている。
+
+    印は1箇所で付ける。付け忘れた場所ができた時点で、印の意味が消えるため。
+    """
+    body = strip_comments(app_js)
+    assert body.count("Math.floor(minutes / 60)") == 1, "時分に直す場所が2つある"
+    fn = body[body.index("function elapsed(") :]
+    fn = fn[: fn.index("\n}")]
+    assert "'+'" in fn, "経過時間に印が付いていない"
+    # 呼ぶ側が印を剥がしていないこと
+    assert "elapsed(" in body and "hhmm(" not in body
+
+
+def test_consequences_are_labelled_where_they_are_shown(index_html):
+    """帯の3つの数字が何であるかを、帯の中で言う（SPEC 6.1 / 7.6.15）。
+
+    累積被害はプレイ中に20倍以上に増え、押すたびに動く。画面で最も大きく
+    最も動く数字であり、何も言わなければ学習者はそれを最適化対象だと読む。
+    「採点しません」はトップのモーダルにしか書かれていなかった。
+    """
+    strip = index_html[index_html.index('class="strip-stats"') :]
+    strip = strip[: strip.index("</div>\n    </div>")]
+    assert "帰結" in strip and "採点しません" in strip, "帯が帰結の位置づけを言っていない"
+    # 理由まで帯に書くと説明文で埋まる。押せば開く形になっていること
+    assert 'id="btn-what-play"' in strip

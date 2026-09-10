@@ -128,7 +128,9 @@ header.bar {
 .ev-id { font-family: var(--mono); font-size: 12px; color: var(--accent); flex: 0 0 auto; }
 .ev.misleading .ev-id { color: var(--bad); }
 .ev-sum { flex: 1 1 auto; }
-.ev-caret { color: var(--fg-faint); flex: 0 0 auto; }
+/* 押して開けるものの記号。証拠・アクションの束・畳んだ連絡で同じ形を使う。
+   画面の中で規則が食い違うと、押せることが伝わらない（SPEC 7.6.15） */
+.caret { color: var(--fg-faint); flex: 0 0 auto; }
 .ev-body {
   display: none; padding: 12px 14px 16px;
   border-top: 1px solid var(--line); background: #14181e;
@@ -184,6 +186,8 @@ canvas { display: block; width: 100%; }   /* 高さは height 属性で決める
   background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
   padding: 24px 26px; max-width: 520px; width: 100%; max-height: 86vh; overflow: auto;
 }
+/* 画面の見方は縮小版とはいえ本物の画面なので、520px では潰れる */
+.modal-wide { max-width: 940px; }
 .modal h2 { margin-bottom: 12px; }
 .modal .warn { color: var(--warn); margin-top: 16px; }
 .modal .warn ul { margin: 6px 0 0; padding-left: 1.3em; }
@@ -244,8 +248,7 @@ ul.lessons li { margin-bottom: 8px; }
   color: var(--fg-dim); font-size: 12px; letter-spacing: .08em; border-radius: 0;
 }
 .act-group-head:hover { color: var(--fg); border-color: var(--accent); }
-.act-group-head .caret { color: var(--fg-faint); }
-.act-group-head .count { margin-left: auto; font-family: var(--mono); font-size: 11px; }
+.act-group-head .count { margin-left: auto; font-family: var(--mono); font-size: 11px; white-space: nowrap; }
 
 .outcome {
   border-left: 4px solid var(--accent); background: var(--panel);
@@ -325,7 +328,23 @@ ul.lessons li { margin-bottom: 8px; }
   max-width: 1280px; margin: 0 auto; padding: 9px 20px 8px;
   border-bottom: 1px solid var(--line); background: var(--bg);
 }
-.strip-stats { display: flex; gap: 22px; flex: 0 0 auto; }
+.strip-stats { flex: 0 0 auto; }
+.strip-stats .stat-row { display: flex; gap: 22px; }
+/* 帯の見出し。押すと「何を測るのか」が開く。
+   3つの数字が何なのかを、帯の中で言い切る（SPEC 7.6.15） */
+.strip-head {
+  display: flex; align-items: baseline; gap: 6px;
+  background: transparent; border: 0; border-radius: 0; padding: 0 0 3px;
+  font-size: 14px; font-weight: 600; color: var(--fg-dim); line-height: 1.7;
+}
+.strip-head > span { font-weight: 400; font-size: 12px; color: var(--fg-faint); }
+.strip-head .hint {
+  border: 1px solid var(--line); border-radius: 50%;
+  width: 15px; height: 15px; line-height: 13px; text-align: center;
+  font-size: 10px; align-self: center;
+}
+.strip-head:hover, .strip-head:hover > span { color: var(--accent); }
+.strip-head:hover .hint { border-color: var(--accent); }
 .strip-chart { flex: 1 1 200px; min-width: 160px; display: flex; align-items: flex-end; }
 .strip-chart canvas { height: 96px; }
 .strip-questions { flex: 1 1 430px; max-width: 470px; min-width: 0; }
@@ -472,7 +491,7 @@ ul.lessons li { margin-bottom: 8px; }
 }
 .mini-cols { display: flex; gap: 28px; padding: 20px 12px 14px 26px; align-items: flex-start; }
 .mini-left { flex: 1 1 auto; min-width: 0; }
-.mini-right { flex: 0 0 246px; }
+.mini-right { flex: 0 0 290px; }
 .mini-left > .mini-region + .mini-region { margin-top: 14px; }
 .mini-panel {
   background: var(--panel); border: 1px solid var(--line);
@@ -488,7 +507,10 @@ ul.lessons li { margin-bottom: 8px; }
   font: 600 11px var(--mono); display: flex;
   align-items: center; justify-content: center;
 }
-.mini .strip-stats { gap: 14px; }
+.mini .strip-stats .stat-row { gap: 14px; }
+/* 帯の見本は実物の複製。見出しは押せる形のまま複製されるので、見本側では殺す */
+.mini .strip-head { pointer-events: none; font-size: 11px; }
+.mini .strip-head > span { font-size: 10px; }
 .mini .stat .v { font-size: 15px; }
 .mini .stat .k { font-size: 10px; }
 .mini .q .label { font-size: 11px; }
@@ -505,6 +527,8 @@ ul.lessons li { margin-bottom: 8px; }
 .mini canvas { height: 54px; }
 .mini .mini-chart { flex: 1 1 auto; display: flex; align-items: flex-end; min-width: 90px; }
 .mini .mini-q { flex: 0 0 236px; }
+/* モーダルの中は横幅に余裕がある。束の見出しを2行に折らない */
+.modal .mini-right { flex: 0 0 320px; }
 
 .mini-notes { padding-left: 0; list-style: none; counter-reset: mn; margin: 0; }
 .mini-notes li {
@@ -664,8 +688,11 @@ ul.lessons li { margin-bottom: 8px; }
 
 .incoming-old > summary { cursor: pointer; list-style: none; }
 .incoming-old > summary::-webkit-details-marker { display: none; }
-.incoming-old > summary:hover .incoming-label { color: var(--fg); }
+.incoming-old > summary:hover .incoming-label,
+.incoming-old > summary:hover .caret { color: var(--fg); }
 .incoming-old[open] > summary .incoming-label { color: var(--fg); }
+/* 畳んだ一行でも「押せる」ことが分かるように、記号の場所を空けておく */
+.incoming-head .caret { margin-left: 2px; }
 
 /* 講評の凡例。世界の側で起きたことは、自分がしたことと色で分ける */
 .legend .lg-world { color: var(--bad); }

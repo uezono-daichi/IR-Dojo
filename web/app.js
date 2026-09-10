@@ -99,10 +99,19 @@ function show(screenId) {
 function openModal(id) { $(id).classList.add('open'); }
 function closeModal(id) { $(id).classList.remove('open'); }
 
-function hhmm(minutes) {
+/* 経過時間の表記。頭に + を付ける（SPEC 7.6.15）。
+
+   画面には2種類の hh:mm が混ざる。ログの中身の「02:19:41」は壁時計で、
+   こちらは開始からの経過である。印が無いと「08:50」は朝の8時50分に読める。
+   経過時間を出すところは全部この関数を通す。 */
+function elapsed(minutes) {
   var h = Math.floor(minutes / 60), m = minutes % 60;
-  return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
+  return '+' + (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
 }
+
+/* 押して開けるものの記号。証拠・アクションの束・畳んだ連絡で同じ形を使う。
+   ここでしか作らない — 場所ごとに書くと、片方だけ記号が消える（SPEC 7.6.15）。 */
+function caret(open) { return el('span', 'caret', open ? '▾' : '▸'); }
 
 function num(v) { return Math.round(v).toLocaleString('ja-JP'); }
 
@@ -272,7 +281,7 @@ function startSession() {
     $('brief-policy-name').textContent = '【今回の対応方針】' + data.policy_label;
     prose($('brief-policy-body'), data.policy_briefing);
     renderFlow(data.phases || []);
-    renderLegend(data.view);
+    renderLegend(data.view, $('brief-mini'), $('brief-legend'));
     // 考え方の枠組みを出すかはアシストレベルが決める（3.10）
     var primer = $('brief-primer');
     primer.hidden = !data.view.show_primer;
@@ -284,7 +293,10 @@ function startSession() {
     $('brief-topo-head').hidden = !topo;
     show('screen-briefing');
     // 描画は画面を表示してから。非表示のままだと clientWidth が 0 になる
-    if (topo) { renderTopology($('brief-topo'), data.view.assets); }
+    if (topo) {
+      renderTopology($('brief-topo'), data.view.assets);
+      topologyExample($('brief-topo-example'), data.view.assets);
+    }
   }).catch(fail);
 }
 
@@ -310,6 +322,33 @@ var ACT_TAG = {
 // 重要度＝止まったときに業務が受ける影響の大きさ。生の英語を画面に出さない
 var CRIT_LABEL = { critical: '最重要', high: '重要', medium: '中', low: '小' };
 function critLabel(c) { return CRIT_LABEL[c] || c; }
+
+/* 依存の例文。いちばん多くを巻き込む資産を、シナリオから選んで名指しする。
+   「dc01 を止めれば4台も止まる」を画面に手で書くと、別のシナリオで嘘になる */
+function topologyExample(host, assets) {
+  if (!host) { return; }
+  host.textContent = '';
+  if (!assets || !assets.length) { return; }
+  var byId = {};
+  assets.forEach(function (a) { byId[a.id] = a; });
+  function fallout(id, seen) {
+    var out = [];
+    assets.forEach(function (a) {
+      if (seen.indexOf(a.id) >= 0) { return; }
+      if ((a.depends_on || []).indexOf(id) < 0) { return; }
+      out = out.concat([a.id], fallout(a.id, seen.concat([id, a.id])));
+    });
+    return out;
+  }
+  var best = null, bestN = 0;
+  assets.forEach(function (a) {
+    var n = fallout(a.id, [a.id]).length;
+    if (n > bestN) { best = a; bestN = n; }
+  });
+  if (!best) { return; }
+  host.textContent = best.id + ' を止めれば、それに依存する'
+    + bestN + '台も一緒に止まります。';
+}
 
 function renderTopology(host, assets) {
   clear(host);
@@ -398,11 +437,26 @@ function renderTopology(host, assets) {
 }
 
 /* 画面の見方。数字も記号も、意味を言わないまま出さない。
-   出る予定のないもの（hard のグラフや論点）は載せない。 */
+   出る予定のないもの（hard のグラフや論点）は載せない。
 
-function renderLegend(view) {
-  var mini = $('brief-mini');
-  var notes = $('brief-legend');
+   **見本は本物から作る。**（SPEC 7.6.7）
+   フェーズ帯・帯の数値・アクションの束は、いま渡されているビューから描く。
+   手で書いたモックは必ず腐る — 3フェーズを2フェーズに変えたとき、
+   凡例だけが「初動トリアージ › 本格調査 › 封じ込め・対応」のまま残った。
+
+   ブリーフィングとプレイ中のモーダルの両方から呼ぶ。開始前にしか読めない
+   凡例は、●/○ の意味を思い出したいときには存在しないのと同じ。 */
+
+/* 実物の複製から見本を作る。id は落とす（同じ id が2つある DOM を作らない） */
+function cloneWithoutIds(node) {
+  var c = node.cloneNode(true);
+  c.removeAttribute('id');
+  var ids = c.querySelectorAll('[id]');
+  for (var i = 0; i < ids.length; i++) { ids[i].removeAttribute('id'); }
+  return c;
+}
+
+function renderLegend(view, mini, notes) {
   clear(mini); clear(notes);
 
   var n = 0;
@@ -421,19 +475,14 @@ function renderLegend(view) {
   bar.appendChild(el('div', 'p', '方針: ' + view.policy_label));
   mini.appendChild(bar);
 
-  // ── 状況の帯
+  // ── 状況の帯。数値は実物の複製なので、見出しも並びも本物と食い違わない
   var strip = el('div', 'mini-strip');
-
-  var stats = el('div', 'strip-stats');
-  [['経過時間', '02:10'], ['累積被害', '1,200'], ['業務影響', '0']].forEach(function (s) {
-    var d = el('div', 'stat');
-    d.appendChild(el('div', 'k', s[0]));
-    d.appendChild(el('div', 'v', s[1]));
-    stats.appendChild(d);
-  });
-  strip.appendChild(region(stats,
-    '経過時間は仮想の時計です。アクションを押した分だけ進みます。' +
-    '累積被害は時間とともに増える被害の大きさで、金額ではなく比べるための相対値です。' +
+  strip.appendChild(region(cloneWithoutIds($('play-strip-stats')),
+    '経過時間・累積被害・業務影響は、この対応がもたらした帰結です。' +
+    'どれも採点しません（見出しを押すと理由が開きます）。' +
+    '経過時間は仮想の時計で、アクションを押した分だけ進みます。' +
+    '頭の + は「開始からの経過」という印です。' +
+    '累積被害は金額ではなく比べるための相対値で、' +
     '侵害された資産を止めると増え方が鈍ります。' +
     '業務影響は止めた資産が業務に与える影響で、何も止めていない間は 0 です。'));
 
@@ -462,7 +511,7 @@ function renderLegend(view) {
       qs.appendChild(r);
     });
     strip.appendChild(region(qs,
-      'まだ説明がついていない論点と、ついた論点です。' +
+      'まだ説明がついていない論点（●）と、ついた論点（○）です。' +
       '未解消のまま対応に移ることもできますが、その状態は記録され、採点されます。'));
   }
   mini.appendChild(strip);
@@ -471,57 +520,52 @@ function renderLegend(view) {
   var cols = el('div', 'mini-cols');
   var left = el('div', 'mini-left');
 
-  var pb = el('ol', 'phase-bar');
-  ['初動トリアージ', '本格調査', '封じ込め・対応'].forEach(function (p, i) {
-    var li = el('li');
-    li.appendChild(el('span', 'p' + (i === 1 ? ' now' : (i === 0 ? ' done' : '')), p));
-    pb.appendChild(li);
-  });
-  left.appendChild(region(pb,
+  left.appendChild(region(phaseBar(view.phases),
     'いま何段目かを示します。進むのはあなたが宣言したときだけで、' +
     '一度進むと戻れません。'));
 
   var oc = el('div', 'outcome');
-  var oh = el('div', 'outcome-act');
-  oh.appendChild(el('span', 'outcome-tag', '実行した調査'));
-  oh.appendChild(el('span', 'outcome-name', '押したアクション'));
-  oh.appendChild(el('span', 'outcome-cost', '30分を使った'));
-  oc.appendChild(oh);
+  oc.appendChild(outcomeHead('investigate', '押したアクション', '30分を使った'));
   oc.appendChild(el('div', 'outcome-msg found', '分かったこと 1 件'));
   left.appendChild(region(oc,
     '押した結果です。何が分かったか、何も出なかったか、証拠を壊したかを必ず告げます。' +
-    '払った時間もここに出ます。'));
+    '払った時間もここに出ます。' +
+    '何も出なかったときは、この箱ごと琥珀色になり「何も出てこなかった。」と出ます。'));
 
-  var ev = el('div', 'ev');
-  var eh = el('div', 'ev-head');
-  eh.appendChild(el('span', 'ev-id', '[ev_001]'));
-  eh.appendChild(el('span', 'ev-sum', view.assist_level === 'hard' ? '' : '見つかったことの要約'));
-  eh.appendChild(el('span', 'ev-at', '00:30'));
-  eh.appendChild(el('span', 'ev-caret', '▸'));
-  ev.appendChild(eh);
-  left.appendChild(region(ev,
-    '手に入れた証拠と、その時刻です。押すと生のログが開きます。' +
+  left.appendChild(region(evidenceCard({
+    id: 'ev_001',
+    summary: view.assist_level === 'hard' ? '' : '見つかったことの要約',
+    at_minute: 30,
+    content: '（押すと、取得した生のログがここに開きます）',
+    sample: true
+  }, false),
+    '手に入れた証拠です。右端に ▸ が付いているものは押すと開きます — ' +
+    '証拠も、畳まれた連絡も、アクションの束も同じ印です。' +
+    '添えてある +00:30 は取得した時点の経過時間で、' +
+    'ログの中に出てくる時刻（現実の壁時計）とは別のものです。' +
     '新しいものが上に積まれ、古いものは畳まれます。'));
   cols.appendChild(left);
 
+  // ── アクション。見本は本物の束から作る
   var right = el('div', 'mini-right');
   var panel = el('div', 'mini-panel');
   panel.appendChild(el('h3', null, '実行可能なアクション'));
-  panel.appendChild(phaseGroupHead('フェーズ名', 9, 12, false));
-  panel.appendChild(actionCard({
-    label: '調べる対象と手段', cost_minutes: 30, selectable: true,
-    description: 'その作業で何をするかが書かれています。'
-  }));
-  panel.appendChild(actionCard({
-    label: '実行済みのもの', cost_minutes: 20, selectable: false,
-    description: '一度実行したものは、こう見えます。'
-  }));
+  var acts = view.available_actions || [];
+  // まだ選べる手が残っている束を見本にする。全部やり尽くした束を出すと、
+  // 灰色だけが並んで「選べるもの」の見本にならない
+  var lead = acts.filter(function (a) { return a.selectable; })[0] || acts[0];
+  var key = lead ? (lead.group || lead.phase_label) : '';
+  var group = acts.filter(function (a) { return (a.group || a.phase_label) === key; });
+  var remain = group.filter(function (a) { return a.selectable; }).length;
+  panel.appendChild(phaseGroupHead(key, remain, group.length, false));
+  group.slice(0, 2).forEach(function (a) { panel.appendChild(actionCard(a)); });
   right.appendChild(region(panel,
     '選べる調査と封じ込めです。右上の数字はかかる時間で、押すと仮想の時計が' +
     'その分だけ進みます（実際に待つわけではありません）。' +
-    '灰色は実行済みで、もう選べません。' +
-    '見出しの「未実行 9 / 12」は、まだ選んでいない数 / いま選べる数です。' +
-    '調べると選択肢が増えるので、右の数は途中で増えます。'));
+    '一度実行したものは灰色になり、もう選べませんが、消えずに残ります。' +
+    '見出しの「未実行」の数は、まだ選んでいない数 / いま選べる数です。' +
+    '調べると選択肢が増えるので、右の数は途中で増えます。' +
+    '見出しを押すと、その束を畳めます。'));
   cols.appendChild(right);
   mini.appendChild(cols);
 
@@ -611,7 +655,7 @@ function renderPlay() {
   $('play-title').textContent = v.scenario_title;
   $('play-policy').textContent = '　方針: ' + v.policy_label;
   renderPhaseBar(v);
-  $('stat-time').textContent = hhmm(v.elapsed_minutes);
+  $('stat-time').textContent = elapsed(v.elapsed_minutes);
   $('stat-damage').textContent = num(v.accumulated_damage);
   $('stat-impact').textContent = num(v.accumulated_business_impact);
 
@@ -646,15 +690,24 @@ function renderPlay() {
   if (v.damage_history) { DamageChart.draw(chart, v.damage_history, {}); }
 }
 
+/* いま何段目か。凡例と本体で同じ関数から描く（SPEC 7.6.7）。
+   手で書いた見本は必ず腐る — 3フェーズを2フェーズに変えたとき、
+   凡例だけが3段のまま残り、初見の学習者に「何か飛ばしたのか」と思わせた */
+function phaseBar(phases) {
+  var ol = el('ol', 'phase-bar');
+  (phases || []).forEach(function (p) {
+    var li = el('li');
+    li.appendChild(el('span', 'p' + (p.current ? ' now' : (p.done ? ' done' : '')), p.label));
+    ol.appendChild(li);
+  });
+  return ol;
+}
+
 function renderPhaseBar(v) {
   var host = $('play-phase');
-  clear(host);
-  v.phases.forEach(function (p) {
-    var li = el('li');
-    var cls = 'p' + (p.current ? ' now' : (p.done ? ' done' : ''));
-    li.appendChild(el('span', cls, p.label));
-    host.appendChild(li);
-  });
+  var next = phaseBar(v.phases);
+  next.id = host.id;
+  host.parentNode.replaceChild(next, host);
 }
 
 function renderEvidence(v) {
@@ -733,6 +786,15 @@ function renderRespondFrame(v) {
   host.appendChild(note);
 }
 
+/* 押した結果の見出し。凡例と本体で同じ関数から描く（SPEC 7.6.7） */
+function outcomeHead(type, label, costText) {
+  var h = el('div', 'outcome-act');
+  h.appendChild(el('span', 'outcome-tag', ACT_TAG[type] || ACT_TAG.investigate));
+  h.appendChild(el('span', 'outcome-name', label));
+  if (costText) { h.appendChild(el('span', 'outcome-cost', costText)); }
+  return h;
+}
+
 /* 押した結果。「押した → こうなった」を1つの箱にまとめ、全幅で出す */
 /* 向こうから入ってきたこと（SPEC 5.10 / 7.6.8）。
 
@@ -757,16 +819,23 @@ function renderIncoming() {
     if (ev.averted) { h.appendChild(el('span', 'incoming-tag', '未然')); }
     else if (ev.fresh) { h.appendChild(el('span', 'incoming-tag', '新着')); }
     h.appendChild(el('span', 'incoming-label', ev.label));
-    h.appendChild(el('span', 'incoming-at', hhmm(ev.at_minutes)));
+    h.appendChild(el('span', 'incoming-at', elapsed(ev.at_minutes)));
     if (ev.fresh) {
       box.appendChild(h);
       prose(box.appendChild(el('div', 'incoming-body')), ev.text);
     } else {
-      // 済んだものは一行。押せば読み返せる
+      // 済んだものは一行。押せば読み返せる。
+      // 記号は証拠カードと同じもの（SPEC 7.6.15）。hover の色だけを頼りにすると、
+      // 盤面が変わったという唯一の証拠が、次の一手で読めなくなる
       var det = el('details', 'incoming-old');
       var sum = el('summary');
+      var mark = caret(false);
+      h.appendChild(mark);
       sum.appendChild(h);
       det.appendChild(sum);
+      det.addEventListener('toggle', function () {
+        mark.textContent = caret(det.open).textContent;
+      });
       prose(det.appendChild(el('div', 'incoming-body')), ev.text);
       box.appendChild(det);
     }
@@ -784,12 +853,7 @@ function renderResult(v) {
   if (o && o.running) {
     // まだ結果が返っていない。走っているところだけを出す
     var box = el('div', 'outcome');
-    var h = el('div', 'outcome-act');
-    h.appendChild(el('span', 'outcome-tag',
-      ACT_TAG[o.type] || '実行した調査'));
-    h.appendChild(el('span', 'outcome-name', o.label));
-    h.appendChild(el('span', 'outcome-cost', '実行中…'));
-    box.appendChild(h);
+    box.appendChild(outcomeHead(o.type, o.label, '実行中…'));
     box.appendChild(terminal(o));
     host.appendChild(box);
     return;
@@ -810,15 +874,8 @@ function renderResult(v) {
     + (stopped || o.prevented ? ' outcome-contained'
                               : (empty ? ' outcome-empty' : '')));
 
-  var head = el('div', 'outcome-act');
-  head.appendChild(el('span', 'outcome-tag',
-    ACT_TAG[o.type] || '実行した調査'));
-  head.appendChild(el('span', 'outcome-name', o.label));
-  if (o.cost) {
-    head.appendChild(el('span', 'outcome-cost',
-      o.running ? '実行中…' : o.cost + '分を使った'));
-  }
-  note.appendChild(head);
+  note.appendChild(outcomeHead(o.type, o.label,
+    o.cost ? (o.running ? '実行中…' : o.cost + '分を使った') : null));
 
   // 何をしたのかを、道具立てごと見せる。実環境は作らないが、
   // 手を動かした感触までは渡す（SPEC 1.4 / 7.6.8）
@@ -885,20 +942,22 @@ function renderPast(v) {
 
 function evidenceCard(ev, isNew, forceOpen) {
   var box = el('div', 'ev' + (isNew ? ' new' : ''));
-  // 結果の箱の中は開く。積み上がった側は畳んで一覧として読ませる
-  var open = forceOpen || !!S.openIds[ev.id];
+  // 結果の箱の中は開く。積み上がった側は畳んで一覧として読ませる。
+  // 凡例の見本は本物の開閉状態を引き継がない（畳んだ姿が見本だから）
+  var open = forceOpen || (!ev.sample && !!S.openIds[ev.id]);
   if (open) { box.classList.add('open'); }
 
   var head = el('div', 'ev-head');
   head.appendChild(el('span', 'ev-id', '[' + ev.id + ']'));
   head.appendChild(el('span', 'ev-sum', ev.summary || ''));
-  head.appendChild(el('span', 'ev-at', hhmm(ev.at_minute)));
-  var caret = el('span', 'ev-caret', open ? '▾' : '▸');
-  head.appendChild(caret);
+  head.appendChild(el('span', 'ev-at', elapsed(ev.at_minute)));
+  var mark = caret(open);
+  head.appendChild(mark);
   head.addEventListener('click', function () {
     var nowOpen = box.classList.toggle('open');
-    S.openIds[ev.id] = nowOpen;
-    caret.textContent = nowOpen ? '▾' : '▸';
+    // 凡例の見本は記憶しない。本物の ev_001 が勝手に開いてしまう
+    if (!ev.sample) { S.openIds[ev.id] = nowOpen; }
+    mark.textContent = caret(nowOpen).textContent;
   });
   box.appendChild(head);
 
@@ -950,7 +1009,7 @@ function actionCard(a) {
 
 function phaseGroupHead(label, remain, total, closed) {
   var head = el('button', 'act-group-head');
-  head.appendChild(el('span', 'caret', closed ? '▸' : '▾'));
+  head.appendChild(caret(!closed));
   head.appendChild(el('span', null, label));
   head.appendChild(el('span', 'count', '未実行 ' + remain + ' / ' + total));
   return head;
@@ -1080,7 +1139,7 @@ function openFinish() {
     host.appendChild(el('div', 'k', k));
     host.appendChild(el('div', 'v', val));
   }
-  row('経過時間', hhmm(v.elapsed_minutes));
+  row('経過時間', elapsed(v.elapsed_minutes));
   row('累積被害', num(v.accumulated_damage));
   row('業務影響', num(v.accumulated_business_impact));
   row('被疑判定', v.current_assessment.length ? v.current_assessment.join(', ') : '（未宣言）');
@@ -1137,6 +1196,11 @@ function blockScore(rep) {
     bars.appendChild(row);
   });
   b.appendChild(bars);
+  // 採点はこの2本だけである。プレイ中に最も大きく動いた数字がここに無い理由を、
+  // 講評でも言っておく（SPEC 6.1 / 7.6.15）
+  b.appendChild(el('p', 'faint',
+    '帰結（経過時間・被害額・業務影響）は採点していません。' +
+    '方針の重みを通してのみ評価に入ります。'));
 
   var grid = el('div', 'metrics');
   Object.keys(s.metrics).forEach(function (id) {
@@ -1194,7 +1258,7 @@ function blockLost(rep) {
     // 同じ「失った」でも、次に活かせる教訓が違う
     note.appendChild(el('p', 'dim',
       l.by_world
-        ? hhmm(l.at_minute) + '「' + l.destroyed_by + '」により、'
+        ? elapsed(l.at_minute) + ' の時点で「' + l.destroyed_by + '」により、'
           + 'こちらが取りに行く前に失われました。'
           + (l.obtainable_by.length
               ? 'それまでに「' + l.obtainable_by.join('」「') + '」を実行していれば取れました。'
@@ -1462,6 +1526,15 @@ function init() {
     // 表示してから描く。非表示のままだと幅が 0 になる
     renderTopology($('play-topo'), S.view.assets);
   });
+
+  // 凡例はプレイ中も開ける。●/○ の意味を思い出したいのは、開始前ではなく最中である
+  $('btn-show-legend').addEventListener('click', function () {
+    openModal('modal-legend');
+    // 表示してから描く。非表示のままだと canvas の幅が 0 になる
+    renderLegend(S.view, $('legend-mini'), $('legend-notes'));
+  });
+
+  $('btn-what-play').addEventListener('click', function () { openModal('modal-what'); });
 
   $('btn-show-policy').addEventListener('click', function () {
     $('policy-modal-name').textContent = '【対応方針】' + S.view.policy_label;

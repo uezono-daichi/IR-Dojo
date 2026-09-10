@@ -103,6 +103,54 @@ async function checkNoRawMarkdown(where) {
   if (raw) note('error', where, `生の markdown が出ている: ${JSON.stringify(raw)}`);
 }
 
+/** 凡例が実画面と食い違っていないか（SPEC 7.6.7）
+ *
+ *  手で書いたモックは必ず腐る。実際に「初動トリアージ › 本格調査 › 封じ込め・対応」
+ *  の3段が、2フェーズになった実画面と食い違ったまま残っていた。
+ *  ブリーフィングで読んだ凡例と、その直後のプレイ画面を突き合わせる。 */
+async function legendSample(root) {
+  return page.evaluate((sel) => {
+    const q = (s) => [...document.querySelectorAll(sel + ' ' + s)]
+      .map(e => e.textContent.replace(/\s+/g, ' ').trim());
+    return { phases: q('.phase-bar .p'), groups: q('.act-group-head'),
+             statKeys: q('.strip-stats .k') };
+  }, root);
+}
+
+/** 押して開けるものの記号が、画面の中で食い違っていないか（SPEC 7.6.15）
+ *
+ *  畳んだ連絡はシェブロンを消しており、hover の色変化しか手がかりが無かった。
+ *  同じ画面の証拠カードには ▸ が付いていた。世界が動いている唯一の証拠が、
+ *  次の一手で読めなくなる。 */
+async function checkCaretsShared(where) {
+  const bad = await page.evaluate(() => {
+    const openers = [
+      ['畳んだ連絡', '#incoming-list details.incoming-old > summary'],
+      ['証拠カード', '#evidence-list .ev-head, #result-area .ev-head'],
+      ['アクションの束', '#actions-list .act-group-head'],
+    ];
+    const out = [];
+    for (const [name, sel] of openers) {
+      const nodes = [...document.querySelectorAll(sel)];
+      if (!nodes.length) continue;
+      const marks = new Set(nodes.map(
+        n => (n.querySelector('.caret') || {}).textContent || 'なし'));
+      out.push({ name, marks: [...marks] });
+    }
+    return out;
+  });
+  const seen = new Set();
+  for (const g of bad) {
+    if (g.marks.includes('なし')) {
+      note('error', where, `${g.name} に開く記号が無い`);
+    }
+    g.marks.forEach(m => { if (m !== 'なし') seen.add(m); });
+  }
+  if (seen.size > 1) {
+    note('error', where, `押せるものの記号が場所ごとに違う: ${[...seen].join(' ')}`);
+  }
+}
+
 async function screen(name) {
   await checkNoHorizontalOverflow(name);
   await checkNoRawMarkdown(name);
@@ -122,10 +170,38 @@ await page.click('#btn-start');
 await page.waitForSelector('#screen-briefing.active');
 await screen('03-briefing');
 
+// 凡例は画面の下端にあり、上端だけを撮ると一度も写らない
+await page.evaluate(() => document.getElementById('brief-mini')
+  .scrollIntoView({ block: 'start' }));
+await page.waitForTimeout(150);
+await shot('03b-briefing-legend');
+await page.evaluate(() => window.scrollTo(0, 0));
+
+const legendBefore = await legendSample('#brief-mini');
+
 await page.click('#btn-begin');
 await page.waitForSelector('#screen-play.active');
 await checkCanvasStable('play');
 await screen('04-play-start');
+
+// 凡例で見たものが、そのままここにあるか
+const playNow = await legendSample('#screen-play');
+if (!legendBefore.phases.length || !legendBefore.groups.length
+    || !legendBefore.statKeys.length) {
+  note('error', 'legend', `凡例から見本が読めない: ${JSON.stringify(legendBefore)}`);
+}
+for (const [k, label] of [['phases', 'フェーズ帯'], ['statKeys', '帯の数値の見出し']]) {
+  const a = JSON.stringify(legendBefore[k]), b = JSON.stringify(playNow[k]);
+  if (a !== b) {
+    note('error', 'legend', `凡例が実画面と食い違っている（${label}）: ${a} ≠ ${b}`);
+  }
+}
+// 束の見本はどれを選んでもよいが、実画面に無い束を見せてはいけない
+if (legendBefore.groups.length !== 1
+    || !playNow.groups.includes(legendBefore.groups[0])) {
+  note('error', 'legend', `凡例のアクションの束が実画面に無い: `
+    + `${JSON.stringify(legendBefore.groups)} ⊄ ${JSON.stringify(playNow.groups)}`);
+}
 
 const log = [];
 for (let i = 0; i < 40; i++) {
@@ -142,6 +218,19 @@ for (let i = 0; i < 40; i++) {
 }
 await checkCanvasStable('play-late');
 await screen('06-play-late');
+await checkCaretsShared('play-late');
+
+// 凡例はプレイ中も開ける（SPEC 7.6.15）。開いた状態も撮る
+await page.click('#btn-show-legend');
+await page.waitForTimeout(200);
+await screen('06b-legend');
+const legendInPlay = await legendSample('#legend-mini');
+if (JSON.stringify(legendInPlay.phases) !== JSON.stringify(playNow.phases)) {
+  note('error', 'legend', `プレイ中の凡例が実画面と食い違っている: `
+    + `${JSON.stringify(legendInPlay.phases)}`);
+}
+await page.click('[data-close="modal-legend"]');
+await page.waitForTimeout(120);
 
 await page.click('#btn-advance').catch(() => {});
 await page.waitForTimeout(350);

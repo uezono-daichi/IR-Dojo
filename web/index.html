@@ -70,7 +70,8 @@
     <div class="topo" id="brief-topo"></div>
     <p class="faint" id="brief-topo-note">
       <strong>線は依存</strong>を表します。上のものが止まると、下のものも実質止まります。
-      dc01 を止めれば、それに依存する4台も一緒に止まります。<br>
+      <!-- 例はシナリオから作る。資産名を手で書くと、別のシナリオで嘘になる -->
+      <span id="brief-topo-example"></span><br>
       <strong>色と右上の印は「止めたときに業務が受ける影響の大きさ」</strong>です
       （最重要 &gt; 重要 &gt; 中 &gt; 小）。侵害されているかどうかとは無関係で、
       これは平常時から決まっている性質です。
@@ -138,16 +139,23 @@
     </div>
     <div>
       <button id="btn-show-topo">構成</button>
+      <button id="btn-show-legend">画面の見方</button>
       <button id="btn-show-policy">方針を再表示</button>
       <button id="btn-show-assessment" style="display:none">被疑判定</button>
     </div>
   </header>
   <!-- 状況は横一列。判断に使うものを画面の端に押し込まない -->
   <div class="strip">
-    <div class="strip-stats">
-      <div class="stat"><div class="k">経過時間</div><div class="v" id="stat-time">00:00</div></div>
-      <div class="stat"><div class="k">累積被害</div><div class="v" id="stat-damage">0</div></div>
-      <div class="stat"><div class="k">業務影響</div><div class="v" id="stat-impact">0</div></div>
+    <div class="strip-stats" id="play-strip-stats">
+      <!-- 画面で最も大きく動く数字がこの3つである。何であるかを言わないと、
+           学習者はこれを最適化対象だと読む。帰結は採点しない（SPEC 6.1 / 7.6.15）。
+           理由まで書くと帯が説明文で埋まるので、押せば「何を測るのか」が開く -->
+      <button class="strip-head" id="btn-what-play">帰結 <span>— 採点しません</span><span class="hint">?</span></button>
+      <div class="stat-row">
+        <div class="stat"><div class="k">経過時間</div><div class="v" id="stat-time">+00:00</div></div>
+        <div class="stat"><div class="k">累積被害</div><div class="v" id="stat-damage">0</div></div>
+        <div class="stat"><div class="k">業務影響</div><div class="v" id="stat-impact">0</div></div>
+      </div>
     </div>
     <div class="strip-chart"><canvas id="damage-chart" height="96"></canvas></div>
     <div class="strip-questions" id="questions-panel">
@@ -256,6 +264,20 @@
        色と印は「止めたときに業務が受ける影響の大きさ」です。侵害の有無とは無関係です。</p>
     <div class="btn-row right">
       <button data-close="modal-topo">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<!-- モーダル: 画面の見方。ブリーフィングと同じものを、プレイ中も開けるようにする。
+     ●/○ の意味も、琥珀色になる条件も、開始前にしか読めないなら思い出せない -->
+<div class="modal-bg" id="modal-legend">
+  <div class="modal modal-wide">
+    <h2>画面の見方</h2>
+    <p class="faint" style="margin-top:-8px">いまのあなたの画面です。番号の説明を下に並べます。</p>
+    <div class="mini" id="legend-mini"></div>
+    <ol class="mini-notes" id="legend-notes"></ol>
+    <div class="btn-row right">
+      <button data-close="modal-legend">閉じる</button>
     </div>
   </div>
 </div>
