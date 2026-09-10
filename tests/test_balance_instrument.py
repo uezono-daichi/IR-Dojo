@@ -49,6 +49,7 @@ def plays(balance):
             weighs_refutations=prof.weighs_refutations,
             contains_everything=prof.contains_everything,
             contains_root=prof.contains_root,
+            names_everything=prof.names_everything,
         )
         for prof in balance.PROFILES
     }
@@ -200,6 +201,134 @@ def test_the_response_phase_is_not_measured_by_time(balance):
         "何も止めないプレイは正しく止めたプレイに負ける",
     ):
         assert _named(data, name)["ok"], name
+
+
+# ─────────── 弱い敵を選んでいないか（サイクル4で足した軸） ───────────
+
+
+def test_the_blind_side_is_not_represented_by_its_weakest_shape(balance, plays):
+    """「調べない像」を1つに代表させない。
+
+    v1.35 の測定器は 0手・fs01 だけを名指しする像 1本を全ての他像と比べ、
+    それが最下位であることをもって「調べる意味がある」と言っていた。
+    **それは調べない側で最も弱い形である。** 同じ 0手でも
+    「疑わしきは全部隔離」は再現率が満点になり、被害も止まる。
+    弱い敵しか置いていない検査は、通ったまま何も保証しない。
+    """
+    sc, runs = plays
+    blind = [p.key for p in balance.PROFILES if p.skips_investigation]
+    assert len(blind) >= 2, f"調べない像が {blind} しかいない"
+
+    scores = {
+        key: {
+            pol.id: scoring.score(runs[key].state, sc, pol).composite_score
+            for pol in sc.policies
+        }
+        for key in blind
+    }
+    # 弱い敵を選んでいないこと。どこかの方針で hasty より強い像がいる
+    assert any(
+        scores["blanket"][pid] > scores["hasty"][pid] for pid in scores["hasty"]
+    ), f"調べない像がどれも同じ強さ: {scores}"
+
+
+def test_the_evidence_ladder_needs_the_support_metric(balance):
+    """根拠の梯子は、裏付けを測る指標が無いと平らになる。
+
+    梯子（同じ判定・根拠の厚みだけ違う3プレイ）は、今回のテーマの
+    唯一の直接的な計器である。これが「通るように緩めた検査」でないことを、
+    見張っている当の指標を外して落ちることで示す。
+    """
+    import copy
+
+    import yaml
+
+    from irdojo.loader import SCENARIO_DIR, load_scenario_text
+
+    raw = yaml.safe_load(
+        (SCENARIO_DIR / "ransomware-initial-response-01.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    data = copy.deepcopy(raw)
+    fl = data["scoring"]["fact_layer"]
+    fl["metrics"] = [m for m in fl["metrics"] if m["id"] != "assessment_support"]
+    # 外した 0.20 は適合率と再現率へ。合計は 1.00 のまま
+    fl["weights"] = {
+        "assessment_precision": 0.30,
+        "assessment_recall": 0.30,
+        "unresolved_questions": 0.40,
+    }
+    sc = load_scenario_text(yaml.safe_dump(data, allow_unicode=True))
+    check = _named(balance.report(sc), "同じ判定でも、根拠の厚みで事実認識層が動く")
+    assert not check["ok"], (
+        "裏付けを測る指標が無くても梯子が立っている＝梯子が何も見ていない"
+    )
+
+    ladder = balance.evidence_ladder(sc)
+    assert ladder[0][2] == ladder[1][2], f"平らになっていない: {ladder}"
+
+
+def test_the_press_order_checks_watch_the_clock_and_the_notice(balance):
+    """押し順の2本が、それぞれ別のものを見張っていること。
+
+    「時計が奪うものは、盤面の手で取り戻せる」は連絡が**間に合うこと**を、
+    「連絡には歯がある」は連絡が**何かを守っていること**を見ている。
+    片方だけだと、奪う出来事を消すだけで両方通ってしまう。
+    """
+    import copy
+
+    import yaml
+
+    from irdojo.loader import SCENARIO_DIR, load_scenario_text
+
+    raw = yaml.safe_load(
+        (SCENARIO_DIR / "ransomware-initial-response-01.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    def with_reboot_at(minutes):
+        data = copy.deepcopy(raw)
+        for t in data["timeline"]:
+            if t["id"] == "tl_field_reboot":
+                t["at_minutes"] = minutes
+        data["timeline"].sort(key=lambda t: t["at_minutes"])
+        return load_scenario_text(yaml.safe_dump(data, allow_unicode=True))
+
+    # 連絡（15分）を打ち終わる前に奪われると、盤面の手では取り戻せない
+    early = balance.report(with_reboot_at(10))
+    assert not _named(early, "時計が奪うものは、盤面の手で取り戻せる")["ok"]
+
+    # 誰も届かない時刻に置くと、その連絡は何も守っていない
+    late = balance.report(with_reboot_at(2000))
+    assert not _named(late, "連絡には歯がある")["ok"]
+    assert _named(late, "時計が奪うものは、盤面の手で取り戻せる")["ok"]
+
+
+def test_press_orders_are_more_than_the_order_in_the_file(balance):
+    """押し順は、YAML の記載順1本では足りない。
+
+    記載順は作者の都合であって学習者の押し順ではない。
+    実測すると、記載順が通っていたのは ev_009 の取得と現場再起動の
+    15分の余裕のおかげで、`cost_minutes` を1つ触れば裏返る状態だった。
+    """
+    sc = load_scenario("ransomware-initial-response-01")
+    orders = balance.press_orders(sc)
+    assert len(orders) >= 5, orders
+    # どの順序も「全部押す」であること（取捨選択の像ではない）
+    every = {a.id for a in sc.actions if a.type.value == "investigate"}
+    for name, ids in orders.items():
+        assert set(ids) == every, name
+    # 並びが実際に違うこと。同じ列が5本あっても何も測っていない
+    assert len({tuple(ids) for ids in orders.values()}) >= 4, "押し順が実質1本"
+
+    # 連絡なしでは、少なくとも1つの順序が critical 論点を落とす
+    lost = {
+        name: balance._lost_critical(sc, balance.run_order(sc, ids, []))
+        for name, ids in orders.items()
+    }
+    assert any(v for v in lost.values()), lost
 
 
 def test_the_replacement_checks_are_not_slack(balance, monkeypatch):

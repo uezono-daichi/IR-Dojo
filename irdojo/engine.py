@@ -81,7 +81,9 @@ class GameState(BaseModel):
     accumulated_damage: float = 0.0
     accumulated_business_impact: float = 0.0
     damage_history: list[float] = []  # 1分刻みの累積被害。グラフ描画用
-    # misled_score の分母と分子（SPEC 6.2）。ビューには出さない。
+    # 誤導を追いかけた時間と、調べた時間の合計。**採点には入らない**
+    # （v1.36 で misled_score を廃止した）。講評が平文で返すだけ（SPEC 6.6）。
+    # ビューには出さない — プレイ中に「今のは外れだった」と告げるのと同じになる
     investigation_minutes: int = 0
     misled_follow_minutes: int = 0
     fired_events: list[str] = []      # 発生済みの時間経過イベント
@@ -453,8 +455,9 @@ class Engine:
             self.scenario, st.obtained_evidence
         )
 
-        # misled_score の集計（SPEC 6.2）。誤導証拠を取得した後に、
-        # それが指す資産を調べた時間を数える。
+        # 誤導を追いかけた時間の集計（SPEC 6.6）。誤導証拠を取得した後に、
+        # それが指す資産を調べた時間を数える。**採点はしない** —
+        # 外れを引くのは調査の一部である。講評で本人に返すためだけに持つ。
         if action.type == ActionType.INVESTIGATE:
             st.investigation_minutes += action.cost_minutes
             if self._follows_misleading(action, pre_ctx.obtained_evidence):

@@ -51,6 +51,15 @@ class Retro(BaseModel):
     minimal_path: MinimalPath | None
     counterfactuals: list[Counterfactual]
     unresolved_review: list[UnresolvedItem]
+    # 誤導証拠が指す先を追いかけた時間。**採点には入らない。**
+    # v1.36 まで misled_score の行動成分としてこれを割っていたが、
+    # 分母（総調査時間）が学習者の裁量で伸びる比だったので、
+    # よく調べた人ほど同じ寄り道が薄まった。外れを引くのは調査の
+    # 必然であって罰する対象ではない（SPEC 6.6 / 3.8）。
+    # ただし「どれだけ費やしたか」は本人に返す価値があるので、
+    # 採点から降ろして講評の平文に回した
+    misled_follow_minutes: int = 0
+    investigation_minutes: int = 0
 
 
 # ─────────── minimal_path（SPEC 6.6） ───────────
@@ -286,4 +295,6 @@ def build(state: GameState, scenario: Scenario) -> Retro:
         unresolved_review=unresolved_review(state, scenario)
         if cfg.unresolved_review.compute
         else [],
+        misled_follow_minutes=state.misled_follow_minutes,
+        investigation_minutes=state.investigation_minutes,
     )

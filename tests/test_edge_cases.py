@@ -25,8 +25,15 @@ def build(data):
 # ─────────── 端値（SPEC 6.7） ───────────
 
 
-def test_empty_assessment_scores_zero_precision_and_zero_misled(scenario):
-    """判断放棄は誤導耐性で加点されてはならない。"""
+def test_empty_assessment_is_the_worst_on_every_fact_metric(scenario):
+    """判断放棄は、事実認識層のどの指標でも救われない。
+
+    v1.35 まで misled_score は空判定を「誤導に引っかかっていない」と読んで
+    0（＝良い側）にしていた。判断を放棄した人が、誤導を1つ混ぜた人より
+    誤導耐性で上に立つ形になっていた。SPEC 6.7 の本則は
+    「判断を放棄することは、誤った判断より良くはない」であって、
+    そこに特例を置く理由は無い。
+    """
     e = Engine(scenario, "business_continuity", None)
     e.decide(Decision(kind="action", action_id="act_netflow_overview"))
     e.decide(Decision(kind="declare_assessment", assessment=[]))
@@ -35,19 +42,76 @@ def test_empty_assessment_scores_zero_precision_and_zero_misled(scenario):
     r = scoring.score(e.state, scenario)
     assert r.metrics["assessment_precision"] == 0.0
     assert r.metrics["assessment_recall"] == 0.0
-    # 配分成分は 0（誤導に引っかかってはいない）だが行動成分は残る
-    assert r.metrics["misled_score"] == pytest.approx(0.0, abs=1e-9)
+    # higher_is_better なので safe_ratio の既定 0.0 がそのまま最悪になる
+    assert r.metrics["assessment_support"] == 0.0
+    assert r.goodness["assessment_support"] == 0.0
 
 
-def test_zero_investigation_time(scenario):
-    """1つも調査せずに対応へ移っても、misled の行動成分で落ちない。"""
+def test_zero_investigation_time_leaves_nothing_to_stand_on(scenario):
+    """1分も調べずに名指しした資産は、当たっていても裏付けを持たない。
+
+    fs01 はブリーフィングが名指ししている資産なので、当てること自体は
+    ただである（precision も recall も動く）。動かないのは裏付けの側で、
+    「言われたから書いた」と「見たから書いた」がここで初めて分かれる。
+    """
     e = Engine(scenario, "business_continuity", None)
     e.decide(Decision(kind="declare_assessment", assessment=["fs01"]))
     e.decide(Decision(kind="finish"))
     r = scoring.score(e.state, scenario)
     assert e.state.investigation_minutes == 0
-    assert r.metrics["misled_score"] == 0.0
-    assert r.metrics["unresolved_questions"] == 1.0  # 何も解消していない
+    assert r.metrics["assessment_precision"] == 1.0   # fs01 は実際に侵害されている
+    assert r.metrics["assessment_support"] == 0.0     # 手元には何も無い
+    assert r.metrics["unresolved_questions"] == 1.0   # 何も解消していない
+
+
+def test_support_counts_what_was_in_hand_when_the_call_was_made(scenario):
+    """裏付けは**宣言した瞬間**の手元で数える。あとから取り直しても遡らない。
+
+    被疑判定は対応フェーズ中も再宣言できる（SPEC 3.6）。基準点を
+    「最後の状態」に置くと、証拠を1つも持たずに名指しした人が
+    封じ込めの片手間に裏付けを拾って満点になれてしまう。
+    unresolved_questions と同じく、判断を下した瞬間だけを見る。
+    """
+    e = Engine(scenario, "business_continuity", None)
+    e.decide(Decision(kind="declare_assessment", assessment=["ws-042"]))
+    r = scoring.score(e.state, scenario)
+    assert r.metrics["assessment_support"] == 0.0
+
+    # 対応フェーズでは調査アクションを押せないので、スナップショットを
+    # 直接進めて「あとから手に入れた」状態だけを作る
+    snap = e.state.assessment_snapshot
+    assert snap is not None and snap.obtained_evidence == []
+    ws042_evidence = [
+        ev.id for ev in scenario.evidence
+        if "ws-042" in ev.points_to and not ev.misleading
+    ]
+    e.state.obtained_evidence = list(ws042_evidence)
+    assert scoring.score(e.state, scenario).metrics["assessment_support"] == 0.0
+
+    # 宣言時点で持っていれば、同じ証拠がそのまま裏付けになる
+    snap.obtained_evidence = list(ws042_evidence)
+    assert scoring.score(e.state, scenario).metrics["assessment_support"] == 1.0
+
+
+def test_support_does_not_accept_misleading_evidence(scenario):
+    """誤導証拠しか指していない資産は、裏付けを持たないものとして数える。
+
+    misled_score を廃止しても誤導の教育価値は落とさない。
+    ws-107 を名指しした人は適合率で1回、裏付けで もう1回落ちる。
+    「何も持たずに当てた」と「誤導だけを持って外した」が同じ穴に落ちるのは
+    意図どおりで、どちらも根拠を持たない判断である。
+    """
+    e = Engine(scenario, "business_continuity", None)
+    e.decide(Decision(kind="action", action_id="act_netflow_overview"))  # ev_007（誤導）
+    e.decide(Decision(kind="declare_assessment", assessment=["ws-107"]))
+    e.decide(Decision(kind="finish"))
+    snap = e.state.assessment_snapshot
+    pointing = [
+        ev for ev in scenario.evidence
+        if ev.id in snap.obtained_evidence and "ws-107" in ev.points_to
+    ]
+    assert pointing and all(ev.misleading for ev in pointing)
+    assert scoring.score(e.state, scenario).metrics["assessment_support"] == 0.0
 
 
 def test_no_containment(scenario):
@@ -60,13 +124,6 @@ def test_no_containment(scenario):
     assert c.business_impact == 0.0
 
 
-def test_empty_persistence_is_not_a_penalty(raw):
-    raw["world"]["ground_truth"]["persistence"] = []
-    sc = build(raw)
-    e = Engine(sc, "business_continuity", None)
-    e.decide(Decision(kind="declare_assessment", assessment=[]))
-    e.decide(Decision(kind="finish"))
-    assert scoring.score(e.state, sc).metrics["persistence_missed"] == 0.0
 
 
 def test_cannot_finish_without_declaring_assessment(scenario):
@@ -628,13 +685,14 @@ def test_neither_way_of_stopping_fs01_wins_under_every_policy(scenario):
 def test_loader_rejects_a_reversed_metric_without_a_good_side_name(raw):
     """悪さを測る指標には、良い側から見た名前を必ず付けさせる。
 
-    講評は生値ではなく「良さ」を出す（向きが混ざった小数を6つ並べても
-    読めないため）。名前だけ悪い側のままにすると「永続化の見落とし 100」
-    という列ができ、裏返す前より読めなくなる。
+    講評は生値ではなく「良さ」を出す（向きが混ざった小数を並べても
+    読めないため）。名前だけ悪い側のままにすると
+    「未解消論点を抱えたままの判断 100」という列ができ、
+    裏返す前より読めなくなる。
     """
     data = copy.deepcopy(raw)
     for m in data["scoring"]["fact_layer"]["metrics"]:
-        if m["id"] == "misled_score":
+        if m["id"] == "unresolved_questions":
             m.pop("label_good")
     with pytest.raises(ScenarioError) as exc:
         build(data)
@@ -646,6 +704,6 @@ def test_the_good_side_name_is_what_the_debrief_shows(scenario):
     labels = {
         m.id: m.display_label for m in scenario.scoring.fact_layer.metrics
     }
-    assert labels["persistence_missed"] == "永続化の把握"
+    assert labels["unresolved_questions"] == "論点を解消してからの判断"
     # 向きが元から良い側の指標は、そのままの名前で通る
     assert labels["assessment_recall"] == "被疑判定の再現率"

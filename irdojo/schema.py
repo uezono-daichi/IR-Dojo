@@ -569,6 +569,21 @@ def asset_names(asset: "Asset") -> set[str]:
     return names
 
 
+def names_asset(text: str, asset: "Asset") -> str:
+    """その文が資産を名指ししていれば、名指しに使われた文字列を返す。
+
+    **大文字小文字は区別しない。** 比較を区別していたので、
+    `smbutil check --from WS-042` のようにコマンド行が大文字で書いた
+    資産名が漏洩検査を素通りしていた。読む側にとって
+    `WS-042` と `ws-042` は同じ資産である。
+    """
+    low = (text or "").casefold()
+    for name in sorted(asset_names(asset)):
+        if name.casefold() in low:
+            return name
+    return ""
+
+
 def briefing_assets(sc: "Scenario") -> set[str]:
     """meta.briefing が既に名指ししている資産の id。
 
@@ -714,6 +729,7 @@ def _validate_scenario(sc: "Scenario") -> None:
     _reject_stops_that_erase_without_stopping(sc)
     _reject_toothless_timeline(sc)
     _reject_questions_that_name_the_truth(sc)
+    _reject_actions_that_name_other_assets(sc)
     _reject_commands_that_hand_over_losable_evidence(sc)
     _reject_notes_that_mark_the_trap(sc)
     _reject_conclusion_vocabulary(sc)
@@ -750,14 +766,68 @@ def _reject_questions_that_name_the_truth(sc: "Scenario") -> None:
         for field in ("label", "question", "implication"):
             text = getattr(q, field) or ""
             for asset_id in sorted(secret):
-                for name in sorted(asset_names(by_id[asset_id])):
-                    if name in text:
-                        raise ValueError(
-                            f"{q.id}.{field}: 侵害された資産「{name}」を名指ししています。"
-                            "未解消論点は開始直後から画面に出るため、"
-                            "被疑判定の答えを転記できてしまいます"
-                            "（ブリーフィングで既に渡した資産だけが書けます）"
-                        )
+                name = names_asset(text, by_id[asset_id])
+                if name:
+                    raise ValueError(
+                        f"{q.id}.{field}: 侵害された資産「{name}」を名指ししています。"
+                        "未解消論点は開始直後から画面に出るため、"
+                        "被疑判定の答えを転記できてしまいます"
+                        "（ブリーフィングで既に渡した資産だけが書けます）"
+                    )
+
+
+def _reject_actions_that_name_other_assets(sc: "Scenario") -> None:
+    """アクションの文が、そのアクションが触らない侵害資産を名指ししていないか。
+
+    アクション一覧は**開始0分・0アクション**で画面の右に全部並ぶ。
+    `contain` は `requires_evidence` を持てない（SPEC 5.6）ので、
+    封じ込めの手は最初から全部読める。そこに他の資産の名前を書くと、
+    調査を1つも押さずに被疑判定の答えが読める。
+
+    同梱シナリオの「ws-042 から fs01 への SMB を境界で遮断」がそれで、
+    この1行が `compromised` の全量（ws-042 と fs01 の両方）と
+    critical 論点の答え（横展開の経路）を、0手・0分で渡していた。
+    被疑判定は対応フェーズ中も再宣言できる（SPEC 3.6）ので、
+    そのまま点になる。
+
+    名指ししてよいのは、そのアクション自身が触る資産
+    （`targets ∪ investigates`）に限る。封じ込めの手は自分が何を止めるかを
+    名乗る必要があるので、そこまでは許す。
+    禁じるのは `compromised ∪ {patient_zero} ∪ persistence` のうち、
+    **自分が触らない**資産の名指しで、ブリーフィングが既に名指しした資産は
+    除く（_reject_questions_that_name_the_truth と同じ免除規則）。
+
+    **盤面の資産を全部名指しした文は除く。** 全端末に EDR のフルスキャンを
+    かける手は、出力に全ホストを並べる。全員を名指しすることは
+    誰も選り分けていないことであって、漏洩ではない。
+    禁じたいのは**選り分け**である。
+
+    **これは「ヒントを消す」規則ではない。** 「発信元を絞って遮断する」と
+    書けば依然としてヒントである。保証するのは
+    「自分が触らない資産の名前は出ない」までで、そこから先は書き手の仕事。
+    """
+    gt = sc.world.ground_truth
+    secret = set(gt.compromised) | {gt.patient_zero} | set(gt.persistence)
+    secret -= briefing_assets(sc)
+    by_id = sc.asset_by_id
+
+    for act in sc.actions:
+        own = set(act.targets) | set(act.investigates)
+        forbidden = sorted(secret - own)
+        for field in ("label", "description", "group", "command"):
+            text = getattr(act, field) or ""
+            if all(names_asset(text, a) for a in sc.world.assets):
+                continue      # 全員を名指し＝誰も選り分けていない
+            for asset_id in forbidden:
+                name = names_asset(text, by_id[asset_id])
+                if name:
+                    raise ValueError(
+                        f"{act.id}.{field}: 自分が触らない侵害資産「{name}」を"
+                        "名指ししています。アクション一覧は開始直後から全部"
+                        "読めるため、調査を1つも押さずに被疑判定が組み立てられます"
+                        "（名指しできるのは targets / investigates の資産と、"
+                        "ブリーフィングで既に渡した資産だけです）"
+                    )
 
 
 # ─────────── command の検査（SPEC 5.6 / 7.6.8） ───────────

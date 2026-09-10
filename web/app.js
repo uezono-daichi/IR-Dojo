@@ -1408,9 +1408,28 @@ function duration(minutes) {
 
 function blockCounterfactuals(rep) {
   var list = rep.retrospective.counterfactuals;
-  if (!list.length) { return null; }
+  var chased = rep.retrospective.misled_follow_minutes || 0;
+  if (!list.length && !chased) { return null; }
   var b = el('div', 'block');
   b.appendChild(el('h2', null, '③ 誤導の棄却経路'));
+
+  /* 追いかけた時間は**採点していない**。外れを引くのは調査の必然であって、
+     罰する対象ではない（SPEC 6.6）。それでも、どこに時間を落としたかは
+     本人にしか返せない情報なので、平文の1行として置く。
+     v1.36 まではこれを総調査時間で割って減点していたが、
+     分母が本人の裁量で伸びるので、よく調べた人ほど寄り道が薄まっていた */
+  if (chased) {
+    var total = rep.retrospective.investigation_minutes || 0;
+    b.appendChild(el('p', 'faint',
+      '誤導証拠が指す先を追いかけた時間は ' + duration(chased) + 'です' +
+      (total ? '（調べた時間の合計は ' + duration(total) + '）' : '') +
+      '。これは採点していません。外れを引くこと自体は調査の一部です。'));
+  }
+  if (!list.length) {
+    b.appendChild(el('p', 'dim',
+      '誤導証拠だけを根拠にした名指しはありませんでした。'));
+    return b;
+  }
   list.forEach(function (cf) {
     var note = el('div', 'note-bad');
     note.appendChild(el('p', null,

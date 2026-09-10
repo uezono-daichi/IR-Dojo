@@ -11,7 +11,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from irdojo.api import app
-from irdojo.loader import load_scenario
+from irdojo.loader import SCENARIO_DIR, load_scenario
+
+
+@pytest.fixture
+def raw_scenario():
+    import yaml
+
+    path = SCENARIO_DIR / "ransomware-initial-response-01.yaml"
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 # プレイ中のレスポンスに現れてはならないキー
 FORBIDDEN_KEYS = {
@@ -467,6 +475,132 @@ def test_open_questions_do_not_hand_over_the_assessment(client):
                 assert name not in text, (
                     f"{q['id']}: 開始直後の画面が「{name}」を名指ししている"
                 )
+
+
+def test_actions_do_not_name_assets_they_do_not_touch(client):
+    """アクションの文が、そのアクションが触らない侵害資産を名指ししていない。
+
+    アクション一覧は**開始0分・0アクション**で画面の右に全部並ぶ。
+    `contain` は `requires_evidence` を持てないので（SPEC 5.6）、
+    封じ込めの手は最初から全部読める。実際「ws-042 から fs01 への SMB を
+    境界で遮断」という1行が、compromised の全量と横展開の答えを
+    0手・0分で渡していた。被疑判定は対応フェーズ中も再宣言できるので、
+    そのまま点になる。
+
+    見るのは**学習者に配られる文**（label / group / description）である。
+    `command` は押すまで返らないので、ここでは PlayerView 側を見る。
+
+    通るのは実際の悪用経路そのもの — 何も調べずに宣言して対応フェーズへ入り、
+    そこで初めて読める封じ込めの一覧から、判定を組み直す。
+    """
+    from irdojo.schema import briefing_assets, names_asset
+
+    sc = load_scenario("ransomware-initial-response-01")
+    gt = sc.world.ground_truth
+    secret = set(gt.compromised) | {gt.patient_zero} | set(gt.persistence)
+    secret -= briefing_assets(sc)
+    assert secret, "検査対象が空になっている"
+
+    sid = client.post(
+        "/api/session",
+        json={"scenario_id": sc.meta.id, "assist_level": "assisted"},
+    ).json()["session_id"]
+    res = client.post(
+        f"/api/session/{sid}/decide",
+        json={"kind": "declare_assessment", "assessment": []},
+    ).json()
+    actions = res["view"]["available_actions"]
+    assert any(sc.action_by_id[a["id"]].type.value == "contain" for a in actions), \
+        "対応フェーズの封じ込めが一覧に出ていない（検査対象が空）"
+
+    for a in actions:
+        act = sc.action_by_id[a["id"]]
+        own = set(act.targets) | set(act.investigates)
+        text = " ".join(
+            str(a.get(f) or "") for f in ("label", "group", "description")
+        )
+        for asset_id in secret - own:
+            name = names_asset(text, sc.asset_by_id[asset_id])
+            assert not name, (
+                f"{a['id']}: 触らない資産「{name}」を開始直後の画面で名指ししている"
+            )
+
+
+def test_asset_names_are_matched_without_regard_to_case(scenario):
+    """漏洩検査の照合は、大文字小文字を区別しない。
+
+    コマンド行は慣習として `WS-042` や `FS01` と大文字で書く。
+    区別する比較をしていたので、`smbutil check --from WS-042` は
+    素通りしていた。読む側にとって `WS-042` と `ws-042` は同じ資産である。
+    """
+    from irdojo.schema import names_asset
+
+    ws042 = scenario.asset_by_id["ws-042"]
+    assert names_asset("$ smbutil check --from WS-042", ws042) == "ws-042"
+    assert names_asset("$ smbutil check --from ws-042", ws042) == "ws-042"
+    assert names_asset("$ smbutil check --to FS01", ws042) == ""
+
+
+def test_the_loader_rejects_an_action_that_names_someone_elses_asset(raw_scenario):
+    """新しい規則を間違って使ったシナリオを、ローダが拒否すること。
+
+    規則が保証するのは「自分が触らない資産の名前は出ない」までである。
+    封じ込めの手が自分の止める先を名乗るのは許す（そうでないと
+    何をする手なのか分からない）。
+    """
+    import copy
+
+    import yaml
+
+    from irdojo.loader import ScenarioError, load_scenario_text
+
+    data = copy.deepcopy(raw_scenario)
+    for a in data["actions"]:
+        if a["id"] == "act_block_smb_fs01":
+            a["label"] = "ws-042 から fs01 への SMB を境界で遮断"
+    with pytest.raises(ScenarioError) as exc:
+        load_scenario_text(yaml.safe_dump(data, allow_unicode=True))
+    assert "ws-042" in str(exc.value)
+
+    # 大文字で書いても同じこと。ここが v1.35 まで素通りしていた
+    data = copy.deepcopy(raw_scenario)
+    for a in data["actions"]:
+        if a["id"] == "act_block_smb_fs01":
+            a["command"] = "$ smbutil check --from WS-042 --to FS01\n"
+    with pytest.raises(ScenarioError) as exc:
+        load_scenario_text(yaml.safe_dump(data, allow_unicode=True))
+    assert "ws-042" in str(exc.value)
+
+
+def test_a_fleet_wide_command_may_list_every_host(raw_scenario):
+    """全端末を並べる出力は拒否しない。**全員の名指しは選り分けではない。**
+
+    全端末に EDR のフルスキャンをかける手は、出力に全ホストを並べる。
+    そこから読めるのは「どれも検知なし」であって、どれが侵害されたかではない。
+    禁じたいのは選り分けであって、列挙ではない。
+    """
+    import copy
+
+    import yaml
+
+    from irdojo.loader import load_scenario_text
+
+    data = copy.deepcopy(raw_scenario)
+    hosts = [a["id"] for a in data["world"]["assets"]]
+    for a in data["actions"]:
+        if a["id"] == "act_edr_full_scan":
+            a["command"] = "$ edrctl scan --all\n" + "".join(
+                f"  {h.upper()} done 0 detections\n" for h in hosts
+            )
+    load_scenario_text(yaml.safe_dump(data, allow_unicode=True))   # 通ること
+
+    # 1台だけ落とすと、それは選り分けである
+    data = copy.deepcopy(raw_scenario)
+    for a in data["actions"]:
+        if a["id"] == "act_edr_full_scan":
+            a["command"] = "$ edrctl scan --all\n  WS-042 done 1 detection\n"
+    with pytest.raises(Exception):
+        load_scenario_text(yaml.safe_dump(data, allow_unicode=True))
 
 
 def test_declaring_without_investigating_cannot_reach_a_full_fact_score(scenario):

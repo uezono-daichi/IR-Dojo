@@ -173,63 +173,42 @@ def _recall_parts(state: GameState, scenario: Scenario) -> list[MetricPart]:
     ]
 
 
-@metric("persistence_missed")
-def _persistence_missed(state: GameState, scenario: Scenario) -> float:
-    persistence = set(scenario.world.ground_truth.persistence)
-    missed = persistence - _assessed(state)
-    return safe_ratio(len(missed), len(persistence))
+@metric("assessment_support")
+def _support(state: GameState, scenario: Scenario) -> float:
+    """名指しのうち、宣言時点の手元に非誤導の裏付けがあった割合（SPEC 6.2）。
 
+    適合率・再現率は「答えと合っていたか」しか見ない。当てずっぽうで
+    当てた判定と、証拠を積んで辿り着いた判定が同じ点になる。
+    ここが測るのは**根拠の厚み**であって、当たり外れではない。
 
-@breakdown("persistence_missed")
-def _persistence_parts(state: GameState, scenario: Scenario) -> list[MetricPart]:
-    persistence = set(scenario.world.ground_truth.persistence)
-    missed = persistence - _assessed(state)
-    return [
-        MetricPart(label="見落とし", num=len(missed),
-                   den_label="永続化のあった資産", den=len(persistence))
-    ]
-
-
-@metric("misled_score")
-def _misled(state: GameState, scenario: Scenario) -> float:
-    """行動ベースと配分ベースのハイブリッド（SPEC 6.2）。
-
-    誤導証拠にアクセスすること自体は減点しない。測るのは
-    「取得後にどれだけ追いかけたか」と「最終判断に混ぜたか」。
+    数えるのは**宣言した瞬間に手元にあった**証拠だけ。あとから
+    取り直しても、その判断の根拠にはなっていない（unresolved_questions と
+    同じ基準点）。
     """
-    action_part = safe_ratio(state.misled_follow_minutes, state.investigation_minutes)
+    a = _assessed(state)
+    return safe_ratio(len(_supported(state, scenario)), len(a))
 
+
+def _supported(state: GameState, scenario: Scenario) -> set[str]:
+    """名指しのうち、宣言時点の手元に「その資産を指す非誤導証拠」があるもの。"""
     by_id = scenario.evidence_by_id
-    obtained = [by_id[e] for e in state.obtained_evidence if e in by_id]
-    misled_only = 0
-    for asset_id in _assessed(state):
-        pointing = [e for e in obtained if asset_id in e.points_to]
-        if pointing and all(e.misleading for e in pointing):
-            misled_only += 1
-    allocation_part = safe_ratio(misled_only, len(_assessed(state)))
+    snap = state.assessment_snapshot
+    # 宣言していない状態で採点されたら、手元は空とみなす。
+    # 「まだ判断していない」を「今の手元で判断した」に読み替えない
+    held = snap.obtained_evidence if snap else []
+    obtained = [by_id[e] for e in held if e in by_id]
+    return {
+        asset_id
+        for asset_id in _assessed(state)
+        if any(asset_id in e.points_to and not e.misleading for e in obtained)
+    }
 
-    return 0.4 * action_part + 0.6 * allocation_part
 
-
-@breakdown("misled_score")
-def _misled_parts(state: GameState, scenario: Scenario) -> list[MetricPart]:
-    """2つの分数をそのまま出す。合成の重み（0.4 / 0.6）は出さない。
-
-    読み手が知りたいのは「何をどれだけ追ったか」であって、
-    ハイブリッドの内分点ではない。
-    """
-    by_id = scenario.evidence_by_id
-    obtained = [by_id[e] for e in state.obtained_evidence if e in by_id]
-    misled_only = 0
-    for asset_id in _assessed(state):
-        pointing = [e for e in obtained if asset_id in e.points_to]
-        if pointing and all(e.misleading for e in pointing):
-            misled_only += 1
+@breakdown("assessment_support")
+def _support_parts(state: GameState, scenario: Scenario) -> list[MetricPart]:
     return [
-        MetricPart(label="誤導を追った時間", num=state.misled_follow_minutes,
-                   den_label="調べた時間", den=state.investigation_minutes),
-        MetricPart(label="誤導だけを根拠にした名指し", num=misled_only,
-                   den_label="名指し", den=len(_assessed(state))),
+        MetricPart(label="手元の証拠が指していた", num=len(_supported(state, scenario)),
+                   den_label="名指し", den=len(_assessed(state)))
     ]
 
 
@@ -294,7 +273,8 @@ def score(state: GameState, scenario: Scenario, policy: Policy | None = None) ->
         if fn is None:
             raise ValueError(f"未登録の指標: {spec.id}")
         value = fn(state, scenario)
-        # weight_multiplier は指標値そのものに掛かる（SPEC 6.2 の persistence_missed）
+        # weight_multiplier は指標値そのものに掛かる（SPEC 6.2）。
+        # 同梱シナリオでは現在どの指標も使っていない（既定 1.0）
         value = min(1.0, value * spec.weight_multiplier)
         raw[spec.id] = value
         good[spec.id] = value if spec.direction == "higher_is_better" else 1.0 - value

@@ -65,17 +65,18 @@ def test_fact_metrics(scenario):
     r = scoring.score(play_spec_68(scenario).state, scenario)
     assert r.metrics["assessment_precision"] == pytest.approx(0.500, abs=0.001)
     assert r.metrics["assessment_recall"] == pytest.approx(0.500, abs=0.001)
-    assert r.metrics["persistence_missed"] == pytest.approx(0.000, abs=0.001)
-    assert r.metrics["misled_score"] == pytest.approx(0.361, abs=0.001)
+    # ws-042 は ev_006 / ev_009 / ev_011 が指す。ws-107 を指すのは誤導の
+    # ev_007 だけなので裏付けにならない
+    assert r.metrics["assessment_support"] == pytest.approx(0.500, abs=0.001)
     assert r.metrics["unresolved_questions"] == pytest.approx(0.333, abs=0.001)
-    assert r.fact_score == pytest.approx(0.611, abs=0.001)
+    assert r.fact_score == pytest.approx(0.567, abs=0.001)
 
 
 def test_composite(scenario):
     r = scoring.score(play_spec_68(scenario).state, scenario)
     assert r.policy_score == pytest.approx(0.626, abs=0.001)
-    assert r.composite_score == pytest.approx(0.616, abs=0.001)
-    assert round(r.composite_score * 100) == 62
+    assert r.composite_score == pytest.approx(0.584, abs=0.001)
+    assert round(r.composite_score * 100) == 58
 
 
 def test_dependency_chain_variant(scenario):
@@ -98,7 +99,7 @@ def test_dependency_chain_variant(scenario):
     # fs01 が封じ込められていないので完全度は 0.5、減衰も on_partial 止まり
     assert r.consequences.containment_completeness == pytest.approx(0.500, abs=0.001)
     assert r.policy_score == pytest.approx(0.290, abs=0.001)
-    assert round(r.composite_score * 100) == 51
+    assert round(r.composite_score * 100) == 48
 
 
 def test_same_play_scores_differently_per_policy(scenario):
@@ -112,9 +113,9 @@ def test_same_play_scores_differently_per_policy(scenario):
     assert got["damage_minimization"].constraint_violations == 0
     assert got["evidence_preservation"].constraint_violations == 0
 
-    assert round(got["business_continuity"].composite_score * 100) == 62
-    assert round(got["damage_minimization"].composite_score * 100) == 66
-    assert round(got["evidence_preservation"].composite_score * 100) == 65
+    assert round(got["business_continuity"].composite_score * 100) == 58
+    assert round(got["damage_minimization"].composite_score * 100) == 63
+    assert round(got["evidence_preservation"].composite_score * 100) == 62
 
     # 事実認識層は方針に依存しない
     facts = {r.fact_score for r in got.values()}

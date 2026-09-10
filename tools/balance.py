@@ -69,6 +69,16 @@ class Profile:
     # 「根を落とせば全部止まる」は画面を見た人が普通に思いつく手である。
     # この像が無いと、盤面で最も高くつく資産が一度も止まらない
     contains_root: bool = False
+    # 盤面の資産を全部名指しするか（`_assess` を迂回する）。
+    # 「疑わしきは全部隔離」は、深夜に人手が無いときの定番の降り方である。
+    # 手元の証拠から組み立てる `_assess` ではこの形が作れない
+    names_everything: bool = False
+    # 調査を1手も押さない像か。「調べる意味はあるか」の判定は、
+    # この印が付いた像と付いていない像の**全対戦**で見る。
+    # 1本だけ押して降りる像（shallow）はここに入らない —
+    # 30分の1手でも調べたことは調べたことであり、
+    # その最も薄い像にすら勝てないことを要求する方が検査は強い
+    skips_investigation: bool = False
 
 
 def _skilled(sc: Scenario) -> list[str]:
@@ -110,6 +120,26 @@ def _nothing(sc: Scenario) -> list[str]:
     return []
 
 
+def _shallow(sc: Scenario) -> list[str]:
+    """ブリーフィングが名指しした資産に届く手を、1つだけ押して降りる。
+
+    「fs01 のログを見たら ws-042 から来ていた。もう十分」は、
+    現場で最もありふれた降り方である。`hasty` の 0手だけを置いていると、
+    この形（1本で確信する）が一度も測られない。
+    最初から押せる手のうち、その資産に届く最安のものを1つ。
+    """
+    named = set(briefing_assets(sc))
+    acts = [
+        a for a in sc.actions
+        if a.type == ActionType.INVESTIGATE
+        and set(a.investigates) & named
+        and not a.requires_evidence
+    ]
+    if not acts:
+        return []
+    return [min(acts, key=lambda a: (a.cost_minutes, a.id)).id]
+
+
 PROFILES = [
     Profile("skilled", "巧い", "最短経路。答えを知っている者の上限", _skilled),
     Profile("exhaustive", "全部押す", "取捨選択をしない", _exhaustive,
@@ -120,8 +150,19 @@ PROFILES = [
     # これが無いと「誤導は損か」を調査量の差と切り分けられない
     Profile("wanderer_clear", "誤導を棄却する", "同じ調査量で、棄却を判定に反映した場合",
             _wanderer, patience_minutes=300),
+    # 「調べずに動く」には形が2つある。0手・1資産だけを代表にしていた頃は、
+    # **その中の最弱の1つ**を相手に「調べない像は最下位」と言っていた。
+    # 「疑わしきは全部隔離」は同じ 0手でも遥かに強い（適合率は落ちるが
+    # 再現率は満点になり、被害も止まる）
     Profile("hasty", "調べずに止める", "ブリーフィングだけで名指しして封じ込める",
-            _nothing),
+            _nothing, skips_investigation=True),
+    Profile("blanket", "疑わしきは全部", "調べずに盤面の資産を全部名指しして止める",
+            _nothing, names_everything=True, skips_investigation=True),
+    # 逆側の弱い敵。**調べた側の下限**を、網羅や誤導追いではなく
+    # 「1本読んで確信した人」に置く。調べない像は、この 30分の1手にも
+    # 勝ってはならない
+    Profile("shallow", "1本で確信する", "手を1つだけ押して、もう十分だと判断する",
+            _shallow),
     # 構成図の根が dc01 であることは開始時から画面に出ている。
     # 「根を落とせば全部止まる」は、それを見た人が普通に思いつく手であり、
     # **対応フェーズで最も高くつく選択肢**でもある。この像が無いと
@@ -159,7 +200,9 @@ def _play(
     *, stop: bool, patience: int | None,
     weighs_refutations: bool, contains_everything: bool,
     contains_root: bool = False,
+    names_everything: bool = False,
     containment: list[str] | None = None,
+    assessment: list[str] | None = None,
 ) -> Engine:
     """order を実行可能になった順に消化し、宣言して封じ込めるまでを通す。"""
     e = Engine(sc, sc.meta.default_policy, None)
@@ -195,7 +238,16 @@ def _play(
     # 事実認識層の重み 0.60 分が定数になっていた。
     # このシナリオの教育の中心（誤導に乗って ws-107 を名指しする）が
     # 判定の数字に一度も現れていなかった
-    assessment = _assess(sc, e.state, weighs_refutations=weighs_refutations)
+    # `assessment` を外から渡せるようにしてある。根拠の梯子（checks の
+    # evidence_ladder）は**判定を揃えて根拠だけ変える**対照なので、
+    # 像を足しても作れない — 同じ宣言のまま調査量だけを入れ替える必要がある
+    if assessment is None:
+        if names_everything:
+            # 「疑わしきは全部」。手元の証拠ではなく、盤面に見えている
+            # 資産をそのまま名指しする。構成図は開始時から出ている（7.6.7）
+            assessment = [a.id for a in sc.world.assets]
+        else:
+            assessment = _assess(sc, e.state, weighs_refutations=weighs_refutations)
     e.decide(Decision(kind="declare_assessment", assessment=assessment))
 
     # 宣言を要求するフェーズへはエンジンがそのまま進める（engine._declare）。
@@ -304,7 +356,8 @@ def run_profile(sc: Scenario, prof: Profile, notices: list[str]) -> Run:
               stop=prof.stop_when_confident, patience=prof.patience_minutes,
               weighs_refutations=prof.weighs_refutations,
               contains_everything=prof.contains_everything,
-              contains_root=prof.contains_root)
+              contains_root=prof.contains_root,
+              names_everything=prof.names_everything)
     st = e.state
     r = Run(
         profile=prof.key,
@@ -361,6 +414,112 @@ def containment_sweep(sc: Scenario) -> dict[tuple[str, ...], dict[str, int]]:
                 pol.id: round(scoring.score(e.state, sc, pol).composite_score * 100)
                 for pol in sc.policies
             }
+    return out
+
+
+# ─────────── 網羅の押し順（SPEC 6.6 / 8.3） ───────────
+
+
+def press_orders(sc: Scenario) -> dict[str, list[str]]:
+    """「全部押す」の、実在しそうな押し順。
+
+    **YAML の記載順1本で「網羅から critical 論点を奪っていない」を
+    判定していた。** 記載順は作者の都合であって、学習者の押し順ではない。
+    このシナリオでは記載順がたまたま 15分の余裕で通っており、
+    `cost_minutes` を1つ触れば裏返る状態だった。
+    画面を見た人が実際に取りうる並べ方を全部通す。
+    """
+    acts = [a for a in sc.actions if a.type == ActionType.INVESTIGATE]
+    volatile = {e.id for e in sc.evidence if e.volatile}
+    named = set(briefing_assets(sc))
+    groups = {}
+    for a in acts:
+        groups.setdefault(a.group, len(groups))
+    return {
+        "画面の並び順": [a.id for a in acts],
+        "安い順": [a.id for a in sorted(acts, key=lambda a: (a.cost_minutes, a.id))],
+        "高い順": [a.id for a in sorted(acts, key=lambda a: (-a.cost_minutes, a.id))],
+        "揮発性を先に": [
+            a.id for a in sorted(acts, key=lambda a: not (set(a.yields) & volatile))
+        ],
+        "群ごと": [a.id for a in sorted(acts, key=lambda a: groups[a.group])],
+        "ブリーフィングの資産から": [
+            a.id for a in sorted(acts, key=lambda a: not (set(a.investigates) & named))
+        ],
+    }
+
+
+def _lost_critical(sc: Scenario, run: Run) -> dict[str, str]:
+    """未解消のまま終わった critical 論点を、原因で仕分ける。
+
+    「解けなかった」には2つの原因があり、**設計上の意味がまるで違う**。
+
+      時計 — 世界の側の出来事が、取りに行く前に証拠を消した。
+             これは `communicate` の手で防げるべきものである（SPEC 5.6.1）
+      排他 — 自分の手で、取りに行く前に証拠を消した。
+             これは SPEC 3.8 が意図した「順序そのものが判断」である
+
+    片方だけを見て「網羅を罰していない／いる」と言うと、必ず取り違える。
+    """
+    out: dict[str, str] = {}
+    lost = set(run.lost)
+    world = set(run.lost_to_world)
+    for q in sc.open_questions:
+        if not q.critical or q.id not in set(run.unresolved):
+            continue
+        missing = set(q.resolved_by) & lost
+        if not missing:
+            out[q.id] = "未取得"      # 単に押していない。奪われてはいない
+        else:
+            out[q.id] = "時計" if (missing & world) else "排他"
+    return out
+
+
+def run_order(sc: Scenario, order: list[str], notices: list[str]) -> Run:
+    """指定の押し順で全部押し切って、封じ込めまで通す。"""
+    e = _play(sc, order, notices, stop=False, patience=None,
+              weighs_refutations=True, contains_everything=True)
+    st = e.state
+    return Run(
+        profile="order", with_notice=bool(notices),
+        minutes=st.elapsed_minutes,
+        lost=list(st.lost_evidence),
+        lost_to_world=[x for x in st.lost_evidence if x in st.destroyed_by_world],
+        assessment=list(st.assessment),
+        contained=sorted(st.contained_at),
+        unresolved=[q.id for q in sc.open_questions
+                    if q.id not in st.resolved_questions],
+    )
+
+
+# ─────────── 根拠の梯子（SPEC 6.2） ───────────
+
+
+def evidence_ladder(sc: Scenario) -> list[tuple[str, int, float]]:
+    """**判定を揃えて、根拠の厚みだけを変える**対照。
+
+    これが今回の直接の計器である。適合率・再現率だけを見ていた頃は、
+    ブリーフィングの資産名を書き写しただけのプレイと、
+    証拠を積んで同じ結論に達したプレイが同点だった。
+    事実認識層の重みが「compromised と書けたか」の1ビットに落ちていた。
+
+    宣言する内容は**巧いプレイが自分の証拠から組み立てたもの**を使う。
+    `ground_truth` は読まない（読んだ瞬間に、実在しない像になる）。
+    """
+    skilled_order = _skilled(sc)
+    ref = _play(sc, skilled_order, [], stop=True, patience=None,
+                weighs_refutations=True, contains_everything=False)
+    verdict = list(ref.state.assessment)
+    contain = cheapest_cover(sc, set(verdict))
+
+    rungs = [("0手", []), ("1本だけ", _shallow(sc)), ("最短経路", skilled_order)]
+    out: list[tuple[str, int, float]] = []
+    for label, order in rungs:
+        e = _play(sc, order, [], stop=False, patience=None,
+                  weighs_refutations=True, contains_everything=False,
+                  containment=contain, assessment=verdict)
+        out.append((label, e.state.elapsed_minutes,
+                    scoring.score(e.state, sc).fact_score * 100))
     return out
 
 
@@ -451,13 +610,72 @@ def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
            - runs[("exhaustive", False)].by_policy[pol]["composite"])
     out.append(Check(gap >= 10, "網羅は巧いプレイに負ける", f"差 {gap}点（狙い 10点以上、{pol}）"))
 
-    # SPEC 6.6: 網羅すれば事実は掴める（そこは罰しない）
-    ex_unres = [q for q in runs[("exhaustive", False)].unresolved
-                if sc.question_by_id[q].critical]
+    # SPEC 6.6: 網羅すれば事実は掴める（そこは罰しない）。
+    # **押し順を1本しか見ていなかった。** YAML の記載順は作者の都合であって、
+    # 学習者の押し順ではない。実測すると、記載順が通っていたのは
+    # ev_009 の取得（255分）と現場再起動（270分）の 15分の余裕のおかげで、
+    # `cost_minutes` を1つ触れば裏返る状態だった。
+    #
+    # 検査を2本に割る。**時計が奪う分と排他が奪う分は設計上の意味が違う** —
+    # 前者は連絡の手で防げるべきもの、後者は SPEC 3.8 が意図した
+    # 「順序そのものが判断」である。混ぜて1本で測ると、
+    # どちらが原因で落ちたのか分からないまま「網羅を罰している」と読む
+    notices = [a.id for a in sc.actions if a.type == ActionType.COMMUNICATE]
+    orders = press_orders(sc)
+    order_runs = {
+        (name, notice): run_order(sc, ids, notices if notice else [])
+        for name, ids in orders.items()
+        for notice in (False, True)
+    }
+
+    taken = {
+        name: _lost_critical(sc, r)
+        for (name, notice), r in order_runs.items() if notice
+    }
+    # 排他を踏んだ順序は対象外。自分の手で消したものは、
+    # 連絡で防ぐものではなく順序で避けるものである
+    by_clock = {
+        name: lost for name, lost in taken.items()
+        if not any(v == "排他" for v in lost.values())
+    }
+    hit = {n: v for n, v in by_clock.items() if v}
     out.append(Check(
-        not ex_unres,
-        "網羅した学習者から critical 論点を奪っていない",
-        f"未解消 critical: {ex_unres or 'なし'}",
+        not hit,
+        "時計が奪うものは、盤面の手で取り戻せる",
+        f"連絡ありで全部押す {len(by_clock)}通りの順序（排他を踏んだ "
+        f"{len(taken) - len(by_clock)}通りを除く）。失った critical: "
+        + (str(hit) if hit else "なし"),
+    ))
+
+    if notices:
+        # 逆側。連絡を出さなければ、少なくとも1つの押し順が時計に奪われること。
+        # ここが全通りで「奪われない」なら、その連絡は何も守っていない
+        without = {
+            name: _lost_critical(sc, r)
+            for (name, notice), r in order_runs.items() if not notice
+        }
+        bitten = {
+            n: v for n, v in without.items()
+            if any(x == "時計" for x in v.values())
+        }
+        out.append(Check(
+            bool(bitten),
+            "連絡には歯がある",
+            f"連絡なしで全部押すと時計に奪われる順序: {bitten or 'なし'}"
+            f"（{len(without)}通り中 {len(bitten)}通り）",
+        ))
+
+    # 事実認識層は、**答えではなく根拠の厚み**を測っているか。
+    # 判定を揃えて調査量だけを変える対照。ここが平らなら、
+    # 事実認識層の重みは「compromised と書けたか」の1ビットに落ちている
+    ladder = evidence_ladder(sc)
+    facts = [f for _lab, _m, f in ladder]
+    rising = all(b > a for a, b in zip(facts, facts[1:]))
+    out.append(Check(
+        rising and (facts[-1] - facts[0]) >= 30,
+        "同じ判定でも、根拠の厚みで事実認識層が動く",
+        " → ".join(f"{lab} {m}分 {f:.1f}" for lab, m, f in ladder)
+        + f"（単調増加・両端の差 {facts[-1] - facts[0]:.1f}点、狙い 30点以上）",
     ))
 
     # SPEC 5.10: 出来事はすべて盤面を変える
@@ -480,7 +698,6 @@ def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
         ))
 
     # SPEC 5.6.1: 連絡は、遅いプレイで実際に得になる
-    notices = [a.id for a in sc.actions if a.type == ActionType.COMMUNICATE]
     if notices:
         w0, w1 = runs[("wanderer", False)], runs[("wanderer", True)]
         gains = {p.id: w1.by_policy[p.id]["composite"] - w0.by_policy[p.id]["composite"]
@@ -525,23 +742,39 @@ def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
             f"誤導を追う: {bad.assessment} / 棄却できた: {ok.assessment}",
         ))
 
-    # 何もしないプレイが、調べたプレイに勝っていないか。
+    # 調べないプレイが、調べたプレイに勝っていないか。
     # 被害は経過時間の積分なので、**動かなければ被害は増えない**。
-    # 調べる意味は、この像がどの方針でも最下位になることでしか保証されない
-    if ("hasty", False) in runs:
-        h = runs[("hasty", False)]
-        others = [(k, r) for k, r in runs.items() if k[0] != "hasty" and not k[1]]
+    # 調べる意味は、この対戦が全敗になることでしか保証されない。
+    #
+    # **以前は「調べない像」を1本（0手・fs01 だけ名指し）しか置いておらず、
+    # その1本を全ての他像と比べていた。** それは調べない側の最弱の形である。
+    # 同じ 0手でも「疑わしきは全部隔離」は再現率が満点になり、被害も止まる。
+    # 弱い敵を選んでいる限り、この検査は通ったまま何も保証しない
+    blind = [p.key for p in PROFILES if p.skips_investigation]
+    seeing = [p.key for p in PROFILES if not p.skips_investigation]
+    if blind and seeing:
         beaten = [
-            f"{k[0]}/{p.id}"
-            for k, r in others
-            for p in sc.policies
-            if h.by_policy[p.id]["composite"] >= r.by_policy[p.id]["composite"]
+            f"{b}≧{g}/{pol.id}"
+            for b in blind
+            for g in seeing
+            for pol in sc.policies
+            if runs[(b, False)].by_policy[pol.id]["composite"]
+            >= runs[(g, False)].by_policy[pol.id]["composite"]
         ]
+        worst_blind = max(
+            (runs[(b, False)].by_policy[pol.id]["composite"], f"{b}/{pol.id}")
+            for b in blind for pol in sc.policies
+        )
+        best_gap = min(
+            (runs[(g, False)].by_policy[pol.id]["composite"], f"{g}/{pol.id}")
+            for g in seeing for pol in sc.policies
+        )
         out.append(Check(
             not beaten,
-            "調べずに止めるプレイはどの方針でも最下位",
-            f"{h.minutes}分・{h.by_policy[sc.meta.default_policy]['composite']}点"
-            f"（{sc.meta.default_policy}）。勝ってしまった相手: {beaten or 'なし'}",
+            "調べない像は、調べた像のどれにも勝たない",
+            f"調べない側の最高 {worst_blind[1]} {worst_blind[0]}点"
+            f" / 調べた側の最低 {best_gap[1]} {best_gap[0]}点"
+            f"。勝ってしまった組: {beaten or 'なし'}",
         ))
 
     # SPEC 3.8 / 8.2 手順7: フェーズ総コストは、そこで使える時間の2〜3倍。

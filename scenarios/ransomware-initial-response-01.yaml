@@ -1263,23 +1263,23 @@ actions:
   # 止めれば安いが業務が落ち、稼働中の痕跡も消える。遮断すれば高いが
   # サーバは動き続ける。どちらが正解かは方針が決める（原則4）。
   - id: act_block_smb_fs01
-    label: "ws-042 から fs01 への SMB を境界で遮断"
+    label: "fs01 の共有への SMB を、発信元を絞って境界で遮断"
     command: |
       $ chgctl request --type acl --scope core --window now --approver oncall
         CHG-2026-0288  emergency  approved  (00:18:20)
 
-      $ swctl acl add --vlan 20 --src 192.0.2.42/32 --dst 192.0.2.10/32 \
+      $ swctl acl add --vlan 20 --dst 192.0.2.10/32 --src-list CHG-2026-0288 \
           --proto tcp --dport 445 --action deny --log
-        acl applied (sw-core-01, sw-core-02)
+        acl applied (sw-core-01, sw-core-02)  entries: 1
 
-      $ smbutil check --from WS-042 --to FS01
+      $ smbutil check --to FS01
         connect \\FS01\share : timed out (blocked)
         FS01 は稼働を継続。他セグメントからの共有利用に変化なし。
     group: "通信だけを止める"
     phase: response
     type: contain
     description: |
-      ws-042 から fs01 への SMB 接続を、境界のアクセス制御で遮断する。
+      fs01 の SMB 共有へ向かう接続を、境界のアクセス制御で発信元単位に遮断する。
       サーバは動いたままで、他部署からの共有利用は続く。
       深夜帯の構成変更なので、変更管理の承認と実機での確認に時間がかかる。
     cost_minutes: 25
@@ -1443,27 +1443,26 @@ scoring:
       - id: assessment_recall
         label: "被疑判定の再現率"
         direction: higher_is_better
+      # 適合率・再現率は「答えと合っていたか」しか見ない。
+      # 根拠の厚みを測るのはこの1本だけで、宣言した瞬間の手元を見る
+      - id: assessment_support
+        label: "名指しの裏付け"
+        direction: higher_is_better
       # 生値は「悪さ」だが、講評が出すのは向きを揃えた「良さ」なので、
       # 良い側から見た名前（label_good）を必ず添える
-      - id: persistence_missed
-        label: "永続化の見落とし"
-        label_good: "永続化の把握"
-        direction: lower_is_better
-        weight_multiplier: 2.0
-      - id: misled_score
-        label: "誤導追従度"
-        label_good: "誤導への耐性"
-        direction: lower_is_better
       - id: unresolved_questions
         label: "未解消論点を抱えたままの判断"
         label_good: "論点を解消してからの判断"
         direction: lower_is_better
     weights:
-      assessment_precision:  0.25
-      assessment_recall:     0.25
-      persistence_missed:    0.10
-      misled_score:          0.20
-      unresolved_questions:  0.20
+      assessment_precision:  0.20
+      assessment_recall:     0.20
+      assessment_support:    0.20
+      # critical 論点が3つあるので 4段階の階段になる。1論点 = 13.3 fact点。
+      # 永続化の把握はこの中の q_persistence が受け持つ（ev_009 を
+      # 現場の再起動より先に取れたか）。論点が2つ以下のシナリオでは
+      # この重みは使えない（SPEC 8.3）
+      unresolved_questions:  0.40
 
   policy_layer:
     constraint_penalty: 0.15
