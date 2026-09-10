@@ -18,3 +18,6 @@ results/
 # ブラウザ検証（node_modules と撮ったもの）
 node_modules/
 .playtest/
+
+# エージェント用の作業ツリー（本体ではない）
+.claude/worktrees/
