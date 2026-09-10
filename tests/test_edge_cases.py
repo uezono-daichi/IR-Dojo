@@ -317,9 +317,140 @@ def test_evidence_preservation_constraint_fires(scenario):
     e.decide(Decision(kind="finish"))
     viol = e.state.violations_by_policy["evidence_preservation"]
     assert len(viol) == 1
-    assert viol[0].constraint_type == "require_before"
+    assert viol[0].constraint_type == "require_capture_of_target"
     # 同じ行動でも業務継続最優先では違反にならない
     assert e.state.violations_by_policy["business_continuity"] == []
+
+
+def _capture_then_stop(scenario, captures, stop):
+    e = Engine(scenario, "evidence_preservation", None)
+    for aid in captures:
+        e.decide(Decision(kind="action", action_id=aid))
+    e.decide(Decision(kind="declare_assessment", assessment=["ws-042", "fs01"]))
+    e.decide(Decision(kind="action", action_id=stop))
+    e.decide(Decision(kind="finish"))
+    return [
+        v.constraint_type
+        for v in e.state.violations_by_policy["evidence_preservation"]
+    ]
+
+
+def test_capture_must_be_of_the_asset_being_stopped(scenario):
+    """採取は**その資産の分**でなければ足りない（SPEC 5.3 / v1.40）。
+
+    v1.39 までの `require_before` は、前提タグの付いた手を盤面のどこかで
+    1つ押していれば満たされた。ws-042 のメモリを取った学習者は、
+    それだけで fs01 を無条件に落とせた — **事実上ほぼ無料の制約**で、
+    証拠保全最優先は「どの手を選ぶか」に一度も効いていなかった。
+    その結果、封じ込めの組を総当たりで並べると業務継続最優先と
+    上位6組まで完全に同順になり、3本目の方針が2本目の複製になっていた。
+
+    ここが壊れると、症状は「証拠保全を選んでも盤面が変わらない」になる。
+    無言で成立してしまうので、テストでしか見張れない。
+    """
+    # ws-042 の分を取っただけでは、fs01 を止める要件は満たさない
+    # （メモリダンプの手がかりを開けるために、先に2手押す必要がある）
+    assert _capture_then_stop(
+        scenario,
+        ["act_collect_evtx_fs01", "act_netflow_overview", "act_memory_dump_ws042"],
+        "act_stop_share_fs01",
+    ) == ["require_capture_of_target"]
+
+    # fs01 の分を取れば、fs01 を止めるのは違反にならない
+    assert _capture_then_stop(
+        scenario, ["act_memory_dump_fs01"], "act_stop_share_fs01",
+    ) == []
+
+
+def test_evidence_preservation_leaves_one_way_to_stop_the_file_server(scenario):
+    """証拠保全最優先で fs01 に取れる手は1つだけになる（SPEC 3.8）。
+
+    業務に載せたままの遮断は原本の上書きを止めず、電源断は稼働中の状態を
+    消す。残るのは「動かしたまま、業務から降ろす」だけ。
+    **業務継続最優先の最良手も、被害最小化最優先の最良手も、
+    この方針では違反になる** — 同じ資産に方針ごとの正解があるとは
+    こういうことである。
+    """
+    got = {
+        aid: _capture_then_stop(scenario, ["act_memory_dump_fs01"], aid)
+        for aid in ("act_block_smb_fs01", "act_stop_share_fs01", "act_shutdown_fs01")
+    }
+    assert got["act_stop_share_fs01"] == []
+    assert got["act_block_smb_fs01"] == ["forbid_action"]
+    assert got["act_shutdown_fs01"] == ["forbid_action"]
+
+
+def _policy(data, pid):
+    return next(p for p in data["policies"] if p["id"] == pid)
+
+
+def test_loader_rejects_a_constraint_that_can_never_fire(raw):
+    """発火しようのない制約を拒否する（SPEC 5.3 / v1.40）。
+
+    `evaluate` は足りないフィールドを黙って False で返す。つまり
+    **書けるが何も起きない制約**が作れるということで、症状は
+    「方針の名乗りだけが変わって、盤面では何も変わらない」になる。
+    無言で成立するので、読んでも見つからない。
+    """
+    data = copy.deepcopy(raw)
+    for c in _policy(data, "evidence_preservation")["constraints"]:
+        if c["type"] == "require_capture_of_target":
+            del c["prerequisite_tags"]
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "永久に発火しません" in str(exc.value)
+
+    data = copy.deepcopy(raw)
+    for c in _policy(data, "evidence_preservation")["constraints"]:
+        if c["type"] == "require_capture_of_target":
+            del c["action_type"]
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "永久に発火しません" in str(exc.value)
+
+
+def test_loader_rejects_a_capture_requirement_nobody_can_meet(raw):
+    """守れない方針を拒否する（SPEC 5.3 / v1.40）。
+
+    「止める資産ごとに、その資産の揮発性証拠を先に取れ」と言いながら、
+    その資産に届く採取の手が盤面に無いと、**その方針を選んだ学習者は
+    何をしても違反する** — compromised を覆えば違反、覆わなければ
+    完全度が落ちる。選べるが守れない方針は、方針ではなく罠である。
+    """
+    data = copy.deepcopy(raw)
+    for a in data["actions"]:
+        if a["id"] == "act_memory_dump_fs01":
+            a["tags"] = []            # fs01 に届く採取の手が盤面から消える
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "揮発性証拠を取る手が無い侵害資産" in str(exc.value)
+    assert "fs01" in str(exc.value)
+
+
+def test_loader_rejects_a_policy_that_forbids_every_stop(raw):
+    """止める手を全部禁じる方針を拒否する（SPEC 5.3 / 3.8 / v1.40）。
+
+    `forbid_action` は「複数ある手のうち、この方針ではこちらを取れ」と
+    言うための道具である。ある侵害資産の手を全部禁じると、その方針を
+    選んだ学習者は**止めれば違反、止めなければ完全度が落ちる。**
+
+    fs01 には手が3つあり、2つの方針がそれぞれ2つを禁じている。
+    **手を1つ消すと、どちらかの方針が黙って詰む** — 消した場所と
+    詰んだ場所が離れているので、読んでも気づけない。
+    """
+    data = copy.deepcopy(raw)
+    data["actions"] = [
+        a for a in data["actions"] if a["id"] != "act_stop_share_fs01"
+    ]
+    for pol in data["policies"]:
+        for c in pol.get("constraints", []):
+            if "action_ids" in c:
+                c["action_ids"] = [
+                    i for i in c["action_ids"] if i != "act_stop_share_fs01"
+                ]
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "止める手を全部禁じています" in str(exc.value)
 
 
 def test_loader_rejects_criticality_inversion(raw):
@@ -605,11 +736,20 @@ def test_loader_rejects_a_compromise_that_cannot_be_stopped(raw):
     そのシナリオでは「正しく止める」ことが定義上できない。
     """
     data = copy.deepcopy(raw)
-    gone = ("act_shutdown_fs01", "act_block_smb_fs01")
+    gone = ("act_shutdown_fs01", "act_block_smb_fs01", "act_stop_share_fs01")
     data["actions"] = [a for a in data["actions"] if a["id"] not in gone]
     for pol in data["policies"]:
+        # 中身が空になった forbid_action は残さない。空の制約は
+        # 「永久に発火しない制約」としてローダが別の理由で拒否するので、
+        # この検査が見たいものに辿り着かない（v1.40）
+        kept = []
         for c in pol.get("constraints", []):
-            c["action_ids"] = [i for i in c.get("action_ids", []) if i not in gone]
+            if "action_ids" in c:
+                c["action_ids"] = [i for i in c["action_ids"] if i not in gone]
+                if not c["action_ids"]:
+                    continue
+            kept.append(c)
+        pol["constraints"] = kept
     with pytest.raises(ScenarioError) as exc:
         build(data)
     assert "直接止める手が無い侵害資産" in str(exc.value)

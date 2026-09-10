@@ -59,8 +59,8 @@ def test_consequences(scenario):
     # 完全度 1.000 と引き換えに、地平の 480分は on_partial (0.6) で
     # 積分され続ける。「隔離しても、端末を戻せば攻撃者も戻ってくる」は
     # ここで初めて数字になる（v1.37 / 9.4 #5）
-    assert c.projected_damage == pytest.approx(12973, abs=1)
-    assert c.total_damage == pytest.approx(14356, abs=1)
+    assert c.projected_damage == pytest.approx(12608, abs=1)
+    assert c.total_damage == pytest.approx(13991, abs=1)
     assert c.business_impact == pytest.approx(424.33, abs=0.01)
     assert c.evidence_preserved == pytest.approx(0.947, abs=0.001)
     assert c.containment_completeness == pytest.approx(1.000, abs=0.001)
@@ -87,6 +87,31 @@ def test_completeness_is_not_the_same_question_as_eradication(scenario):
     assert partial.total_damage > full.total_damage * 2
 
 
+def test_evidence_preserved_cannot_choose_between_containments(scenario):
+    """**証拠保全の重みは、封じ込めの選択を分けられない**（SPEC 6.3 / v1.40）。
+
+    `evidence_preserved` が数えるのは「取る前に失った分」だけである。
+    先に取ってあれば、後で壊しても手元には残る（見たことは忘れない）。
+    だから揮発性証拠を取ってから止める限り、電源を落としても
+    サービスだけ止めても、この指標は 1ミリも動かない。
+
+    重みを 0.45 から 0.60 に上げても順位が1つも変わらなかったのは
+    これが理由で、方針が「どの手を選ぶか」を変えられる道具は
+    制約しかない（5.10 の費用の型）。ここが動くようになったら、
+    それは `evidence_preserved` の定義が変わったということである。
+    """
+    def stop_with(action_id):
+        e = Engine(scenario, "evidence_preservation", None)
+        e.decide(Decision(kind="action", action_id="act_memory_dump_fs01"))
+        e.decide(Decision(kind="declare_assessment", assessment=["fs01"]))
+        e.decide(Decision(kind="action", action_id=action_id))
+        e.decide(Decision(kind="finish"))
+        return scoring.score(e.state, scenario).consequences.evidence_preserved
+
+    # 電源を落とすと ev_010 は消えるが、**もう取ってある**
+    assert stop_with("act_shutdown_fs01") == stop_with("act_stop_share_fs01") == 1.0
+
+
 def test_fact_metrics(scenario):
     r = scoring.score(play_spec_68(scenario).state, scenario)
     assert r.metrics["assessment_precision"] == pytest.approx(0.500, abs=0.001)
@@ -100,8 +125,8 @@ def test_fact_metrics(scenario):
 
 def test_composite(scenario):
     r = scoring.score(play_spec_68(scenario).state, scenario)
-    assert r.policy_score == pytest.approx(0.578, abs=0.001)
-    assert r.composite_score == pytest.approx(0.570, abs=0.001)
+    assert r.policy_score == pytest.approx(0.582, abs=0.001)
+    assert r.composite_score == pytest.approx(0.571, abs=0.001)
     assert round(r.composite_score * 100) == 57
 
 
@@ -124,7 +149,7 @@ def test_dependency_chain_variant(scenario):
     assert r.consequences.evidence_preserved == pytest.approx(1.000, abs=0.001)
     # fs01 が封じ込められていないので完全度は 0.5、減衰も on_partial 止まり
     assert r.consequences.containment_completeness == pytest.approx(0.500, abs=0.001)
-    assert r.policy_score == pytest.approx(0.317, abs=0.001)
+    assert r.policy_score == pytest.approx(0.321, abs=0.001)
     assert round(r.composite_score * 100) == 49
 
 
@@ -137,11 +162,15 @@ def test_same_play_scores_differently_per_policy(scenario):
     }
     assert got["business_continuity"].constraint_violations == 1
     assert got["damage_minimization"].constraint_violations == 0
-    assert got["evidence_preservation"].constraint_violations == 0
+    # **v1.39 まではここが 0件だった。** 証拠保全最優先の制約が
+    # `require_before`（盤面のどこかで揮発性を1つ取っていれば満たす）
+    # だった頃、ws-042 のメモリダンプがそのまま fs01 の停止を許していた。
+    # いまは①fs01 の分を取っていない②電源を落とした、の2件が立つ
+    assert got["evidence_preservation"].constraint_violations == 2
 
     assert round(got["business_continuity"].composite_score * 100) == 57
     assert round(got["damage_minimization"].composite_score * 100) == 58
-    assert round(got["evidence_preservation"].composite_score * 100) == 61
+    assert round(got["evidence_preservation"].composite_score * 100) == 55
 
     # 事実認識層は方針に依存しない
     facts = {r.fact_score for r in got.values()}
@@ -516,8 +545,9 @@ def test_timeline_fires_while_you_work(scenario):
     e.decide(Decision(kind="action", action_id="act_disk_image_ws042"))         # 95→155分
     assert e.state.fired_events == []             # ここまでは何も起きない
 
-    out = e.decide(Decision(kind="action", action_id="act_proxy_log"))          # 155→175分
-    assert out.events == ["tl_accel"]             # 165分の分が拾われた
+    e.decide(Decision(kind="action", action_id="act_proxy_log"))               # 155→175分
+    out = e.decide(Decision(kind="action", action_id="act_edr_full_scan"))     # 175→210分
+    assert out.events == ["tl_accel"]             # 205分の分が拾われた
 
 
 def test_timeline_takes_something_away(scenario):
@@ -529,16 +559,18 @@ def test_timeline_takes_something_away(scenario):
     for ev in scenario.timeline:
         assert ev.destroys or ev.heralds, f"{ev.id}: 盤面を何も変えない"
 
-    # 200分を跨いだのに ev_010 を持っていなければ、もう取れない
+    # 245分を跨いだのに ev_010 を持っていなければ、もう取れない
     e = Engine(scenario, "damage_minimization", None)
     for aid in ("act_edr_full_scan", "act_backup_integrity", "act_smb_session_fs01",
                 "act_ad_group_audit", "act_dc_authlog", "act_asset_inventory"):
         e.decide(Decision(kind="action", action_id=aid))          # 0→155分
     assert "ev_010" not in e.state.lost_evidence
 
-    out = e.decide(Decision(kind="action", action_id="act_collect_evtx_fs01"))  # 155→185分
-    assert out.events == ["tl_accel"]             # 165分の前触れが拾われる
-    out = e.decide(Decision(kind="action", action_id="act_netflow_overview"))   # 185→205分
+    e.decide(Decision(kind="action", action_id="act_collect_evtx_fs01"))       # 155→185分
+    out = e.decide(Decision(kind="action", action_id="act_netflow_overview"))  # 185→205分
+    assert out.events == ["tl_accel"]             # 205分の前触れが拾われる
+    e.decide(Decision(kind="action", action_id="act_mail_gateway"))            # 205→230分
+    out = e.decide(Decision(kind="action", action_id="act_interview_sato"))    # 230→250分
     assert out.events == ["tl_fs01_restart"]
     assert e.state.lost_evidence == ["ev_010"]
 
@@ -570,8 +602,67 @@ def test_empty_counts_only_the_action(scenario):
     out = e.decide(Decision(kind="action", action_id="act_memory_dump_ws042")) # 90→135分
     assert out.empty                              # 先に壊したので空振り
     assert out.events == []
-    out = e.decide(Decision(kind="action", action_id="act_smb_session_fs01"))  # 135→165分
+    e.decide(Decision(kind="action", action_id="act_smb_session_fs01"))       # 135→165分
+    out = e.decide(Decision(kind="action", action_id="act_memory_dump_fs01")) # 165→205分
     assert out.events == ["tl_accel"]             # だがその間に電話は鳴る
+
+
+# 判断に到達するまでの、実際に押せる順序（`minimal_path` は手がかりの
+# 解放を見ない理論的な下限なので、そのままでは打てない）
+REACHABLE_PATH = [
+    "act_collect_evtx_fs01", "act_netflow_overview", "act_mail_gateway",
+    "act_smb_session_fs01", "act_memory_dump_ws042",
+]
+
+
+def _play_plan(scenario, policy_id, investigation, containment):
+    e = Engine(scenario, policy_id, None)
+    for aid in investigation:
+        e.decide(Decision(kind="action", action_id=aid))
+    e.decide(Decision(kind="declare_assessment", assessment=["ws-042", "fs01"]))
+    for aid in containment:
+        e.decide(Decision(kind="action", action_id=aid))
+    e.decide(Decision(kind="finish"))
+    return e
+
+
+def test_the_replay_hint_about_evidence_preservation_is_not_a_lie(scenario):
+    """講評が「その分だけ被害が伸びます」と言うなら、実際に伸びていること。
+
+    **v1.39 の講評は嘘をついていた。** そう書いてあるのに実測は
+    93 / 93 / 94 で、証拠保全最優先の最良手は業務継続最優先と
+    同じ組（上位6組まで同順）だった。制約が事実上無料だったので、
+    順序も手も変わらず、被害も伸びていなかった。
+    **画面が学習者に嘘をつくのは、点数がずれることより重い。**
+
+    同じ調査のあと、それぞれの方針が取れる最良の手で止めて比べる。
+    証拠保全の側は fs01 の採取（40分）が必須経路に入るぶん長くなり、
+    その時間がそのまま被害に乗る。
+    """
+    bc = _play_plan(
+        scenario, "business_continuity", REACHABLE_PATH,
+        ["act_block_smb_fs01", "act_purge_persistence_ws042"],
+    )
+    ep = _play_plan(
+        scenario, "evidence_preservation", REACHABLE_PATH + ["act_memory_dump_fs01"],
+        ["act_stop_share_fs01", "act_purge_persistence_ws042"],
+    )
+    # どちらも自分の方針では違反しない（守れる方針であること）
+    assert bc.state.violations_by_policy["business_continuity"] == []
+    assert ep.state.violations_by_policy["evidence_preservation"] == []
+
+    dmg = {
+        k: scoring.score(e.state, scenario).consequences.total_damage
+        for k, e in (("bc", bc), ("ep", ep))
+    }
+    assert ep.state.elapsed_minutes > bc.state.elapsed_minutes
+    assert dmg["ep"] > dmg["bc"], f"証拠保全の被害が伸びていない: {dmg}"
+
+    # そして、互いの手は互いの方針では取れない（3.8 / 原則4）
+    assert [
+        v.constraint_type
+        for v in bc.state.violations_by_policy["evidence_preservation"]
+    ] == ["require_capture_of_target", "forbid_action"]
 
 
 def test_bend_sits_just_past_a_good_play(scenario):
@@ -587,18 +678,29 @@ def test_bend_sits_just_past_a_good_play(scenario):
     被害モデルが罰したいのは判断の遅れではなく、**被害が止まるまで**の
     遅れである。折れ点 150分に対し、正しく止めた巧いプレイは 155分 —
     誰よりも巧く解いた人が、自分で折れ点を踏んでいた。
+
+    3度目のずれが **L に方針が入っていなかったこと**である（v1.40）。
+    方針の制約は「何を先に押すか」を決めるので、守るものが重い方針では
+    最良のプレイでも長くなる。証拠保全最優先は封じ込める資産ごとに
+    揮発性証拠を先に取るので L が 170分 → 210分になり、折れ点 200分は
+    **その方針を渡された人だけが必ず踏む**位置に来ていた。
+    折れ点を踏むかどうかが、どの方針を渡されたかで決まってはいけない。
     """
-    judged, _ids, _exact = retrospective.minimal_path(scenario)
-    stopped, _stop_ids = retrospective.minimal_containment(scenario)
-    assert judged is not None and stopped is not None
-    best = judged + stopped
+    lengths = {
+        pol.id: retrospective.minimal_response(scenario, pol)[0]
+        for pol in scenario.policies
+    }
+    assert all(v is not None for v in lengths.values())
+    best = max(lengths.values())
     bend = scenario.damage.acceleration.threshold_minutes
     assert 1.1 * best <= bend <= 1.3 * best, (
-        f"折れ点 {bend}分 / L {best}分"
-        f"（判断まで {judged}分＋最安の封じ込め {stopped}分）= {bend / best:.2f}倍"
+        f"折れ点 {bend}分 / 最も高くつく方針の L {best}分"
+        f"（方針ごとの L: {lengths}）= {bend / best:.2f}倍"
     )
-    # 巧いプレイが自分で折れ点を踏まないこと。ここが本体
-    assert best <= bend
+    # **どの方針を渡されても**、最良のプレイは自分で折れ点を踏まないこと。
+    # ここが本体
+    for pid, length in lengths.items():
+        assert length <= bend, f"{pid} は最良に解いても折れ点を踏む: {length}分"
 
 
 def test_exhaustive_play_crosses_the_bend_early(scenario):
@@ -618,7 +720,11 @@ def test_exhaustive_play_crosses_the_bend_early(scenario):
         if crossed_at is None and e.state.elapsed_minutes > bend:
             crossed_at = total
     assert crossed_at is not None, "全部押しても折れ点に届かない"
-    assert crossed_at <= total / 2, f"{total}手中 {crossed_at}手目でようやく到達"
+    # 「中盤までに」。**6割にしてあるのは、折れ点が L に紐づいているから。**
+    # L は方針ごとに違い、折れ点は最も高くつく方針で置く（v1.40）ので、
+    # メニューの長さは変わらないまま折れ点だけが後ろへ動く。
+    # ここを厳密に半分で切ると、方針を1本足すたびにこの数字が動く
+    assert crossed_at <= total * 0.6, f"{total}手中 {crossed_at}手目でようやく到達"
 
 
 # ── 先手を打って、消えるのを止める ──────────────────────────
@@ -636,17 +742,18 @@ def test_notice_prevents_only_what_has_not_happened(scenario):
     e = Engine(scenario, "damage_minimization", None)
     for aid in ("act_edr_full_scan", "act_backup_integrity", "act_smb_session_fs01",
                 "act_ad_group_audit", "act_dc_authlog", "act_asset_inventory",
-                "act_collect_evtx_fs01", "act_netflow_overview"):
+                "act_collect_evtx_fs01", "act_netflow_overview",
+                "act_mail_gateway", "act_proxy_log"):
         e.decide(Decision(kind="action", action_id=aid))
-    assert e.state.elapsed_minutes > 200          # tl_fs01_restart は起きてしまった
+    assert e.state.elapsed_minutes > 245          # tl_fs01_restart は起きてしまった
     assert "ev_010" in e.state.lost_evidence
 
-    out = e.decide(Decision(kind="action", action_id=NOTICE))   # 205→220分
+    out = e.decide(Decision(kind="action", action_id=NOTICE))   # 250→265分
     assert "tl_fs01_restart" not in out.prevented  # 起きた後の周知は効かない
     assert out.prevented == ["tl_field_reboot"]    # まだ起きていない分だけ
     assert not out.empty                           # 押しても無言にはならない
 
-    # 210分の分は「周知を書いている 15分の間」に起きてしまった。
+    # 255分の分は「周知を書いている 15分の間」に起きてしまった。
     # 効き始めるのは打ち終わってからなので、これは止められない
     assert out.events == ["tl_backup_roll"]
     assert out.averted == []
@@ -665,7 +772,8 @@ def test_averted_events_still_happen_but_take_nothing(scenario):
     e.decide(Decision(kind="action", action_id=NOTICE))
     for aid in ("act_edr_full_scan", "act_backup_integrity", "act_smb_session_fs01",
                 "act_ad_group_audit", "act_dc_authlog", "act_asset_inventory",
-                "act_collect_evtx_fs01", "act_netflow_overview"):
+                "act_collect_evtx_fs01", "act_netflow_overview",
+                "act_mail_gateway", "act_proxy_log"):
         e.decide(Decision(kind="action", action_id=aid))
 
     assert "tl_fs01_restart" in e.state.fired_events   # 出来事そのものは起きる
@@ -937,7 +1045,9 @@ def test_the_notice_that_arrived_too_late_says_so(scenario):
     """
     from irdojo.report import json as report_json
 
-    e = _play_until(scenario, 240, skip={"act_backup_integrity"})
+    # tl_backup_roll（255分）より後に打ち終わる位置から始める。
+    # ちょうど 255分に打ち始めると「遅れ 0分」になり、遅れの表示が測れない
+    e = _play_until(scenario, 260, skip={"act_backup_integrity"})
     e.decide(Decision(kind="action", action_id="act_preservation_notice"))
     e.decide(Decision(kind="declare_assessment", assessment=["fs01"]))
     e.decide(Decision(kind="finish"))

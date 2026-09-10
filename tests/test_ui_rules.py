@@ -217,3 +217,23 @@ def test_consequences_are_labelled_where_they_are_shown(index_html):
     assert "帰結" in strip and "採点しません" in strip, "帯が帰結の位置づけを言っていない"
     # 理由まで帯に書くと説明文で埋まる。押せば開く形になっていること
     assert 'id="btn-what-play"' in strip
+
+
+def test_only_actions_rewrite_the_result_box(app_js):
+    """**アクション以外の決定は、直前の結果を書き換えないこと**（v1.40）。
+
+    フェーズ移行も被疑判定の宣言も `decide()` を通る。素で上書きすると
+    `revealed` が 0 に戻り、直前に押した調査の箱が、宣言した瞬間に
+    「何も出てこなかった。」に化ける — **画面が過去を書き換えて嘘をつく。**
+    証拠は手元にあるのに、見つけた事実だけが消えて見えた。
+    対応フェーズの初画面を実際に撮って初めて見つかった。
+
+    ここで見るのは、上書きが `kind === 'action'` で守られているかどうか。
+    """
+    body = strip_comments(app_js)
+    i = body.index("S.lastOutcome.revealed =")
+    guard = body.rfind("if (", 0, i)
+    line = body[guard:i]
+    assert "payload" in line and "'action'" in line, (
+        "結果の箱の更新が、アクション以外の決定からも通っている: " + line.strip()
+    )

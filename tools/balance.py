@@ -430,6 +430,19 @@ def run_profile(sc: Scenario, prof: Profile, notices: list[str]) -> Run:
 
 # ─────────── 封じ込めの取捨選択（SPEC 3.8 / 8.3） ───────────
 
+# 方針間で見比べる順位の深さ。1位だけの比較では、2位以下が完全に
+# 同順の「複製された方針」が通ってしまう（v1.40）
+TOP_N = 6
+
+
+def _first_divergence(a: list, b: list) -> str:
+    """2つの順位表が、何位で初めて食い違うか。"""
+    for i, (x, y) in enumerate(zip(a, b), start=1):
+        if x != y:
+            return f"{i}位から違う"
+    return "同順" if len(a) == len(b) else f"{min(len(a), len(b)) + 1}位から違う"
+
+
 
 def containment_sweep(sc: Scenario) -> dict[tuple[str, ...], dict[str, int]]:
     """同じ調査のあとに、封じ込めの組だけを総当たりで入れ替えて採点する。
@@ -444,19 +457,32 @@ def containment_sweep(sc: Scenario) -> dict[tuple[str, ...], dict[str, int]]:
     SPEC 3.8 が答えを持っている — 「時間で罰することはできない — 排他で閉じる」。
     対応フェーズの排他は**不可逆性**（止めたものは復旧地平の間ずっと止まり、
     消した揮発性証拠は戻らない）なので、測るなら組ごとの帰結を比べるしかない。
+
+    **方針ごとに、その方針の要件を満たしてから止める**（v1.40）。
+    ブリーフィングが「止める資産の揮発性証拠を先に取れ」と言っている
+    方針を渡された学習者は、その手を押してから止める。同じ調査を
+    全方針に使い回していた頃は、証拠保全の列が**どの組でも違反**になり、
+    全部の組から同じ点が引かれるだけだった — 順位は業務継続の複製のまま。
+    要件を満たす手の時間（同梱シナリオでは 40分）は、その方針の
+    費用としてそのまま乗る。それがこの方針を選ぶことの値段である。
     """
-    order = _skilled(sc)
+    base = _skilled(sc)
     acts = [a.id for a in sc.actions if a.type == ActionType.CONTAIN]
     out: dict[tuple[str, ...], dict[str, int]] = {}
     for r in range(len(acts) + 1):
         for combo in itertools.combinations(acts, r):
-            e = _play(sc, order, [], stop=True, patience=None,
-                      weighs_refutations=True, contains_everything=False,
-                      containment=list(combo))
-            out[combo] = {
-                pol.id: round(scoring.score(e.state, sc, pol).composite_score * 100)
-                for pol in sc.policies
-            }
+            row: dict[str, int] = {}
+            for pol in sc.policies:
+                prep = retrospective.policy_prerequisites(sc, pol, base, list(combo))
+                # stop=False にする。前提の手が産む証拠は critical 論点を
+                # 解かないので、「分かったらやめる」像だと**押される前に降りる**
+                e = _play(sc, base + prep, [], stop=False, patience=None,
+                          weighs_refutations=True, contains_everything=False,
+                          containment=list(combo))
+                row[pol.id] = round(
+                    scoring.score(e.state, sc, pol).composite_score * 100
+                )
+            out[combo] = row
     return out
 
 
@@ -607,7 +633,9 @@ def persistence_matters(sc: Scenario) -> list[tuple[str, ...]]:
     return out
 
 
-def eradication_choice(sc: Scenario) -> dict[str, dict[str, int]]:
+def eradication_choice(
+    sc: Scenario, sweep: dict[tuple[str, ...], dict[str, int]] | None = None,
+) -> dict[str, dict[str, int]]:
     """根絶の手だけを入れ替えて、方針ごとの評価を比べる。
 
     **押せば必ず得になる手は、判断ではなく作業である。** 根絶そのものは
@@ -624,12 +652,51 @@ def eradication_choice(sc: Scenario) -> dict[str, dict[str, int]]:
     }
     base = tuple(cheapest_cover(sc, need))
     order = [a.id for a in sc.actions if a.type == ActionType.CONTAIN]
-    sweep = containment_sweep(sc)
+    # 総当たりは重い（組 × 方針）。呼び出し側が既に持っているなら使い回す
+    sweep = containment_sweep(sc) if sweep is None else sweep
     out: dict[str, dict[str, int]] = {}
     for a in erad:
         combo = tuple(sorted(set(base) | {a.id}, key=order.index))
         if combo in sweep:
             out[a.id] = sweep[combo]
+    return out
+
+
+# ─────────── 方針の入れ替え（SPEC 9.1 差分#1） ───────────
+
+
+def policy_swap(
+    sc: Scenario, sweep: dict[tuple[str, ...], dict[str, int]] | None = None,
+) -> dict[str, dict[str, int]]:
+    """各方針の**最良のプレイをそのまま他の方針で採点する**（3×3 の表）。
+
+    これがこの製品の主張そのものの計器である（9.1 差分#1）。
+    「方針を採点の入力にする」が成立しているなら、方針 p で採点したとき、
+    p 向けに立てたプレイが3つの中で最も高くなければならない。
+
+    **以前は「全部押す」1本の方針間の開きで測っていた。** 網羅プレイは
+    どの方針でも悪いので、開きは「どの方針が網羅をどれだけ嫌うか」しか
+    測っていない。v1.39 でその開きが 8点あったのは、証拠保全だけが
+    網羅を咎めていなかったから — **開きの正体は、証拠保全の制約が
+    無料だったこと**だった。制約を効かせると 8点 → 2点に潰れる。
+    緩めたのではなく、測っていたものが違った。
+    """
+    base = _skilled(sc)
+    sweep = containment_sweep(sc) if sweep is None else sweep
+    covering = {c: v for c, v in sweep.items() if _covers_compromised(sc, c)}
+    if not covering:
+        return {}
+    out: dict[str, dict[str, int]] = {}
+    for pol in sc.policies:
+        combo = max(covering.items(), key=lambda kv: kv[1][pol.id])[0]
+        prep = retrospective.policy_prerequisites(sc, pol, base, list(combo))
+        e = _play(sc, base + prep, [], stop=False, patience=None,
+                  weighs_refutations=True, contains_everything=False,
+                  containment=list(combo))
+        out[pol.id] = {
+            other.id: round(scoring.score(e.state, sc, other).composite_score * 100)
+            for other in sc.policies
+        }
     return out
 
 
@@ -652,7 +719,9 @@ def _score_combo(sc: Scenario, order: list[str], combo: tuple[str, ...]) -> dict
     }
 
 
-def innocent_containment_cost(sc: Scenario) -> dict[str, dict[str, float]]:
+def innocent_containment_cost(
+    sc: Scenario, sweep: dict[tuple[str, ...], dict[str, int]] | None = None,
+) -> dict[str, dict[str, float]]:
     """最良の封じ込めに「無実の資産を止める手」を足したとき、**その停止**が幾らか。
 
     **誤導に乗った代価は、方針適合層に現れなければならない。** 事実認識層
@@ -687,7 +756,7 @@ def innocent_containment_cost(sc: Scenario) -> dict[str, dict[str, float]]:
         return {}
     order_ids = [a.id for a in sc.actions if a.type == ActionType.CONTAIN]
     plan = _skilled(sc)
-    sweep = containment_sweep(sc)
+    sweep = containment_sweep(sc) if sweep is None else sweep
     covering = {c: v for c, v in sweep.items() if _covers_compromised(sc, c)}
     if not covering:
         return {}
@@ -728,20 +797,32 @@ class Check:
 def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
     out: list[Check] = []
     judged, _ids, _exact = retrospective.minimal_path(sc)
-    stopped, _stop_ids = retrospective.minimal_containment(sc)
     # 折れ点が基準にする「巧いプレイの長さ」L は、**被害が止まるまで**の長さ。
     # minimal_path は判断に到達するまでで、封じ込めを含まない。
-    # 被害モデルが罰したいのは判断の遅れではなく、止まるまでの遅れである
-    best = (judged + stopped) if (judged is not None and stopped is not None) else judged
+    # 被害モデルが罰したいのは判断の遅れではなく、止まるまでの遅れである。
+    #
+    # **L は方針に依存する**（v1.40）。方針の制約は「何を先に押すか」を
+    # 決めるので、守るべきものが重い方針では最良のプレイでも長くなる。
+    # 折れ点は**最も高くつく方針の L** で置く — 折れ点を踏むかどうかが
+    # 「どの方針を渡されたか」で決まってはいけない（8.2 / 8.3）。
+    per_policy = {
+        pol.id: retrospective.minimal_response(sc, pol)[0] for pol in sc.policies
+    }
+    lengths = [v for v in per_policy.values() if v is not None]
+    best = max(lengths) if lengths else None
     accel = sc.damage.acceleration
 
     # SPEC 8.2 手順7: 折れ点は巧いプレイの 1.1〜1.3 倍
     if accel is not None and best:
         ratio = accel.threshold_minutes / best
+        costliest = max(per_policy, key=lambda k: per_policy[k] or 0)
         out.append(Check(
             1.1 <= ratio <= 1.3,
             "折れ点の位置",
-            f"判断まで {judged}分＋最安の封じ込め {stopped}分 = L {best}分"
+            "方針ごとの L: "
+            + "・".join(f"{k} {v}分" for k, v in per_policy.items())
+            + f" → 最も高くつく {costliest} の {best}分"
+            f"（判断まで {judged}分＋制約を守って止めきるまで {best - judged}分）"
             f" / 折れ点 {accel.threshold_minutes}分 = {ratio:.2f}倍（狙い 1.1〜1.3）",
         ))
         sk = runs[("skilled", False)]
@@ -1016,6 +1097,36 @@ def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
             ),
         ))
 
+        # **1位だけを比べていると、複製された方針が通る**（v1.40）。
+        # 上の検査は「2通り以上に割れているか」しか見ないので、3本のうち
+        # 2本が完全に同じ盤面判断をしていても落ちない。実際 v1.39 では
+        # 業務継続と証拠保全が**上位6組まで一字一句同じ順**で並んでいて、
+        # 「方針を採点の入力にする」という主張が盤面では2本しか
+        # 実装されていなかった。順位ごと比べないと見つからない。
+        ranked = {
+            pol.id: [
+                c for c, _v in sorted(
+                    covering.items(), key=lambda kv: (-kv[1][pol.id], kv[0])
+                )
+            ][:TOP_N]
+            for pol in sc.policies
+        }
+        twins = [
+            (a, b) for a, b in itertools.combinations(ranked, 2)
+            if ranked[a] == ranked[b]
+        ]
+        all_distinct = len(set(shapes.values())) == len(sc.policies)
+        out.append(Check(
+            not twins and all_distinct,
+            "方針ごとに、封じ込めの順位が違う",
+            f"最良手 {len(set(shapes.values()))}通り / 方針 {len(sc.policies)}本。"
+            + " / ".join(
+                f"{a[:4]}↔{b[:4]} " + _first_divergence(ranked[a], ranked[b])
+                for a, b in itertools.combinations(ranked, 2)
+            )
+            + f"（上位{TOP_N}組で比較）",
+        ))
+
         nothing = sweep[()]
         losses = {pid: b[1][pid] - nothing[pid] for pid, b in best.items()}
         out.append(Check(
@@ -1054,7 +1165,7 @@ def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
 
     # 根絶そのものは物理的に必要だが、**どの根絶手を取るか**は
     # 方針で入れ替わること。押せば必ず得になる手は判断ではなく作業である
-    choice = eradication_choice(sc)
+    choice = eradication_choice(sc, sweep)
     if len(choice) >= 2:
         ids = list(choice)
         winners = {
@@ -1074,7 +1185,7 @@ def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
     # 無実の資産を止めることに値段が付いているか。
     # 事実認識層は「そう書いた」ことを咎めるが、方針適合層が動かないと
     # 「無関係な部署の仕事を8時間止めた」ことは誰にも返らない
-    innocent_cost = innocent_containment_cost(sc)
+    innocent_cost = innocent_containment_cost(sc, sweep)
     if innocent_cost:
         top = max(
             ((aid, pid, d) for aid, ds in innocent_cost.items() for pid, d in ds.items()),
@@ -1092,11 +1203,34 @@ def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
             "下を割ると誤導の代価が方針に現れず、上を超えると隔離そのものが損になる）",
         ))
 
-    # 方針を差し替えると評価が変わる（原則3）
-    ex = runs[("exhaustive", False)]
-    spread = max(v["composite"] for v in ex.by_policy.values()) - \
-             min(v["composite"] for v in ex.by_policy.values())
-    out.append(Check(spread >= 5, "同じ行動列が方針で違う評価になる", f"開き {spread}点"))
+    # 方針を差し替えると評価が変わる（原則3 / 9.1 差分#1）。
+    # **測るのは「その方針向けに立てたプレイ」同士の入れ替えである。**
+    # 網羅プレイ1本の方針間の開きで測っていた頃は、どの方針も網羅を
+    # 嫌うので開きが潰れ、逆に開きが出ているときは「1つの方針だけが
+    # 網羅を咎めていない」＝制約が効いていない印だった（v1.40 で判明）
+    swap = policy_swap(sc, sweep)
+    if swap:
+        wrong = [
+            f"{pol.id}: {max(swap, key=lambda plan: swap[plan][pol.id])} の案が勝つ"
+            for pol in sc.policies
+            if max(swap, key=lambda plan: swap[plan][pol.id]) != pol.id
+        ]
+        spreads = {
+            pol.id: max(swap[plan][pol.id] for plan in swap)
+            - min(swap[plan][pol.id] for plan in swap)
+            for pol in sc.policies
+        }
+        out.append(Check(
+            not wrong and min(spreads.values()) >= 5,
+            "同じ行動列が方針で違う評価になる",
+            "／".join(
+                f"{plan[:4]} の案 → "
+                + "・".join(f"{k[:4]} {v}" for k, v in row.items())
+                for plan, row in swap.items()
+            )
+            + f"（各方針で自分の案が最良・開き {spreads}。狙い どの方針でも 5点以上）"
+            + (f" 取り違え: {wrong}" if wrong else ""),
+        ))
 
     return out
 

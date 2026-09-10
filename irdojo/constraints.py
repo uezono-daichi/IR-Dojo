@@ -82,6 +82,36 @@ def _require_before(c: Constraint, ctx: ConstraintContext) -> bool:
     return True
 
 
+@register("require_capture_of_target")
+def _require_capture_of_target(c: Constraint, ctx: ConstraintContext) -> bool:
+    """封じ込める資産ごとに、**その資産の**揮発性証拠を先に取っていること。
+
+    `require_before` は前提タグの付いた手を**盤面のどこか1つ**押していれば
+    満たされる。ws-042 のメモリを取った学習者は、それだけで fs01 を
+    無条件に落とせた — **事実上ほぼ無料の制約**で、証拠保全最優先は
+    「どの手を選ぶか」に一度も効いていなかった（v1.40）。
+
+    ここが効く相手は `evidence_preserved` ではない。取った後で壊しても
+    証拠は手元に残るので（6.3）、重みをいくら上げても封じ込めの選択は
+    動かない。動かせるのは制約だけである（5.10 の費用の型）。
+
+    `prerequisite_tags` が空、または `action_type` が無い制約は
+    永久に発火しない。ローダが拒否する（5.3）。
+    """
+    if c.action_type is None or ctx.action.type != c.action_type:
+        return False
+    if not c.prerequisite_tags:
+        return False
+    wanted = set(c.prerequisite_tags)
+    by_id = ctx.scenario.action_by_id
+    captured: set[str] = set()
+    for aid in ctx.executed_actions:
+        prior = by_id.get(aid)
+        if prior is not None and wanted & set(prior.tags):
+            captured |= set(prior.investigates)
+    return bool(set(ctx.action.targets) - captured)
+
+
 @register("forbid_action")
 def _forbid_action(c: Constraint, ctx: ConstraintContext) -> bool:
     return ctx.action.id in set(c.action_ids)
@@ -92,6 +122,23 @@ def _max_business_impact(c: Constraint, ctx: ConstraintContext) -> bool:
     if c.threshold is None:
         return False
     return ctx.business_impact_after > c.threshold
+
+
+# 型ごとに「これが無いと永久に発火しない」フィールド（SPEC 5.3）。
+# **黙って無視される制約は、書いていないのと同じである。** 方針の名乗りだけが
+# 残り、盤面では何も起きない。ローダがここを見て拒否する。
+REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "forbid_containment_without_evidence": ("assets",),
+    "require_before": ("action_type", "prerequisite_tags"),
+    "require_capture_of_target": ("action_type", "prerequisite_tags"),
+    "forbid_action": ("action_ids",),
+    "max_business_impact": ("threshold",),
+}
+
+
+def required_fields(name: str) -> tuple[str, ...]:
+    """その制約型が必ず持っていなければならないフィールド名。"""
+    return REQUIRED_FIELDS.get(name, ())
 
 
 def evaluate(

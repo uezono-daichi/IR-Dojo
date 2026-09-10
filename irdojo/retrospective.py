@@ -6,11 +6,13 @@
 
 from __future__ import annotations
 
+import itertools
+
 from pydantic import BaseModel
 
 from .engine import GameState
 from .questions import is_resolved
-from .schema import Action, ActionType, Scenario
+from .schema import Action, ActionType, Policy, Scenario
 
 # 全探索の上限。これを超えたら貪欲法に落として近似であることを明示する。
 EXHAUSTIVE_LIMIT = 22
@@ -196,6 +198,154 @@ def minimal_containment(scenario: Scenario) -> tuple[int | None, list[str]]:
                 covered | set(a.targets), purged | set(a.eradicates))
 
     dfs(0, [], 0, set(), set())
+    if best is None:
+        return None, []
+    return best[0], best[1]
+
+
+# ─────────── 方針ごとの L（SPEC 8.2 手順7） ───────────
+
+
+def _violations(
+    scenario: Scenario, policy: Policy, order: list[str],
+) -> int:
+    """その順で押したときに出る方針違反の件数。
+
+    **判定はエンジンと同じ `constraints.evaluate` を通す。** ここで
+    「証拠保全なら揮発性を先に」と書き直すと、制約の型を1つ足した瞬間に
+    2箇所が食い違う（過去に `refuted_by` の読み方で同じ失敗をしている）。
+
+    状態の閾値を見る制約（`max_business_impact`）だけは、業務影響 0 として
+    数えない — あれが値付けしているのは**どれを選ぶか**であって
+    **どれだけ掛かるか**ではないので、L の定義には入らない。
+    """
+    from .constraints import ConstraintContext, evaluate
+
+    by_id = scenario.action_by_id
+    done: list[str] = []
+    got: set[str] = set()
+    hits = 0
+    for aid in order:
+        act = by_id.get(aid)
+        if act is None:
+            continue
+        ctx = ConstraintContext(
+            scenario=scenario,
+            action=act,
+            obtained_evidence=frozenset(got),
+            executed_actions=tuple(done),
+            at_minute=0,
+            business_impact_after=0.0,
+        )
+        hits += len(evaluate(policy, ctx, frozenset()))
+        done.append(aid)
+        got |= set(act.yields)
+    return hits
+
+
+def _prerequisite_candidates(scenario: Scenario, policy: Policy) -> list[Action]:
+    """その方針が「先に押せ」と言いうる調査アクション。
+
+    方針の制約が名指ししているタグを持つものだけを見る。
+    型ごとの意味は読まない — 読むと制約の型を足すたびにここが増える。
+    """
+    tags = {t for c in policy.constraints for t in c.prerequisite_tags}
+    if not tags:
+        return []
+    return [
+        a for a in scenario.actions
+        if a.type == ActionType.INVESTIGATE and tags & set(a.tags)
+    ]
+
+
+def policy_prerequisites(
+    scenario: Scenario,
+    policy: Policy,
+    before: list[str],
+    containment: list[str],
+) -> list[str]:
+    """その封じ込めを**違反なしで**実行するために、先に足す最安の手。
+
+    「証拠保全を渡された学習者は、ブリーフィングに書いてある要件を
+    満たしてから止める」を作るためのもの。これが無いと、封じ込めの組を
+    総当たりで比べるとき、**証拠保全の列だけが全部違反**になり、
+    どの手が最良かの比較が成り立たない（全部の組から同じ4点が引かれ、
+    順位は業務継続の複製のままになる）。
+
+    満たしようが無い組（その資産に届く capture の手が盤面に無い）では
+    空を返す。**そこは実際に違反になる**のが正しい — 方針を渡された人が
+    払えない要求は、払えないまま採点に出る。
+    """
+    extras = _prerequisite_candidates(scenario, policy)
+    order = [a for a in extras if a.id not in before]
+    for k in range(len(order) + 1):
+        for pre in itertools.combinations(sorted(order, key=lambda a: a.cost_minutes), k):
+            ids = [a.id for a in pre]
+            if not _violations(scenario, policy, before + ids + containment):
+                return ids
+    return []
+
+
+def minimal_response(
+    scenario: Scenario, policy: Policy | None = None,
+) -> tuple[int | None, list[str]]:
+    """判断に到達し、**方針違反を1件も出さずに**被害を止めきるまでの L。
+
+    **L は方針に依存する**（v1.40）。8.2 手順7 の L には方針が入って
+    いなかったが、方針の制約は「何を先に押すか」を決めるので、
+    守るべき制約が重い方針では最良のプレイでも長くなる。同梱シナリオでは
+    証拠保全最優先だけが 175分 → 215分になり、折れ点 200分を
+    **盤面で最も丁寧に解いた人が自分で踏む**位置に来ていた。
+
+    折れ点は**最も高くつく方針の L** で置く（8.2 / 8.3）。
+    折れ点を踏むかどうかが「どの方針を渡されたか」で決まってはいけない —
+    方針は選ばされるものであり、被害モデルは方針に中立であるべきである。
+
+    `policy` が None なら制約を見ない（従来の L）。
+    """
+    judged, path_ids, _exact = minimal_path(scenario)
+    if judged is None:
+        return None, []
+    if policy is None:
+        stopped, stop_ids = minimal_containment(scenario)
+        if stopped is None:
+            return None, []
+        return judged + stopped, list(path_ids) + list(stop_ids)
+
+    acts = [a for a in scenario.actions if a.type == ActionType.CONTAIN and a.targets]
+    need = set(scenario.world.ground_truth.compromised)
+    need_erad = set(scenario.world.ground_truth.persistence)
+    extras = _prerequisite_candidates(scenario, policy)
+
+    best: tuple[int, list[str]] | None = None
+    for r in range(len(acts) + 1):
+        for combo in itertools.combinations(acts, r):
+            covered = {t for a in combo for t in a.targets}
+            purged = {t for a in combo for t in a.eradicates}
+            if not (need <= covered and need_erad <= purged):
+                continue
+            base_cost = judged + sum(a.cost_minutes for a in combo)
+            if best is not None and base_cost >= best[0]:
+                continue
+            # 前提の手は、要る分だけを最も安く足す。
+            # 何が要るかは制約の型ごとに違うので、候補の部分集合を
+            # 全部試して「違反 0 になる最も安い組」を採る
+            for k in range(len(extras) + 1):
+                for pre in itertools.combinations(extras, k):
+                    add = [a for a in pre if a.id not in path_ids]
+                    cost = base_cost + sum(a.cost_minutes for a in add)
+                    if best is not None and cost >= best[0]:
+                        continue
+                    order = (
+                        list(path_ids) + [a.id for a in add] + [a.id for a in combo]
+                    )
+                    if _violations(scenario, policy, order):
+                        continue
+                    best = (cost, order)
+                    break
+                else:
+                    continue
+                break
     if best is None:
         return None, []
     return best[0], best[1]

@@ -788,6 +788,9 @@ def _validate_scenario(sc: "Scenario") -> None:
                 f"{p.id}: normalization に無い帰結指標に重みがあります: {sorted(unknown)}"
             )
 
+    _reject_toothless_constraints(sc)
+    _reject_unsatisfiable_capture_requirement(sc)
+    _reject_policies_that_forbid_every_stop(sc)
     _reject_unreachable_actions(sc)
     _reject_criticality_inversion(sc)
     _reject_uncontainable_compromise(sc)
@@ -1075,6 +1078,106 @@ def _reject_criticality_inversion(sc: "Scenario") -> None:
                     f"{b.id}({b.criticality.value}, {b.business_impact_per_hour}/h)。"
                     "学習者には重要度しか見せないため、表示が実態と食い違う"
                 )
+
+
+def _reject_toothless_constraints(sc: "Scenario") -> None:
+    """発火しようのない方針制約を拒否する（SPEC 5.3）。
+
+    `evaluate` は知らない型を黙って無視し、各判定も足りないフィールドを
+    黙って False で返す。**書けるが何も起きない制約**が作れるということで、
+    症状は「方針の名乗りだけが変わって、盤面では何も変わらない」になる。
+    `require_before` に `action_type` を書き忘れた版は、実測すると
+    どの方針でも同じ手が最良になり、その理由は読んでも分からない。
+
+    型ごとの必須フィールドは `constraints.REQUIRED_FIELDS` が持つ。
+    **判定と必須条件を2箇所に書かない** — 制約型を1つ足したときに
+    片方だけ更新される（過去に同じ形の食い違いを2度出している）。
+    """
+    from .constraints import known_types, required_fields
+
+    for p in sc.policies:
+        for c in p.constraints:
+            if c.type not in known_types():
+                continue
+            for field in required_fields(c.type):
+                if not getattr(c, field, None):
+                    raise ValueError(
+                        f"{p.id}: 制約 {c.type} に {field} がありません。"
+                        "この制約は永久に発火しません"
+                    )
+
+
+def _reject_policies_that_forbid_every_stop(sc: "Scenario") -> None:
+    """侵害資産を止める手を、方針が**全部**禁じていないか（SPEC 5.3 / 3.8）。
+
+    `forbid_action` は「同じ資産を止める複数の手のうち、この方針では
+    こちらを取れ」と言うための道具である。ある資産の手を全部禁じると、
+    その方針を選んだ学習者は**止めれば違反、止めなければ完全度が落ちる** —
+    払えない要求になる。
+
+    同梱シナリオでは fs01 に手が3つあり、証拠保全最優先が2つ、
+    被害最小化最優先が2つを禁じている。**手を1つ消すと、どちらかの方針が
+    黙って詰む。** 消したことと詰んだことは離れた場所で起きるので、
+    読んでも気づけない。
+    """
+    stops: dict[str, set[str]] = {}
+    for a in sc.actions:
+        if a.type != ActionType.CONTAIN:
+            continue
+        for t in a.targets:
+            stops.setdefault(t, set()).add(a.id)
+
+    for p in sc.policies:
+        banned = {
+            aid
+            for c in p.constraints
+            if c.type == "forbid_action"
+            for aid in c.action_ids
+        }
+        for asset in sc.world.ground_truth.compromised:
+            available = stops.get(asset, set())
+            if available and available <= banned:
+                raise ValueError(
+                    f"{p.id}: 侵害資産 {asset} を止める手を全部禁じています"
+                    f"（{sorted(available)}）。止めれば違反、止めなければ"
+                    "完全度が落ちる — この方針を選んだ学習者に逃げ道が無い"
+                )
+
+
+def _reject_unsatisfiable_capture_requirement(sc: "Scenario") -> None:
+    """`require_capture_of_target` を、守れない方針にしていないか（SPEC 5.3）。
+
+    この制約は「止める資産ごとに、その資産の揮発性証拠を先に取れ」と言う。
+    侵害資産に届く capture の手が盤面に無いと、**その方針を選んだ学習者は
+    何をしても違反する** — compromised を覆えば違反、覆わなければ完全度が
+    落ちる。選べるが守れない方針は、方針ではなく罠である。
+
+    `_reject_uncontainable_compromise`（止める手が無い侵害資産）と
+    同じ形の検査で、見ている軸が「止められるか」ではなく
+    「方針どおりに止められるか」に変わっただけである。
+    """
+    for p in sc.policies:
+        tags = {
+            t
+            for c in p.constraints
+            if c.type == "require_capture_of_target"
+            for t in c.prerequisite_tags
+        }
+        if not tags:
+            continue
+        covered = {
+            asset
+            for a in sc.actions
+            if tags & set(a.tags)
+            for asset in a.investigates
+        }
+        missing = [a for a in sc.world.ground_truth.compromised if a not in covered]
+        if missing:
+            raise ValueError(
+                f"{p.id}: 揮発性証拠を取る手が無い侵害資産があります: {sorted(missing)}。"
+                f"タグ {sorted(tags)} を持ち、その資産を investigates する"
+                "アクションが要る（この方針では止めれば必ず違反になる）"
+            )
 
 
 def _reject_uncontainable_compromise(sc: "Scenario") -> None:

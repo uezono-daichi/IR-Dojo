@@ -356,16 +356,28 @@ def test_the_replacement_checks_are_not_slack(balance, monkeypatch):
     #     残すのは act_shutdown_fs01 と act_rebuild_ws042 — これなら
     #     persistence を根絶する手も盤面に1つ残る（ローダの要求）
     alternatives = [
-        "act_block_smb_fs01", "act_purge_persistence_ws042",
+        "act_block_smb_fs01", "act_stop_share_fs01", "act_purge_persistence_ws042",
         "act_block_c2", "act_isolate_ws042",
     ]
     data = copy.deepcopy(raw)
     data["actions"] = [a for a in data["actions"] if a["id"] not in alternatives]
     for pol in data["policies"]:
+        # 空になった forbid_action は落とす（空の制約はローダが
+        # 「永久に発火しない」として別の理由で拒否する。v1.40）
+        kept = []
         for c in pol.get("constraints", []):
-            c["action_ids"] = [
-                i for i in c.get("action_ids", []) if i not in alternatives
-            ]
+            if "action_ids" in c:
+                # 残った唯一の手を禁じる制約も落とす。侵害資産を止める手を
+                # 全部禁じる方針はローダが拒否するので（v1.40）、
+                # そのままでは読み込みで落ちて、見たい検査に辿り着かない
+                c["action_ids"] = [
+                    i for i in c["action_ids"]
+                    if i not in alternatives and i != "act_shutdown_fs01"
+                ]
+                if not c["action_ids"]:
+                    continue
+            kept.append(c)
+        pol["constraints"] = kept
     one_way = load_scenario_text(yaml.safe_dump(data, allow_unicode=True))
     assert not _named(
         balance.report(one_way), "封じ込めの最良手が方針ごとに違う"
@@ -381,6 +393,72 @@ def test_the_replacement_checks_are_not_slack(balance, monkeypatch):
     assert not _named(
         balance.report(sc), "何も止めないプレイは正しく止めたプレイに負ける"
     )["ok"], "地平が無くても「何も止めない」が負けている"
+
+
+def test_the_ranking_check_catches_a_duplicated_policy(balance):
+    """**方針の複製は、1位だけを見ていると見つからない**（v1.40 / 9.1 差分#1）。
+
+    v1.39 の証拠保全最優先を盤面に戻す。当時の制約は
+    `require_before`（前提タグの付いた手を盤面のどこかで1つ押していれば満たす）
+    1本で、ws-042 のメモリを取れば fs01 を無条件に落とせた。
+    実測すると、業務継続最優先と**上位6組まで一字一句同じ順**に並ぶ —
+    「方針を採点の入力にする」という主張が、盤面では2本しか
+    実装されていない状態である。
+
+    このとき「封じ込めの最良手が方針ごとに違う」（2通り以上あればよい）は
+    **通ってしまう。** 被害最小化最優先が別の手を選ぶからで、
+    その1本だけで3本分の証明になっていた。順位ごと比べないと落ちない。
+    """
+    import copy
+
+    import yaml
+
+    from irdojo.loader import SCENARIO_DIR, load_scenario_text
+
+    raw = yaml.safe_load(
+        (SCENARIO_DIR / "ransomware-initial-response-01.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    data = copy.deepcopy(raw)
+    for pol in data["policies"]:
+        if pol["id"] == "evidence_preservation":
+            pol["constraints"] = [{
+                "type": "require_before",
+                "action_type": "contain",
+                "prerequisite_tags": ["volatile_capture"],
+                "message": "封じ込め前に揮発性証拠の取得が必要です",
+            }]
+    old = load_scenario_text(yaml.safe_dump(data, allow_unicode=True))
+    report = balance.report(old)
+
+    assert not _named(report, "方針ごとに、封じ込めの順位が違う")["ok"], (
+        "v1.39 の複製された方針でも順位の検査が通ってしまう"
+    )
+    # 弱い方の検査は通る。これが「1本で3本分を証明していた」形
+    assert _named(report, "封じ込めの最良手が方針ごとに違う")["ok"]
+
+
+def test_the_bend_is_placed_for_the_costliest_policy(balance):
+    """折れ点は最も高くつく方針の L で置く（SPEC 8.2 手順7 / v1.40）。
+
+    L に方針が入っていなかった頃、証拠保全最優先だけが
+    「最良に解いても自分で折れ点を踏む」位置に置かれていた。
+    折れ点を踏むかどうかが、渡された方針で決まってはいけない。
+    """
+    from irdojo import retrospective
+
+    sc = load_scenario("ransomware-initial-response-01")
+    lengths = {
+        pol.id: retrospective.minimal_response(sc, pol)[0] for pol in sc.policies
+    }
+    bend = sc.damage.acceleration.threshold_minutes
+    # 方針で L が変わること（変わらないなら、この検査は何も見ていない）
+    assert len(set(lengths.values())) > 1, lengths
+    for pid, length in lengths.items():
+        assert length <= bend, f"{pid}: L {length}分 > 折れ点 {bend}分"
+    check = _named(balance.report(sc), "折れ点の位置")
+    assert check["ok"] and str(max(lengths.values())) in check["detail"]
 
 
 # ─────────── 根絶（SPEC 5.8 / 9.4 #5） ───────────

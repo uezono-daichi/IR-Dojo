@@ -626,7 +626,12 @@ function decide(payload) {
       S.newIds[ev.id] = true;
       S.openIds[ev.id] = true;
     });
-    if (S.lastOutcome) {
+    // **アクション以外の決定で、直前の結果を書き換えないこと。**
+    // フェーズ移行と被疑判定の宣言もここを通るので、素で上書きすると
+    // `revealed` が 0 に戻る — 直前に押した調査の箱が、宣言した瞬間に
+    // 「何も出てこなかった。」に化ける。**画面が過去を書き換えて嘘をつく**
+    // 形で、証拠は手元にあるのに、見つけた事実だけが消えて見えた（v1.40）
+    if (S.lastOutcome && payload && payload.kind === 'action') {
       S.lastOutcome.revealed = (res.revealed_evidence || []).length;
       S.lastOutcome.unlocked = res.unlocked_count || 0;
       S.lastOutcome.contained = res.contained || [];
