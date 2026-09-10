@@ -95,11 +95,43 @@ MetricFn = Callable[[GameState, Scenario], float]
 _METRICS: dict[str, MetricFn] = {}
 
 
+class MetricPart(BaseModel):
+    """指標が「何を何で割った値か」。講評はこれを分数のまま出す。
+
+    0.039 という小数を出しても、読み手は何を数えた値か分からない。
+    「誤導を追った 25分 / 調べた 165分」なら説明文が要らない
+    （SPEC 7.6.13）。分子の名前・分母の名前をそのまま持つ。
+    """
+
+    label: str        # 分子が何か（「当たり」「見落とし」）
+    num: float
+    den_label: str    # 分母が何か（「名指しした資産」「永続化」）
+    den: float
+
+
+PartsFn = Callable[[GameState, Scenario], list[MetricPart]]
+_PARTS: dict[str, PartsFn] = {}
+
+
 def metric(name: str) -> Callable[[MetricFn], MetricFn]:
     """指標は関数として名前で登録する（SPEC 原則4 拡張点4）。"""
 
     def wrap(fn: MetricFn) -> MetricFn:
         _METRICS[name] = fn
+        return fn
+
+    return wrap
+
+
+def breakdown(name: str) -> Callable[[PartsFn], PartsFn]:
+    """その指標の内訳を返す関数を、同じ名前で登録する。
+
+    指標本体と同じ拡張点に乗せる。内訳が無い指標は何も出さない
+    （分数で書けない指標を無理に分数にしない）。
+    """
+
+    def wrap(fn: PartsFn) -> PartsFn:
+        _PARTS[name] = fn
         return fn
 
     return wrap
@@ -117,6 +149,13 @@ def _precision(state: GameState, scenario: Scenario) -> float:
     return safe_ratio(len(hit), len(a))
 
 
+@breakdown("assessment_precision")
+def _precision_parts(state: GameState, scenario: Scenario) -> list[MetricPart]:
+    a = _assessed(state)
+    hit = a & set(scenario.world.ground_truth.compromised)
+    return [MetricPart(label="当たり", num=len(hit), den_label="名指し", den=len(a))]
+
+
 @metric("assessment_recall")
 def _recall(state: GameState, scenario: Scenario) -> float:
     compromised = set(scenario.world.ground_truth.compromised)
@@ -124,11 +163,31 @@ def _recall(state: GameState, scenario: Scenario) -> float:
     return safe_ratio(len(hit), len(compromised))
 
 
+@breakdown("assessment_recall")
+def _recall_parts(state: GameState, scenario: Scenario) -> list[MetricPart]:
+    compromised = set(scenario.world.ground_truth.compromised)
+    hit = _assessed(state) & compromised
+    return [
+        MetricPart(label="名指しできた", num=len(hit),
+                   den_label="実際の侵害", den=len(compromised))
+    ]
+
+
 @metric("persistence_missed")
 def _persistence_missed(state: GameState, scenario: Scenario) -> float:
     persistence = set(scenario.world.ground_truth.persistence)
     missed = persistence - _assessed(state)
     return safe_ratio(len(missed), len(persistence))
+
+
+@breakdown("persistence_missed")
+def _persistence_parts(state: GameState, scenario: Scenario) -> list[MetricPart]:
+    persistence = set(scenario.world.ground_truth.persistence)
+    missed = persistence - _assessed(state)
+    return [
+        MetricPart(label="見落とし", num=len(missed),
+                   den_label="永続化のあった資産", den=len(persistence))
+    ]
 
 
 @metric("misled_score")
@@ -152,6 +211,28 @@ def _misled(state: GameState, scenario: Scenario) -> float:
     return 0.4 * action_part + 0.6 * allocation_part
 
 
+@breakdown("misled_score")
+def _misled_parts(state: GameState, scenario: Scenario) -> list[MetricPart]:
+    """2つの分数をそのまま出す。合成の重み（0.4 / 0.6）は出さない。
+
+    読み手が知りたいのは「何をどれだけ追ったか」であって、
+    ハイブリッドの内分点ではない。
+    """
+    by_id = scenario.evidence_by_id
+    obtained = [by_id[e] for e in state.obtained_evidence if e in by_id]
+    misled_only = 0
+    for asset_id in _assessed(state):
+        pointing = [e for e in obtained if asset_id in e.points_to]
+        if pointing and all(e.misleading for e in pointing):
+            misled_only += 1
+    return [
+        MetricPart(label="誤導を追った時間", num=state.misled_follow_minutes,
+                   den_label="調べた時間", den=state.investigation_minutes),
+        MetricPart(label="誤導だけを根拠にした名指し", num=misled_only,
+                   den_label="名指し", den=len(_assessed(state))),
+    ]
+
+
 @metric("unresolved_questions")
 def _unresolved(state: GameState, scenario: Scenario) -> float:
     """宣言時点で測る。対応フェーズ中に解消しても遡って加点しない。"""
@@ -159,6 +240,17 @@ def _unresolved(state: GameState, scenario: Scenario) -> float:
     snap = state.assessment_snapshot
     unresolved = len(snap.unresolved_critical) if snap else critical_total
     return safe_ratio(unresolved, critical_total)
+
+
+@breakdown("unresolved_questions")
+def _unresolved_parts(state: GameState, scenario: Scenario) -> list[MetricPart]:
+    critical_total = sum(1 for q in scenario.open_questions if q.critical)
+    snap = state.assessment_snapshot
+    unresolved = len(snap.unresolved_critical) if snap else critical_total
+    return [
+        MetricPart(label="未解消", num=unresolved,
+                   den_label="採点対象の論点", den=critical_total)
+    ]
 
 
 def known_metrics() -> set[str]:
@@ -173,12 +265,21 @@ class ScoreReport(BaseModel):
     policy_score: float
     composite_score: float
     metrics: dict[str, float]        # 事実認識層の生値
-    goodness: dict[str, float]       # 0〜1 に正規化した「良さ」
+    goodness: dict[str, float]       # 0〜1 に正規化した「良さ」。向きが揃っている
+    # 各指標が何を何で割った値か。講評はこれを分数のまま出す（SPEC 7.6.13）
+    metric_parts: dict[str, list[MetricPart]]
+    fact_weights: dict[str, float]   # 事実認識層の内訳の重み
     consequences: Consequences
     consequence_goodness: dict[str, float]
+    # この方針が帰結の何をどれだけ見ているか。違反ゼロでも点が低い理由は
+    # ここにしか無い。出さないと「違反なしで 39点」の説明がどこにも無くなる
+    policy_weights: dict[str, float]
+    constraint_penalty: float        # 違反1件あたりの減衰率
     constraint_violations: int
     policy_id: str
     policy_label: str
+    fact_weight: float               # 合成での事実認識層の重み
+    composite_method: str
 
 
 def score(state: GameState, scenario: Scenario, policy: Policy | None = None) -> ScoreReport:
@@ -225,17 +326,29 @@ def score(state: GameState, scenario: Scenario, policy: Policy | None = None) ->
         fw = sc.composite.fact_weight
         composite = fw * fact_score + (1.0 - fw) * policy_score
 
+    parts: dict[str, list[MetricPart]] = {}
+    for spec in sc.fact_layer.metrics:
+        pf = _PARTS.get(spec.id)
+        if pf is not None:
+            parts[spec.id] = pf(state, scenario)
+
     return ScoreReport(
         fact_score=fact_score,
         policy_score=policy_score,
         composite_score=composite,
         metrics=raw,
         goodness=good,
+        metric_parts=parts,
+        fact_weights=dict(sc.fact_layer.weights),
         consequences=cons,
         consequence_goodness=cons_good,
+        policy_weights=dict(pol.weights),
+        constraint_penalty=sc.policy_layer.constraint_penalty,
         constraint_violations=violations,
         policy_id=pol.id,
         policy_label=pol.label,
+        fact_weight=sc.composite.fact_weight,
+        composite_method=sc.composite.method,
     )
 
 

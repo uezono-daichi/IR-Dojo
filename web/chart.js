@@ -38,8 +38,12 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssW, cssH);
 
-    var padL = 4, padR = 4, padT = 8;
-    var padB = markers.length ? 14 + Math.min(markers.length - 1, 5) * 11 : 10;
+    // 目盛りを出すのは講評だけ（axis: true）。プレイ中の帯は狭く、
+    // 数字を添えると「この先どう伸びるか」を読ませる図になってしまう
+    var axis = !!opts.axis;
+    var padL = axis ? 56 : 4, padR = axis ? 10 : 4;
+    var padT = axis ? 22 : 8;
+    var padB = axis ? 30 : 10;
     var w = cssW - padL - padR;
     var h = cssH - padT - padB;
 
@@ -115,39 +119,83 @@
       ctx.stroke();
     }
 
-    // 注釈（判定した時点・封じ込めた時点）
+    // 目盛り。縦軸は被害額、横軸は分。
+    // 「どこまで伸びたのか」が数字で読めないと、傾きしか分からない
+    if (axis) {
+      ctx.font = '10px ui-monospace, monospace';
+      ctx.fillStyle = '#6b7280';
+      ctx.textAlign = 'right';
+      ctx.fillText(fmt(maxY), padL - 6, padT + 4);
+      ctx.fillText('0', padL - 6, padT + h + 4);
+      ctx.textAlign = 'left';
+      ctx.fillText('被害額', padL, padT - 9);
+
+      // 上端の薄い基準線。目盛りの数字がどの高さを指すかを示す
+      ctx.beginPath();
+      ctx.moveTo(padL, padT + 0.5);
+      ctx.lineTo(padL + w, padT + 0.5);
+      ctx.strokeStyle = '#22272f';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      ctx.fillStyle = '#6b7280';
+      ctx.textAlign = 'left';
+      ctx.fillText('0分', padL, padT + h + 15);
+      if (proj.length) {
+        ctx.textAlign = 'center';
+        var bx = px(series.length - 1);
+        ctx.fillText(series.length + '分', bx, padT + h + 15);
+        ctx.fillText('手を止めた時点', bx, padT + h + 26);
+        ctx.textAlign = 'right';
+        ctx.fillText('＋' + Math.round(proj.length / 60) + '時間',
+                     padL + w, padT + h + 15);
+      }
+    }
+
+    // 注釈（判定した時点・封じ込めた時点）。
+    // **図に描くのは番号だけ。名前は凡例に置く。**
+    // 名前を図に直接置いていた頃は、同時刻の線の上にラベルが3段に折り重なり、
+    // どの線がどれかを x 座標の近さで推測するしかなかった。
+    // 線を実線にしてあるのは、破線を1種類（復旧までの見込み）に限るため
     ctx.font = '10px ui-monospace, monospace';
     ctx.textAlign = 'center';
-    var placed = [];   // 既に置いたラベルの範囲。重ねると読めなくなる
+    ctx.textBaseline = 'middle';
+    var placed = [];   // 同じ位置に立つ番号は縦にずらす
     for (var m = 0; m < markers.length; m++) {
       var mk = markers[m];
       if (mk.minute == null || mk.minute < 0) { continue; }
       // 終了直前の出来事は右端に寄せる。落とすと封じ込めの印が消える
       var x = px(Math.min(mk.minute, maxX));
-      ctx.beginPath();
-      ctx.setLineDash([2, 3]);
-      ctx.moveTo(x, padT);
-      ctx.lineTo(x, padT + h);
       var col = mk.kind === 'world' ? '#f7768e' : '#e0af68';
+      ctx.beginPath();
+      ctx.moveTo(x + 0.5, padT);
+      ctx.lineTo(x + 0.5, padT + h);
       ctx.strokeStyle = col;
       ctx.lineWidth = mk.kind === 'world' ? 1.4 : 1;
       ctx.stroke();
-      ctx.setLineDash([]);
 
-      var label = mk.label;
-      var tw = ctx.measureText(label).width;
-      var lx = Math.min(Math.max(x, tw / 2 + 2), padL + w - tw / 2 - 2);
-      // 重なる相手がいる段を避けて、下から順に段をずらす
       var row = 0;
-      while (row < 6 && placed.some(function (p) {
-        return p.row === row && Math.abs(p.x - lx) < (p.w + tw) / 2 + 6;
+      while (row < 8 && placed.some(function (p) {
+        return p.row === row && Math.abs(p.x - x) < 15;
       })) { row++; }
-      placed.push({ x: lx, w: tw, row: row });
+      placed.push({ x: x, row: row });
 
+      var by = padT + 8 + row * 15;
+      var n = String(mk.index || (m + 1));
+      ctx.beginPath();
+      ctx.arc(x, by, 7, 0, Math.PI * 2);
+      ctx.fillStyle = '#12151a';
+      ctx.fill();
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 1;
+      ctx.stroke();
       ctx.fillStyle = col;
-      ctx.fillText(label, lx, cssH - 3 - row * 11);
+      ctx.fillText(n, x, by + 0.5);
     }
+    ctx.textBaseline = 'alphabetic';
   }
+
+  function fmt(v) { return Math.round(v).toLocaleString('ja-JP'); }
 
   global.DamageChart = { draw: draw };
 })(window);

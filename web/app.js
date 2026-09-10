@@ -1225,33 +1225,43 @@ function blockScore(rep) {
   t.appendChild(el('small', null, ' / 100'));
   b.appendChild(t);
 
-  var bars = el('div', 'bars');
-  [['事実認識', s.fact_score], ['方針適合', s.policy_score]].forEach(function (pair) {
-    var row = el('div', 'bar-row');
-    row.appendChild(el('div', 'k', pair[0]));
-    row.appendChild(el('div', 'n', String(Math.round(pair[1] * 100))));
-    var track = el('div', 'track');
-    var fill = el('div', 'fill');
-    fill.style.width = Math.max(0, Math.min(100, pair[1] * 100)) + '%';
+  // 合成は「重みで幅を分けた1本の帯」で見せる（SPEC 7.6.13）。
+  // 事実認識は帯の 70%、方針適合は 30% を占め、それぞれの中で自分の点だけ塗る。
+  // **塗った長さの合計が総合点になる。** 同じ長さの独立した2本を並べていた頃は、
+  // 総合がどこから出た数字なのか画面のどこにも書かれていなかった
+  var fw = s.fact_weight;
+  var weighted = (s.composite_method === 'weighted_sum');
+  var segs = weighted
+    ? [['事実認識', s.fact_score, fw], ['方針適合', s.policy_score, 1 - fw]]
+    : [['事実認識', s.fact_score, 0.5], ['方針適合', s.policy_score, 0.5]];
+  var comp = el('div', 'composite');
+  segs.forEach(function (seg) {
+    var wrap = el('div', 'cseg');
+    wrap.style.width = (seg[2] * 100) + '%';
+    var track = el('div', 'ctrack');
+    var fill = el('div', 'cfill');
+    fill.style.width = Math.max(0, Math.min(100, seg[1] * 100)) + '%';
     track.appendChild(fill);
-    row.appendChild(track);
-    bars.appendChild(row);
+    wrap.appendChild(track);
+    var lab = el('div', 'clab');
+    lab.appendChild(el('span', 'n', String(Math.round(seg[1] * 100))));
+    lab.appendChild(el('span', 'k', ' ' + seg[0]));
+    if (weighted) { lab.appendChild(el('span', 'w', '×' + seg[2].toFixed(2))); }
+    wrap.appendChild(lab);
+    comp.appendChild(wrap);
   });
-  b.appendChild(bars);
+  b.appendChild(comp);
+  b.appendChild(el('p', 'faint', weighted
+    ? '帯の幅が重み、塗った長さがその層の取り分です。合計が総合点になります。'
+    : '総合は2つの層の積です。'));
+
   // 採点はこの2本だけである。プレイ中に最も大きく動いた数字がここに無い理由を、
   // 講評でも言っておく（SPEC 6.1 / 7.6.15）
   b.appendChild(el('p', 'faint',
     '帰結（経過時間・被害額・業務影響）は採点していません。' +
     '方針の重みを通してのみ評価に入ります。'));
 
-  var grid = el('div', 'metrics');
-  Object.keys(s.metrics).forEach(function (id) {
-    var m = el('div', 'm');
-    m.appendChild(el('span', null, rep.metric_labels[id] || id));
-    m.appendChild(el('span', 'v', s.metrics[id].toFixed(3)));
-    grid.appendChild(m);
-  });
-  b.appendChild(grid);
+  b.appendChild(factTable(rep));
 
   if (s.fact_score < 0.5) {
     var note = el('div', 'note-warn');
@@ -1263,16 +1273,79 @@ function blockScore(rep) {
   return b;
 }
 
+/* 事実認識の内訳。**出すのは向きを揃えた「良さ」だけ。**
+
+   以前は生値（0.000〜1.000）を6つ並べていた。適合率は高い方が良く、
+   見落としは低い方が良いのに、体裁が同じなので区別する手がかりが無かった。
+   「1.000」が1件なのか 100% なのかも読めなかった。
+
+   代わりに、何を何で割った値かを分数のまま出す。説明文が要らなくなる。 */
+function factTable(rep) {
+  var s = rep.score;
+  var wrap = el('div', 'sub');
+  wrap.appendChild(el('h3', null,
+    '事実認識 ' + Math.round(s.fact_score * 100) + ' の内訳'));
+  wrap.appendChild(el('p', 'faint',
+    'どれも 100 に近いほど良い向きに揃えてあります。'));
+
+  var tbl = el('table', 'mtable');
+  Object.keys(s.goodness).forEach(function (id) {
+    var tr = el('tr');
+    tr.appendChild(el('td', 'k', rep.metric_labels[id] || id));
+
+    var parts = (s.metric_parts && s.metric_parts[id]) || [];
+    var td = el('td', 'frac');
+    parts.forEach(function (p) {
+      td.appendChild(el('div', null,
+        p.label + ' ' + Math.round(p.num) + ' / ' + p.den_label + ' ' +
+        Math.round(p.den)));
+    });
+    tr.appendChild(td);
+
+    tr.appendChild(el('td', 'num', String(Math.round(s.goodness[id] * 100))));
+    tr.appendChild(el('td', 'w', '×' + (s.fact_weights[id] || 0).toFixed(2)));
+    tbl.appendChild(tr);
+  });
+  wrap.appendChild(tbl);
+  return wrap;
+}
+
 function blockUnresolved(rep) {
   var b = el('div', 'block');
   b.appendChild(el('h2', null, '② 判定時点の論点'));
-  rep.retrospective.unresolved_review.forEach(function (u) {
+
+  var all = rep.retrospective.unresolved_review;
+  var scored = all.filter(function (u) { return u.critical; });
+  var rest = all.filter(function (u) { return !u.critical; });
+
+  // **論点は同格ではない。** 以前は4件を一列に並べ、1件だけに
+  // 「（採点対象外）」と括弧を付けていた。なぜ1件だけ違うのかは
+  // プレイ中も講評も一度も説明していなかった（SPEC 3.5）
+  group(b, '採点対象の論点', scored,
+        '未解消のまま対応すると、封じ込めそのものが成立しなくなる論点です。');
+  group(b, '採点対象外の論点', rest,
+        '解けていなくても封じ込めは成立します。' +
+        '実務では別の判断（報告義務など）に要るため、論点としては残ります。');
+
+  if (rest.length) {
+    // なぜプレイ中に見せないのか。見せない判断そのものを開示する（SPEC 3.10）
+    b.appendChild(el('p', 'faint',
+      'プレイ中は、どれが採点対象かを出していません。' +
+      'どの論点が重いかは「どこを調べなくてよいか」の目印になり、' +
+      '盤面が自分の罠に印を付けることになるからです。'));
+  }
+  return b;
+}
+
+function group(host, title, items, note) {
+  if (!items.length) { return; }
+  host.appendChild(el('h3', null, title + '（' + items.length + '件）'));
+  host.appendChild(el('p', 'faint', note));
+  items.forEach(function (u) {
     var item = el('div', 'item' + (u.resolved_at_decision ? ' done' : ''));
     var h = el('div', 'h');
     h.appendChild(el('span', 'mark', u.resolved_at_decision ? '○' : '●'));
-    var label = u.label + ' — ' + u.question;
-    if (!u.critical) { label += '（採点対象外）'; }
-    h.appendChild(el('span', null, label));
+    h.appendChild(el('span', null, u.label + ' — ' + u.question));
     item.appendChild(h);
     if (!u.resolved_at_decision) {
       prose(item.appendChild(el('div', 'imp')), u.implication);
@@ -1281,9 +1354,8 @@ function blockUnresolved(rep) {
           '※ 対応フェーズ中に解消していますが、判断を下した時点では未解消でした。'));
       }
     }
-    b.appendChild(item);
+    host.appendChild(item);
   });
-  return b;
 }
 
 function blockLost(rep) {
@@ -1309,9 +1381,29 @@ function blockLost(rep) {
           + (l.obtainable_by.length
               ? '先に「' + l.obtainable_by.join('」「') + '」を実行していれば取れました。'
               : '')));
+    // 空振りした手の側から書く。**本人の記憶にあるのはこちらである。**
+    // 「30分払って何も出てこなかった」と「1時間25分前に奪われていた」が
+    // 同じ出来事だという接続が、講評のどこにも書かれていなかった
+    (l.too_late || []).forEach(function (t) {
+      note.appendChild(el('p', 'late', t.kind === 'notice'
+        ? elapsed(t.at_minute) + ' に出した「' + t.action_label +
+          '」は、この連絡を止められる手でした。' + duration(t.late_by_minutes) +
+          '遅く、' + t.cost_minutes + '分を払って何も変わりませんでした。'
+        : elapsed(t.at_minute) + ' に押した「' + t.action_label +
+          '」がこれを取りに行く手でした。' + duration(t.late_by_minutes) +
+          '遅く、' + t.cost_minutes + '分を払って何も出てきませんでした。'));
+    });
     b.appendChild(note);
   });
   return b;
+}
+
+/* 長さ（「1時間25分」）。時刻ではないので elapsed の「+」は付けない。
+   分だけで言うと、遅れの大きさが体感と結び付かない */
+function duration(minutes) {
+  var h = Math.floor(minutes / 60), m = minutes % 60;
+  if (!h) { return m + '分'; }
+  return h + '時間' + (m ? m + '分' : '');
 }
 
 function blockCounterfactuals(rep) {
@@ -1342,11 +1434,51 @@ function blockCounterfactuals(rep) {
 
 function blockPolicy(rep) {
   var b = el('div', 'block');
-  b.appendChild(el('h2', null, '④ 方針への適合'));
+  var sc = rep.score;
+  b.appendChild(el('h2', null,
+    '④ 方針への適合　' + Math.round(sc.policy_score * 100)));
+
+  // **違反していないのに点が低い理由は、ここにしか無い。**
+  // 方針適合は「帰結の加重和 ×（1 - 減衰×違反数）」であって、
+  // 違反ゼロでも加重和が低ければ低い。以前は「方針違反はありませんでした」の
+  // 一行だけで、残りの 61点がどこへ消えたのか画面のどこにも書いていなかった
+  var sum = 0;
+  rep.policy_terms.forEach(function (t) { sum += t.contribution; });
+
+  b.appendChild(el('p', 'faint',
+    '「' + sc.policy_label + '」が見ているものと、その重みです。' +
+    '良さは、この盤面で到達しうる範囲を 0〜100 に直したものです。'));
+
+  var tbl = el('table', 'mtable');
+  rep.policy_terms.forEach(function (t) {
+    var tr = el('tr');
+    tr.appendChild(el('td', 'k', t.label));
+    var v = el('td', 'frac');
+    v.appendChild(el('div', null, t.display));
+    if (t.band) { v.appendChild(el('div', 'band', t.band)); }
+    tr.appendChild(v);
+    tr.appendChild(el('td', 'num', String(Math.round(t.goodness * 100))));
+    tr.appendChild(el('td', 'w', '×' + t.weight.toFixed(2)));
+    tr.appendChild(el('td', 'num strong', (t.contribution * 100).toFixed(1)));
+    tbl.appendChild(tr);
+  });
+  var last = el('tr', 'sumrow');
+  last.appendChild(el('td', 'k', '合計'));
+  last.appendChild(el('td', 'frac', ''));
+  last.appendChild(el('td', 'num', ''));
+  last.appendChild(el('td', 'w', ''));
+  last.appendChild(el('td', 'num strong', (sum * 100).toFixed(1)));
+  tbl.appendChild(last);
+  b.appendChild(tbl);
+
   if (!rep.violations.length) {
     b.appendChild(el('p', 'dim', '方針違反はありませんでした。'));
   } else {
-    b.appendChild(el('p', null, '方針違反 ' + rep.violations.length + '件'));
+    var pen = Math.round(sc.constraint_penalty * 100);
+    b.appendChild(el('p', null,
+      '方針違反 ' + rep.violations.length + '件　→　合計 ' +
+      (sum * 100).toFixed(1) + ' から ' + rep.violations.length + ' × ' + pen +
+      '% を引いて ' + Math.round(sc.policy_score * 100)));
     rep.violations.forEach(function (v) {
       var note = el('div', 'note-warn');
       note.appendChild(el('p', null, '「' + v.message + '」'));
@@ -1364,7 +1496,7 @@ function blockTruth(rep) {
 
   if (rep.damage_history && rep.damage_history.length > 1) {
     var canvas = el('canvas');
-    canvas.setAttribute('height', '150');
+    canvas.setAttribute('height', '190');
     b.appendChild(canvas);
 
     // 被害は二段で出す。プレイ中に見えていたのは実線の分だけで、
@@ -1385,24 +1517,33 @@ function blockTruth(rep) {
       '時間と置いています）。演習が終わってもインシデントは終わりません。' +
       'プレイ中に出していたのは実線の部分だけです。'));
 
-    var legend = el('div', 'legend');
+    // 凡例は番号で図と結ぶ。**色では結ばない。**
+    // 6項目すべて同じオレンジのダッシュを並べていた頃は、どの線がどれかを
+    // x 座標の近さで推測するしかなかった（同時刻に2本立つ場合は不可能）
+    var legend = el('div', 'legend legend-num');
     rep.markers.forEach(function (m) {
       var world = m.kind === 'world';
       var item = el('span', world ? 'lg-world' : null,
                     ' ' + m.label + '（' + m.minute + '分）');
-      var sw = el('span', 'sw');
-      sw.style.background = world ? '#f7768e' : '#e0af68';
+      var sw = el('span', 'sw-num', String(m.index));
+      sw.style.color = world ? '#f7768e' : '#e0af68';
+      sw.style.borderColor = world ? '#f7768e' : '#e0af68';
       item.insertBefore(sw, item.firstChild);
       legend.appendChild(item);
     });
+    var dash = el('span', 'lg-world', ' 復旧までの見込み（唯一の破線）');
+    var dsw = el('span', 'sw dashed');
+    dash.insertBefore(dsw, dash.firstChild);
+    legend.appendChild(dash);
     b.appendChild(legend);
     // 描画は DOM 挿入後（clientWidth が要る）
     setTimeout(function () {
       DamageChart.draw(canvas, rep.damage_history, {
         projection: rep.damage_projection,
-        // グラフ上は短い名前だけ。全文は下の凡例に出す
+        axis: true,
+        // 図に描くのは番号だけ。名前は凡例に出す
         markers: rep.markers.map(function (m) {
-          return { minute: m.minute, label: m.short || m.label, kind: m.kind };
+          return { minute: m.minute, index: m.index, kind: m.kind };
         })
       });
     }, 0);

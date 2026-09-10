@@ -427,6 +427,24 @@ def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
             f"{sk.damage:.0f} / worst {bounds.worst:.0f} = {share:.1%}（狙い 2〜3割）",
         ))
 
+    # SPEC 8.3: 帰結指標の正規化の帯は、盤面で到達できる範囲と揃っていること。
+    # evidence_preserved は帯が [0,1] で、実際に失いうるのは destroys に
+    # 書かれた分だけだった（3/19）。どのプレイも 0.84〜1.00 の中に居るので、
+    # 帯の 84% は誰も踏まない。**「証拠保全最優先」を選んで証拠を3つ落としても
+    # 2点しか動かない**という状態になっていた。名前にしている量が
+    # 採点に現れないなら、その方針は選べても意味を持たない
+    ev_bounds = sc.scoring.consequence_layer.normalization.get("evidence_preserved")
+    losable = {e for a in sc.actions for e in a.destroys}
+    losable |= {e for t in sc.timeline for e in t.destroys}
+    if ev_bounds is not None and losable and sc.evidence:
+        floor = 1.0 - len(losable) / len(sc.evidence)
+        out.append(Check(
+            abs(ev_bounds.worst - floor) <= 0.01,
+            "証拠保全の正規化の帯が、失いうる範囲と揃っている",
+            f"失いうる証拠 {len(losable)}/{len(sc.evidence)}件"
+            f" → 到達しうる最悪 {floor:.3f} / 帯の worst {ev_bounds.worst:.3f}",
+        ))
+
     # SPEC 8.3: 網羅と巧いプレイの差が10点以上
     pol = sc.meta.default_policy
     gap = (runs[("skilled", False)].by_policy[pol]["composite"]

@@ -73,9 +73,9 @@ def test_fact_metrics(scenario):
 
 def test_composite(scenario):
     r = scoring.score(play_spec_68(scenario).state, scenario)
-    assert r.policy_score == pytest.approx(0.661, abs=0.001)
-    assert r.composite_score == pytest.approx(0.626, abs=0.001)
-    assert round(r.composite_score * 100) == 63
+    assert r.policy_score == pytest.approx(0.626, abs=0.001)
+    assert r.composite_score == pytest.approx(0.616, abs=0.001)
+    assert round(r.composite_score * 100) == 62
 
 
 def test_dependency_chain_variant(scenario):
@@ -112,9 +112,9 @@ def test_same_play_scores_differently_per_policy(scenario):
     assert got["damage_minimization"].constraint_violations == 0
     assert got["evidence_preservation"].constraint_violations == 0
 
-    assert round(got["business_continuity"].composite_score * 100) == 63
-    assert round(got["damage_minimization"].composite_score * 100) == 67
-    assert round(got["evidence_preservation"].composite_score * 100) == 69
+    assert round(got["business_continuity"].composite_score * 100) == 62
+    assert round(got["damage_minimization"].composite_score * 100) == 66
+    assert round(got["evidence_preservation"].composite_score * 100) == 65
 
     # 事実認識層は方針に依存しない
     facts = {r.fact_score for r in got.values()}
@@ -723,3 +723,157 @@ def test_stopping_something_already_stopped_is_not_a_blank(scenario):
     assert second.already == ["fs01"]
     assert second.halted == ["fs01"]     # だが今度は業務が止まる
     assert not second.empty
+
+
+def test_evidence_band_covers_only_what_can_be_lost(scenario):
+    """証拠保全の正規化の帯は、盤面で失いうる範囲と一致していること。
+
+    帯が [0,1] だった頃、失いうる証拠は 3/19 しかなかったので、
+    どのプレイも 0.842〜1.000 の中に居た。帯の 84% は誰も踏まない。
+    その結果「証拠保全最優先」を選んで証拠を3つ落としても
+    合成点は2点しか動かず、方針が名前にしている量が採点に現れなかった。
+
+    壊れ方: destroys を1つ足して worst を直し忘れると、
+    その分だけ帯が余り、証拠保全の重みが静かに薄まる。
+    """
+    losable = {e for a in scenario.actions for e in a.destroys}
+    losable |= {e for t in scenario.timeline for e in t.destroys}
+    floor = 1.0 - len(losable) / len(scenario.evidence)
+    bounds = scenario.scoring.consequence_layer.normalization["evidence_preserved"]
+    assert bounds.best == 1.0
+    assert bounds.worst == pytest.approx(floor, abs=0.01)
+
+
+def test_losing_everything_losable_reaches_the_bottom_of_the_band(scenario):
+    """失いうるものを全部失ったプレイは、帯の底（0）に着く。
+
+    上のテストが帯の端を見るのに対し、こちらは採点が実際に
+    その端まで動くことを見る。0.9 台で止まるなら帯が広すぎる。
+    """
+    st = play_spec_68(scenario).state
+    st.lost_evidence = sorted(
+        {e for a in scenario.actions for e in a.destroys}
+        | {e for t in scenario.timeline for e in t.destroys}
+    )
+    r = scoring.score(st, scenario)
+    assert r.consequence_goodness["evidence_preserved"] == pytest.approx(0.0, abs=0.02)
+
+    st.lost_evidence = []
+    r = scoring.score(st, scenario)
+    assert r.consequence_goodness["evidence_preserved"] == pytest.approx(1.0, abs=0.001)
+
+
+def _play_until(scenario, minutes, skip):
+    """指定の分を越えるまで、調査を安い順に押す。"""
+    e = Engine(scenario, "damage_minimization", None)
+    acts = sorted(
+        (a for a in scenario.actions
+         if a.type == ActionType.INVESTIGATE and a.id not in skip),
+        key=lambda a: a.cost_minutes,
+    )
+    for a in acts:
+        if e.state.elapsed_minutes >= minutes:
+            break
+        try:
+            e.decide(Decision(kind="action", action_id=a.id))
+        except InvalidDecision:
+            continue
+    return e
+
+
+def test_a_wasted_move_is_tied_to_what_it_was_looking_for(scenario):
+    """空振りした手と、取り損ねた証拠を、講評で結ぶ。
+
+    学習者の記憶に残っているのは「30分払って何も出てこなかった手」であって、
+    「1時間25分前に世界に奪われていた」ではない。この2つを結ばないと、
+    講評は本人が体験した出来事を一度も説明しないまま終わる。
+
+    壊れ方: 破壊より**前**に押した手を結んでしまうと、
+    間に合った手を「遅かった」と責めることになる。
+    """
+    from irdojo.report import json as report_json
+
+    e = _play_until(scenario, 240, skip={"act_backup_integrity"})
+    gone_at = e.state.destroyed_at.get("ev_018")
+    assert gone_at is not None, "ev_018 が世界に奪われる前に打ち切っている"
+    pressed_at = e.state.elapsed_minutes
+    e.decide(Decision(kind="action", action_id="act_backup_integrity"))
+    e.decide(Decision(kind="declare_assessment", assessment=["fs01"]))
+    e.decide(Decision(kind="finish"))
+
+    rep = report_json.build(e.state, scenario, persist=False)
+    lost = {l.id: l for l in rep.lost_evidence}
+    assert "ev_018" in lost
+    gather = [t for t in lost["ev_018"].too_late if t.kind == "gather"]
+    assert len(gather) == 1
+    assert gather[0].action_label == "バックアップの健全性を確認"
+    assert gather[0].at_minute == pressed_at
+    assert gather[0].late_by_minutes == pressed_at - gone_at
+    assert gather[0].cost_minutes == 30
+
+
+def test_a_move_made_in_time_is_not_called_late(scenario):
+    """間に合った手は結ばない。取れた証拠はそもそも失われていない。"""
+    from irdojo.report import json as report_json
+
+    e = Engine(scenario, "damage_minimization", None)
+    e.decide(Decision(kind="action", action_id="act_backup_integrity"))
+    e.decide(Decision(kind="declare_assessment", assessment=["fs01"]))
+    e.decide(Decision(kind="finish"))
+    rep = report_json.build(e.state, scenario, persist=False)
+    assert all(l.id != "ev_018" for l in rep.lost_evidence)
+
+
+def test_the_notice_that_arrived_too_late_says_so(scenario):
+    """遅れて出した周知が、なぜ効かなかったのかを講評で言う。
+
+    プレイ中は「何も出てこなかった」としか出せない（原則5: 損失を
+    プレイ中に告げない）。効かなかった理由を言える場所はここしかない。
+    """
+    from irdojo.report import json as report_json
+
+    e = _play_until(scenario, 240, skip={"act_backup_integrity"})
+    e.decide(Decision(kind="action", action_id="act_preservation_notice"))
+    e.decide(Decision(kind="declare_assessment", assessment=["fs01"]))
+    e.decide(Decision(kind="finish"))
+
+    rep = report_json.build(e.state, scenario, persist=False)
+    lost = {l.id: l for l in rep.lost_evidence}
+    notices = [t for t in lost["ev_018"].too_late if t.kind == "notice"]
+    assert len(notices) == 1
+    assert notices[0].action_label == "全社に証拠保全の周知を出す"
+    assert notices[0].late_by_minutes > 0
+
+
+def test_the_policy_breakdown_adds_up_to_the_policy_score(scenario):
+    """④ に出す内訳は、実際の採点式そのものであること。
+
+    「方針違反はありませんでした」と「方針適合 39点」が同居していたとき、
+    61点がどこへ消えたかは講評のどこにも書かれていなかった。
+    説明のために別の式を書くと、説明と採点がいずれ食い違う。
+    """
+    from irdojo.report import json as report_json
+
+    st = play_spec_68(scenario).state
+    rep = report_json.build(st, scenario, persist=False)
+    total = sum(t.contribution for t in rep.policy_terms)
+    penalty = 1.0 - rep.score.constraint_penalty * rep.score.constraint_violations
+    assert total * penalty == pytest.approx(rep.score.policy_score, abs=0.001)
+    # 重みは方針のものがそのまま出ていること（別の重みで説明していない）
+    weights = {t.key: t.weight for t in rep.policy_terms}
+    assert weights == scenario.policy_by_id[rep.score.policy_id].weights
+
+
+def test_chart_markers_are_numbered_in_time_order(scenario):
+    """図と凡例は番号で結ぶ。番号が重複したら対応が取れなくなる。
+
+    同時刻に2本立つことがある（依存の根と端末を同じ分に止めた場合）。
+    位置の近さで対応を推測させると、その時点で読めなくなる。
+    """
+    from irdojo.report import json as report_json
+
+    rep = report_json.build(play_spec_68(scenario).state, scenario, persist=False)
+    idx = [m.index for m in rep.markers]
+    assert idx == list(range(1, len(rep.markers) + 1))
+    minutes = [m.minute for m in rep.markers]
+    assert minutes == sorted(minutes)

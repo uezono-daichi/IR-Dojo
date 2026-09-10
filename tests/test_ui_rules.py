@@ -171,12 +171,36 @@ def test_elapsed_time_is_marked_everywhere(app_js):
     「あなたの経過時間: 610分」を見て初めて8時間50分だと分かった、が報告されている。
 
     印は1箇所で付ける。付け忘れた場所ができた時点で、印の意味が消えるため。
+
+    **時刻と長さは別の整形関数に分ける。** 「+04:25 に押した」は時刻、
+    「1時間35分遅く」は長さで、後者に「+」を付けると時刻に見える。
+    分ける代わりに、時分へ直す場所はこの2つの外に作らせない。
     """
     body = strip_comments(app_js)
-    assert body.count("Math.floor(minutes / 60)") == 1, "時分に直す場所が2つある"
+    formatters = ("function elapsed(", "function duration(")
+    for name in formatters:
+        assert name in body, f"{name} が無い"
+
+    # 時分に直しているのは、この2つの整形関数の中だけであること
+    starts = {body.index(n): n for n in formatters}
+    at = -1
+    found = []
+    while True:
+        at = body.find("Math.floor(minutes / 60)", at + 1)
+        if at < 0:
+            break
+        owner = max((i for i in starts if i < at), default=None)
+        assert owner is not None, "整形関数の外で時分に直している"
+        found.append(starts[owner])
+    assert sorted(found) == sorted(formatters), f"時分に直す場所が余分にある: {found}"
+
     fn = body[body.index("function elapsed(") :]
     fn = fn[: fn.index("\n}")]
     assert "'+'" in fn, "経過時間に印が付いていない"
+    # 長さの側に印を付けない（付けると時刻と見分けが付かなくなる）
+    dur = body[body.index("function duration(") :]
+    dur = dur[: dur.index("\n}")]
+    assert "'+'" not in dur, "長さに経過時間の印が付いている"
     # 呼ぶ側が印を剥がしていないこと
     assert "elapsed(" in body and "hhmm(" not in body
 

@@ -282,10 +282,36 @@ class DamageModel(Strict):
 
 
 class MetricSpec(Strict):
+    """事実認識層の指標1本。
+
+    `label` はその指標の名前（生値が何を測っているか）。
+    `label_good` は**良い側から見た名前**で、講評はこちらを使う。
+
+    講評は生値ではなく「良さ」（向きを揃えた 0〜100）を出す。
+    「永続化の見落とし」という名前の列に 100 が並ぶと、
+    読み手には「全部見落とした」としか読めない。向きを揃えるなら
+    名前も揃える必要がある — 数字だけ裏返して名前を据え置くと、
+    かえって読めなくなる。
+    """
+
     id: str
     label: str
+    label_good: str = ""
     direction: Literal["lower_is_better", "higher_is_better"]
     weight_multiplier: float = 1.0
+
+    @model_validator(mode="after")
+    def good_label_required_when_reversed(self) -> "MetricSpec":
+        if self.direction == "lower_is_better" and not self.label_good.strip():
+            raise ValueError(
+                f"{self.id}: direction が lower_is_better の指標には "
+                f"label_good（良い側から見た名前）が必要です"
+            )
+        return self
+
+    @property
+    def display_label(self) -> str:
+        return self.label_good.strip() or self.label
 
 
 class FactLayer(Strict):

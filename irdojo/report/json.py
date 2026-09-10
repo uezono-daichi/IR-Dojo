@@ -20,6 +20,19 @@ from ..schema import Scenario
 # ⑥ に出す履歴の件数。全件は records_total で数だけ伝える
 RECENT_RECORDS = 20
 
+# 帰結指標の呼び名。**エンジンの概念なのでアプリ側が持つ**（シナリオが
+# 名前を付けられるようにすると、方針の重みが指しているものが
+# シナリオごとに別名になり、方針を跨いだ比較が読めなくなる）
+CONSEQUENCE_LABELS = {
+    "elapsed_minutes": "経過時間",
+    "total_damage": "被害額（累積＋復旧までの見込み）",
+    "accumulated_damage": "累積被害",
+    "projected_damage": "復旧までの見込み",
+    "business_impact": "業務影響",
+    "evidence_preserved": "証拠の保全",
+    "containment_completeness": "封じ込めの完全度",
+}
+
 
 class ViolationDetail(BaseModel):
     constraint_type: str
@@ -40,6 +53,21 @@ class TruthReveal(BaseModel):
     misleading_evidence: list[str]  # 事後に色分けするため
 
 
+class TooLate(BaseModel):
+    """失われた後で押した、それを取りに行く手。
+
+    学習者の記憶に残っているのは「30分払って何も出てこなかった手」であって、
+    「1時間25分前に世界に奪われていた」ではない。この2つを結ばないと、
+    講評は本人が体験した出来事を一度も説明しないまま終わる（SPEC 7.6.13）。
+    """
+
+    kind: str               # gather（取りに行く手）| notice（起きなくする手）
+    action_label: str
+    at_minute: int          # その手を押した時刻
+    cost_minutes: int       # そこで払った時間
+    late_by_minutes: int    # 失われてから押すまで
+
+
 class LostEvidence(BaseModel):
     """取得する前に失われた証拠。講評で初めて開示する。"""
 
@@ -49,6 +77,10 @@ class LostEvidence(BaseModel):
     at_minute: int         # 失われた時刻（分）
     by_world: bool         # 自分の手ではなく、世界の側に奪われたか
     obtainable_by: list[str]   # 先に実行していれば取れたアクション
+    # 遅れて押した手。取りに行く手と、起きなくする手の両方を拾う。
+    # 「押したのに何も起きなかった」の理由は、プレイ中には言えない
+    # （原則5）ので、ここが唯一の説明の場になる
+    too_late: list[TooLate] = []
 
 
 class Marker(BaseModel):
@@ -56,6 +88,24 @@ class Marker(BaseModel):
     label: str
     short: str = ""        # グラフ上に描く短い名前
     kind: str = "act"      # act（学習者がしたこと）| world（世界の側で起きたこと）
+    # 図と凡例を結ぶ通し番号。色を6色に増やす代わりに番号で結ぶ。
+    # 同じ分に2本立つことがあり（dc01 と ws-113 が同時刻）、
+    # 位置の近さで対応を推測させると必ず読めなくなる（SPEC 7.6.9）
+    index: int = 0
+
+
+class PolicyTerm(BaseModel):
+    """方針適合の内訳1行。「違反なしなのに 39点」の理由はここにしか無い。"""
+
+    key: str
+    label: str
+    weight: float
+    goodness: float        # 0〜1。正規化の帯で測った良さ
+    display: str           # 実測値を読める形にしたもの
+    # 正規化の帯を言葉にしたもの。これが無いと「30,207 → 0」が
+    # 故障にしか見えない（帯の外に出たことが分からない）
+    band: str
+    contribution: float    # weight × goodness
 
 
 class RecordRow(BaseModel):
@@ -92,6 +142,78 @@ class RecordGroup(BaseModel):
     stale: bool                # シナリオが更新される前の記録を含むか
 
 
+def _display(key: str, value: float, state: GameState) -> str:
+    """実測値を、単位の分かる形にする。
+
+    0.947 と 30,207 を同じ体裁で並べない。割合は割合として、
+    金額は金額として出す。
+
+    証拠の保全だけは割合で出さない。19件中 18件で「95%」と書くと、
+    正規化の帯（失いうるのは3件だけ）と桁が合わず、
+    「95% なのに 67点」という読めない並びになる。件数で言う。
+    """
+    if key == "evidence_preserved":
+        n = len(state.lost_evidence)
+        return "取り損ねなし" if n == 0 else f"{n}件を取り損ねた"
+    if key == "containment_completeness":
+        return f"{value * 100:.0f}%"
+    if key == "elapsed_minutes":
+        return f"{int(value)}分"
+    return f"{value:,.0f}"
+
+
+def _band(key: str, bounds, scenario: Scenario) -> str:
+    """正規化の帯を、そのまま日本語にする。
+
+    「良さ」は帯で測った値なので、帯を伏せると数字が読めない。
+    30,207 が 0 になるのは帯の外（worst 20,000）に出たからであって、
+    採点が壊れているからではない。
+    """
+    if key == "evidence_preserved":
+        total = len(scenario.evidence)
+        worst_lost = round((1.0 - bounds.worst) * total)
+        return f"取り損ねなし で 100点、{worst_lost}件 で 0点"
+    if key == "containment_completeness":
+        return (
+            f"{bounds.best * 100:.0f}% で 100点、{bounds.worst * 100:.0f}% で 0点"
+        )
+    return f"{bounds.best:,.0f} で 100点、{bounds.worst:,.0f} で 0点"
+
+
+def policy_terms(
+    report_score: scoring_mod.ScoreReport,
+    state: GameState,
+    scenario: Scenario,
+) -> list[PolicyTerm]:
+    """方針適合の内訳。重みの大きい順に並べる。
+
+    「方針違反はありませんでした」と「方針適合 39点」が同居していたとき、
+    61点がどこへ消えたのかは講評のどこにも書かれていなかった。
+    方針適合は **帰結の加重和 ×（1 - 0.15×違反数）** であって、
+    違反ゼロでも加重和が低ければ低い。何がどれだけ効いたかを出す。
+    """
+    cons = report_score.consequences
+    norm = scenario.scoring.consequence_layer.normalization
+    out: list[PolicyTerm] = []
+    for key, weight in report_score.policy_weights.items():
+        good = report_score.consequence_goodness.get(key, 0.0)
+        raw = getattr(cons, key, None)
+        bounds = norm.get(key)
+        out.append(
+            PolicyTerm(
+                key=key,
+                label=CONSEQUENCE_LABELS.get(key, key),
+                weight=weight,
+                goodness=good,
+                display=_display(key, raw, state) if raw is not None else "",
+                band=_band(key, bounds, scenario) if bounds is not None else "",
+                contribution=weight * good,
+            )
+        )
+    out.sort(key=lambda t: -t.weight)
+    return out
+
+
 class Report(BaseModel):
     scenario_id: str
     scenario_title: str
@@ -112,6 +234,8 @@ class Report(BaseModel):
     recovery_horizon_minutes: int
     markers: list[Marker]
     lost_evidence: list[LostEvidence]
+    # 方針適合の内訳。合計が加重和で、そこに違反の減衰が掛かる
+    policy_terms: list[PolicyTerm]
     # 全方針。⑥ が「まだ試していない条件」を名指しするのに要る。
     # replay_suggestions は著者が推す組だけなので、これの代わりにはならない
     policies: list[dict[str, str]]
@@ -162,7 +286,9 @@ def build(
     markers: list[Marker] = []
     snap = state.assessment_snapshot
     if snap is not None:
-        markers.append(Marker(minute=snap.at_minute, label="判定", short="判定"))
+        markers.append(
+            Marker(minute=snap.at_minute, label="被疑判定を宣言", short="判定")
+        )
 
     # 折れ点。プレイ中は最後まで黙っている（曲線が跳ねたようにしか見えないのが正しい）。
     # 講評は答えを開ける場所なので、ここで初めて位置を名指しする。
@@ -185,6 +311,13 @@ def build(
                 short=asset_id,
             )
         )
+
+    # 時刻順に並べて通し番号を振る。図に描くのは番号だけで、名前は凡例に置く。
+    # 名前を図に直接置いていた頃は、同時刻の2本の上に6個のラベルが
+    # 3段に折り重なり、どの線がどれかを x 座標の近さで推測するしかなかった
+    markers.sort(key=lambda m: m.minute)
+    for i, mk in enumerate(markers, start=1):
+        mk.index = i
 
     # 復旧地平の延長線（SPEC 5.8）。累積のまま先へ伸ばす。
     # 「あなたが手を止めた時点で、この先はこう伸びる」は講評でしか言えない。
@@ -213,19 +346,78 @@ def build(
             destroyer.setdefault(eid, act)
     by_tl = {e.id: e for e in scenario.timeline}
 
+    def _pick(cands: list, kind: str, gone_at: int) -> TooLate | None:
+        """種類ごとに、最も早い1手だけを返す。
+
+        同じ話を何度も言うと、どれが自分の手だったか分からなくなる。
+        """
+        if not cands:
+            return None
+        a = min(cands, key=lambda x: state.executed_at[x.id])
+        at = state.executed_at[a.id]
+        return TooLate(
+            kind=kind,
+            action_label=a.label,
+            at_minute=at,
+            cost_minutes=a.cost_minutes,
+            late_by_minutes=at - gone_at,
+        )
+
+    def _too_late(eid: str, gone_at: int, world_id: str | None) -> list[TooLate]:
+        """失われた**後**に押した手を拾う。
+
+        本人の記憶にあるのは「時間を払って何も起きなかった手」の方である。
+        取り損ねた証拠の側からしか書かないと、講評はその体験に
+        一度も触れないまま終わる。
+
+        2種類ある。**取りに行く手**（押しても証拠が出てこない）と、
+        **起きなくする手**（周知。押しても世界が止まらない）。
+        後者はプレイ中「何も出てこなかった」としか出ないので、
+        なぜ効かなかったのかを言える場所はここしかない。
+        """
+        out: list[TooLate] = []
+        gather = _pick(
+            [
+                a
+                for a in scenario.actions
+                if eid in a.yields and a.id in state.executed_at
+                and state.executed_at[a.id] >= gone_at
+            ],
+            "gather",
+            gone_at,
+        )
+        if gather is not None:
+            out.append(gather)
+        if world_id is not None:
+            notice = _pick(
+                [
+                    a
+                    for a in scenario.actions
+                    if world_id in a.prevents and a.id in state.executed_at
+                    and state.executed_at[a.id] >= gone_at
+                ],
+                "notice",
+                gone_at,
+            )
+            if notice is not None:
+                out.append(notice)
+        return out
+
     def _lost(eid: str) -> LostEvidence:
         world_id = state.destroyed_by_world.get(eid)
         if world_id is not None:
             label = by_tl[world_id].label if world_id in by_tl else ""
         else:
             label = destroyer[eid].label if eid in destroyer else ""
+        gone_at = state.destroyed_at.get(eid, 0)
         return LostEvidence(
             id=eid,
             summary=by_ev[eid].summary,
             destroyed_by=label,
-            at_minute=state.destroyed_at.get(eid, 0),
+            at_minute=gone_at,
             by_world=world_id is not None,
             obtainable_by=[a.label for a in scenario.actions if eid in a.yields],
+            too_late=_too_late(eid, gone_at, world_id),
         )
 
     lost = [_lost(eid) for eid in state.lost_evidence if eid in by_ev]
@@ -261,7 +453,10 @@ def build(
         scenario_version=scenario.meta.version,
         assist_level=state.assist_level.value,
         score=report_score,
-        metric_labels={m.id: m.label for m in scenario.scoring.fact_layer.metrics},
+        # 講評が出すのは「良さ」なので、名前も良い側のものを渡す（SPEC 6.2）
+        metric_labels={
+            m.id: m.display_label for m in scenario.scoring.fact_layer.metrics
+        },
         violations=violations,
         retrospective=retro,
         truth=truth,
@@ -279,6 +474,7 @@ def build(
         recovery_horizon_minutes=horizon,
         markers=markers,
         lost_evidence=lost,
+        policy_terms=policy_terms(report_score, state, scenario),
         policies=[{"id": p.id, "label": p.label} for p in scenario.policies],
         record_groups=groups,
         records=rows,

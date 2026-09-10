@@ -623,3 +623,29 @@ def test_neither_way_of_stopping_fs01_wins_under_every_policy(scenario):
     assert winners == {"blocked", "powered_off"}, (
         f"どの方針でも同じ手が勝っている: {winners}"
     )
+
+
+def test_loader_rejects_a_reversed_metric_without_a_good_side_name(raw):
+    """悪さを測る指標には、良い側から見た名前を必ず付けさせる。
+
+    講評は生値ではなく「良さ」を出す（向きが混ざった小数を6つ並べても
+    読めないため）。名前だけ悪い側のままにすると「永続化の見落とし 100」
+    という列ができ、裏返す前より読めなくなる。
+    """
+    data = copy.deepcopy(raw)
+    for m in data["scoring"]["fact_layer"]["metrics"]:
+        if m["id"] == "misled_score":
+            m.pop("label_good")
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "label_good" in str(exc.value)
+
+
+def test_the_good_side_name_is_what_the_debrief_shows(scenario):
+    """講評に渡る名前は、良い側から見た名前であること。"""
+    labels = {
+        m.id: m.display_label for m in scenario.scoring.fact_layer.metrics
+    }
+    assert labels["persistence_missed"] == "永続化の把握"
+    # 向きが元から良い側の指標は、そのままの名前で通る
+    assert labels["assessment_recall"] == "被疑判定の再現率"

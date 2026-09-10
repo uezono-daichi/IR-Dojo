@@ -214,6 +214,35 @@ canvas { display: block; width: 100%; }   /* 高さは height 属性で決める
 .metrics .m { display: flex; gap: 10px; border-bottom: 1px solid var(--line); padding: 5px 0; }
 .metrics .m .v { margin-left: auto; font-family: var(--mono); }
 
+/* 合成の帯。幅が重み、塗った長さがその層の取り分。合計が総合点になる */
+.composite { display: flex; gap: 4px; margin: 20px 0 6px; max-width: 620px; }
+.composite .cseg { min-width: 0; }
+.composite .ctrack {
+  height: 12px; background: var(--panel-2); border-radius: 3px; overflow: hidden;
+}
+.composite .cfill { height: 100%; background: var(--accent); }
+.composite .clab {
+  display: flex; align-items: baseline; gap: 6px; margin-top: 6px;
+  font-size: 12px; white-space: nowrap;
+}
+.composite .clab .n { font-family: var(--mono); font-size: 15px; color: var(--fg); }
+.composite .clab .k { color: var(--fg-dim); }
+.composite .clab .w { color: var(--fg-faint); font-family: var(--mono); }
+
+/* 指標の表。向きを揃えた「良さ」と、何を何で割ったかの分数を並べる */
+table.mtable { margin: 12px 0 6px; max-width: 720px; }
+table.mtable td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--line); vertical-align: baseline; }
+table.mtable td.k { color: var(--fg); width: 34%; }
+table.mtable td.frac { color: var(--fg-dim); font-size: 12px; font-family: var(--mono); }
+table.mtable td.frac .band { color: var(--fg-faint); }
+table.mtable td.num { text-align: right; font-family: var(--mono); width: 56px; }
+table.mtable td.num.strong { color: var(--fg); }
+table.mtable td.w { text-align: right; font-family: var(--mono); color: var(--fg-faint); width: 56px; }
+table.mtable tr.sumrow td { border-bottom: 0; border-top: 1px solid var(--line); color: var(--fg-dim); }
+
+.block h3 { margin: 22px 0 4px; font-size: 13px; color: var(--fg-dim); letter-spacing: .04em; }
+.note-warn p.late { color: var(--warn); }
+
 .item { margin-bottom: 18px; }
 .item .h { display: flex; gap: 9px; align-items: baseline; }
 .item .h .mark { color: var(--warn); }
@@ -246,6 +275,18 @@ ul.lessons li { margin-bottom: 8px; }
 }
 .legend > span { white-space: nowrap; }
 .legend .sw { display: inline-block; width: 22px; height: 3px; vertical-align: middle; margin-right: 6px; }
+.legend .sw.dashed {
+  background: repeating-linear-gradient(
+    to right, var(--bad) 0 4px, transparent 4px 7px);
+}
+/* 図と凡例は番号で結ぶ。色を6色に増やす代わりに、番号を照合させる */
+.legend .sw-num {
+  display: inline-block; width: 15px; height: 15px; line-height: 13px;
+  border: 1px solid; border-radius: 50%; text-align: center;
+  font-family: var(--mono); font-size: 10px; margin-right: 6px;
+  vertical-align: middle;
+}
+.legend.legend-num { gap: 6px 22px; font-size: 12px; }
 
 .act-group-head {
   display: flex; width: 100%; gap: 8px; align-items: baseline;

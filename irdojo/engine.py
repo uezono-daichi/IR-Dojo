@@ -48,6 +48,10 @@ class GameState(BaseModel):
     current_phase: str
     elapsed_minutes: int = 0
     executed_actions: list[str] = []
+    # アクションID → 押した時刻（分。実行開始の時点）。繰り返せる手は最初の1回。
+    # 講評で「その手は何分遅かったのか」を言うために要る（SPEC 7.6.13）。
+    # 学習者自身の履歴なので、これ自体は何も漏らさない
+    executed_at: dict[str, int] = {}
     obtained_evidence: list[str] = []
     obtained_at: dict[str, int] = {}  # 証拠ID → 取得した時刻（分）
     destroyed_evidence: list[str] = []
@@ -504,6 +508,7 @@ class Engine:
 
         # 実行済みに追加（制約の require_before は実行前の履歴で見るため最後）
         st.executed_actions.append(action.id)
+        st.executed_at.setdefault(action.id, start)
 
         # post 判定の制約（max_business_impact）
         post_ctx = ConstraintContext(

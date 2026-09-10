@@ -1443,15 +1443,20 @@ scoring:
       - id: assessment_recall
         label: "被疑判定の再現率"
         direction: higher_is_better
+      # 生値は「悪さ」だが、講評が出すのは向きを揃えた「良さ」なので、
+      # 良い側から見た名前（label_good）を必ず添える
       - id: persistence_missed
         label: "永続化の見落とし"
+        label_good: "永続化の把握"
         direction: lower_is_better
         weight_multiplier: 2.0
       - id: misled_score
         label: "誤導追従度"
+        label_good: "誤導への耐性"
         direction: lower_is_better
       - id: unresolved_questions
         label: "未解消論点を抱えたままの判断"
+        label_good: "論点を解消してからの判断"
         direction: lower_is_better
     weights:
       assessment_precision:  0.25
@@ -1474,7 +1479,7 @@ scoring:
     normalization:
       total_damage:             { worst: 20000, best: 0 }
       business_impact:          { worst: 1200,  best: 0 }
-      evidence_preserved:       { worst: 0.0,  best: 1.0 }
+      evidence_preserved:       { worst: 0.842, best: 1.0 }
       containment_completeness: { worst: 0.0,  best: 1.0 }
 
   composite:

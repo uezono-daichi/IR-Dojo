@@ -278,6 +278,27 @@ if (!(await page.$('#screen-debrief.active'))) {
     await shot('09b-debrief-damage');
   }
 
+  // ②③④ は上端にも下端にも入らない。**講評の中身はここにある** —
+  // 論点の重み付け、取り損ねた証拠、方針適合の内訳。撮らないと誰も見ない
+  for (const [name, needle] of [
+    ['09c-debrief-questions', '判定時点の論点'],
+    ['09d-debrief-lost', '取り損ねた証拠'],
+    ['09e-debrief-policy', '方針への適合'],
+  ]) {
+    const found = await page.evaluate((text) => {
+      for (const h of document.querySelectorAll('#debrief-body h2')) {
+        if (h.textContent.includes(text)) {
+          h.scrollIntoView({ block: 'start' });
+          return true;
+        }
+      }
+      return false;
+    }, needle);
+    if (!found) { note('warn', 'debrief', `${needle} の節が無い`); continue; }
+    await page.waitForTimeout(180);
+    await shot(name);
+  }
+
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   await page.waitForTimeout(200);
   await screen('10-debrief-bottom');
