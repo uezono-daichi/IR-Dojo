@@ -459,3 +459,57 @@ def test_the_cheapest_cover_reaches_for_eradication_when_asked(balance):
     # 根絶まで行くほうが高い。安いほうが選ばれていないことの裏取り
     assert (sum(by_id[a].cost_minutes for a in purging)
             > sum(by_id[a].cost_minutes for a in plain))
+
+
+@pytest.mark.parametrize("scenario_id", sorted(
+    p.stem for p in (ROOT / "scenarios").glob("*.yaml")
+))
+def test_every_bundled_scenario_passes_the_design_checks(balance, scenario_id):
+    """同梱シナリオはどれも SPEC 8.3 の判定を全部通る。
+
+    **均衡は書いて決めるものではなく、走らせて決めるものである。**
+    1本目は7周かけて 25/25 になった。2本目を足したとき、
+    その 25本を誰かが手で走らせる決まりにしておくと、いつか走らせない。
+
+    落ちた項目をここで無視できないようにしておくと、
+    「シナリオを1本足す」が「盤面の均衡を1つ設計する」と同じ意味になる。
+    """
+    sc = load_scenario(scenario_id)
+    data = balance.report(sc)
+    bad = [c["name"] + ": " + c["detail"] for c in data["checks"] if not c["ok"]]
+    assert not bad, f"{scenario_id} で落ちた判定:\n" + "\n".join(bad)
+    # 判定の本数そのものが減っていないこと（盤面に無い要素は検査も出ない）
+    assert len(data["checks"]) >= 20, f"{scenario_id}: 判定が {len(data['checks'])} 本しか出ていない"
+
+
+def test_the_two_scenarios_are_not_the_same_shape():
+    """2本目は、1本目の写しではないこと。
+
+    幅を足すというのは、同じ盤面の色を塗り替えることではない。
+    ここで見るのは「別の形か」だけで、良し悪しではない。
+
+    - 誤導の棄却が別の型であること（時刻の近さ ／ 利用実績の比較）は
+      機械では見えないので、見えるところだけを見張る
+    - `destroys` を持つ出来事の割合（世界が奪う量）は、
+      「自分の手で消す」型と「待っていると消える」型を分ける
+    """
+    a = load_scenario("ransomware-initial-response-01")
+    b = load_scenario("oauth-consent-abuse-01")
+
+    # 資産の種類が違う（端末とサーバ ／ テナントとアカウントと連携アプリ）
+    assert not ({x.id for x in a.world.assets} & {x.id for x in b.world.assets})
+
+    # 世界が奪う量。1本目は自分の手で消す型、2本目は待っていると消える型
+    def world_takes(sc):
+        return sum(len(e.destroys) for e in sc.timeline)
+
+    def own_hand_pairs(sc):
+        # 調査の排他の「組」の数。1件で2つ消す手と、2手で1つずつ消す盤面は
+        # 学習者にとって別物なので、消えた証拠の数ではなく手の数で数える
+        return sum(1 for x in sc.actions
+                   if x.type.value == "investigate" and x.destroys)
+
+    assert world_takes(b) > world_takes(a), "2本目のほうが時計に奪われること"
+    assert own_hand_pairs(a) > own_hand_pairs(b), "1本目のほうが自分の手で消すこと"
+    # どちらの型にも、最低1組は反対側がある（片方だけの盤面にしない）
+    assert own_hand_pairs(b) >= 1 and world_takes(a) >= 1

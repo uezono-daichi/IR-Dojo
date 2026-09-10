@@ -22,6 +22,7 @@ const DPR = Number(args.dpr || 2);
 const OUT = args.out || '.playtest';
 const BASE = args.base || 'http://127.0.0.1:8000';
 const PROFILE = args.profile || 'wanderer';
+const SCENARIO = args.scenario || '(一覧の先頭)';
 
 mkdirSync(OUT, { recursive: true });
 
@@ -164,6 +165,18 @@ await screen('01-top');
 
 await page.click('#btn-to-select');
 await page.waitForSelector('#scenario-list .card:not(.card-error)');
+// どのシナリオを遊ぶか。指定が無ければ一覧の先頭（既定の選択）
+if (args.scenario) {
+  const sel = `#scenario-list [data-scenario="${args.scenario}"]`;
+  if (!(await page.$(sel))) {
+    note('error', 'select', `シナリオ ${args.scenario} のカードが無い`);
+  } else {
+    await page.click(sel);
+    await page.waitForTimeout(120);
+    const on = await page.$eval(sel, e => e.classList.contains('card-on'));
+    if (!on) note('error', 'select', `カードを押しても選択が切り替わらない（${args.scenario}）`);
+  }
+}
 await screen('02-select');
 
 await page.click('#btn-start');
@@ -323,14 +336,14 @@ if (!(await page.$('#screen-debrief.active'))) {
 }
 
 const summary = {
-  dpr: DPR, profile: PROFILE, base: BASE,
+  dpr: DPR, profile: PROFILE, scenario: SCENARIO, base: BASE,
   moves: log.length, log, shots,
   findings,
   passed: !findings.some(f => f.severity === 'error'),
 };
 writeFileSync(join(OUT, `playtest.dpr${DPR}.json`), JSON.stringify(summary, null, 2));
 
-console.log(`■ プレイ ${log.length} 手 / dpr ${DPR}`);
+console.log(`■ プレイ ${log.length} 手 / dpr ${DPR} / シナリオ ${SCENARIO}`);
 for (const e of log) {
   if (e.incoming.length) console.log(`  ${e.at}  ★ ${e.incoming.join(' / ')}`);
 }

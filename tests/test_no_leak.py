@@ -227,7 +227,7 @@ def test_reading_and_description_follow_assist_level(client):
         assert has_reading is want_reading, level
 
 
-def test_reading_never_states_the_conclusion(client):
+def test_reading_never_states_the_conclusion(client, any_scenario):
     """読み方に結論を書かない。書くと推論を代行してしまう（SPEC 3.10）。
 
     語彙表は `irdojo.schema.CONCLUSION_WORDS` に一本化してローダへ昇格した。
@@ -237,7 +237,7 @@ def test_reading_never_states_the_conclusion(client):
     """
     from irdojo.schema import CONCLUSION_WORDS
 
-    sc = load_scenario("ransomware-initial-response-01")
+    sc = any_scenario
     for word in ("侵害されている", "侵害された端末", "攻撃者の常套", "疑うべき",
                  "無関係である", "だからこの", "正常である"):
         assert word in CONCLUSION_WORDS, f"表から {word} が落ちている"
@@ -249,9 +249,9 @@ def test_reading_never_states_the_conclusion(client):
             assert word not in a.description, f"{a.id}: description が結論を述べている"
 
 
-def test_misleading_readings_are_not_thinner(client):
+def test_misleading_readings_are_not_thinner(client, any_scenario):
     """誤導の注釈だけ薄いと、厚みがそのまま誤導の目印になる（SPEC 3.10）。"""
-    sc = load_scenario("ransomware-initial-response-01")
+    sc = any_scenario
     mis = [len(e.reading) for e in sc.evidence if e.misleading]
     real = [len(e.reading) for e in sc.evidence if not e.misleading]
     assert all(mis) and all(real)
@@ -265,7 +265,7 @@ SCOPE_MARKERS = ("非対象", "収集範囲", "検査範囲", "取得範囲",
                  "集計対象", "照会対象", "検証範囲", "スキャン範囲")
 
 
-def test_scope_lines_are_not_a_marker_for_negative_findings(client):
+def test_scope_lines_are_not_a_marker_for_negative_findings(client, any_scenario):
     """検査範囲の欄が、ネガティブ所見の目印になっていないこと。
 
     0件を返す証拠に「どこを見て、どこを見ていないか」を書かせる規則
@@ -274,7 +274,7 @@ def test_scope_lines_are_not_a_marker_for_negative_findings(client):
     misleading に印を付けるのと変わらない。
     どちらの側にも同じくらい付いていることを機械に見張らせる。
     """
-    sc = load_scenario("ransomware-initial-response-01")
+    sc = any_scenario
     neg = [e for e in sc.evidence if not e.points_to]
     pos = [e for e in sc.evidence if e.points_to]
     assert neg and pos
@@ -292,13 +292,13 @@ def test_scope_lines_are_not_a_marker_for_negative_findings(client):
     )
 
 
-def test_negative_findings_are_not_thinner_than_the_rest(client):
+def test_negative_findings_are_not_thinner_than_the_rest(client, any_scenario):
     """0件を返す証拠だけ薄いと、厚みがそのまま「何も無い」の合図になる。
 
     誤導の注釈と同じ論法（test_misleading_readings_are_not_thinner）。
     読む前に長さで振り分けられるなら、読ませていることにならない。
     """
-    sc = load_scenario("ransomware-initial-response-01")
+    sc = any_scenario
     neg = [len(e.content) for e in sc.evidence if not e.points_to]
     pos = [len(e.content) for e in sc.evidence if e.points_to]
     assert neg and pos
@@ -306,7 +306,7 @@ def test_negative_findings_are_not_thinner_than_the_rest(client):
     assert ratio >= 0.6, f"0件の証拠が薄すぎる（{ratio:.2f} 倍）"
 
 
-def test_content_is_the_material_and_summary_is_the_reading(client):
+def test_content_is_the_material_and_summary_is_the_reading(client, any_scenario):
     """content に要約を混ぜない。混ぜると hard という設計軸が死ぬ。
 
     `summary` は hard で伏せる。`content` は全レベルで出る。
@@ -318,7 +318,7 @@ def test_content_is_the_material_and_summary_is_the_reading(client):
     """
     from irdojo.schema import CONCLUSION_WORDS
 
-    sc = load_scenario("ransomware-initial-response-01")
+    sc = any_scenario
     for e in sc.evidence:
         for word in CONCLUSION_WORDS:
             assert word not in e.content, f"{e.id}: content が結論を述べている（{word}）"
@@ -400,12 +400,12 @@ def test_topology_is_disclosed_at_every_level(client):
         assert all("business_impact_per_hour" not in a for a in assets), level
 
 
-def test_action_groups_do_not_leak(client):
+def test_action_groups_do_not_leak(client, any_scenario):
     """分類名で答えを漏らさない（SPEC 5.6）。
 
     「無関係な端末」のような名前は、misleading にマークを付けるのと変わらない。
     """
-    sc = load_scenario("ransomware-initial-response-01")
+    sc = any_scenario
     NG = ("無関係", "本命", "誤導", "侵害され", "正解", "重要でない", "囮")
     for a in sc.actions:
         assert a.group, f"{a.id}: group が無い"
@@ -418,31 +418,35 @@ def test_action_groups_do_not_leak(client):
     assert len(groups) >= 2
 
 
-def test_group_says_no_more_than_the_label(client):
+def test_group_says_no_more_than_the_label(client, any_scenario):
     """分類は「何を引くか」で決める。ラベルが言っていないことを分類で言わない。
 
     「メールゲートウェイのログを照合」を ws-042 の束に置くと、
     読む前からその結果が ws-042 の話だと分かってしまう。
     引く先は全社の仕組みであって、どの資産の話になるかは読むまで分からない。
-    """
-    import re
 
-    sc = load_scenario("ransomware-initial-response-01")
+    **照合は `names_asset` で行う。** かつては `asset.id in a.group` だけを
+    見ていた。1本目は束の名前を「fs01（ファイルサーバ）」のように id 込みで
+    書いていたので気づかなかったが、束を「クラウドメール」と label だけで
+    書いた瞬間、この検査は何も見なくなる — 資産 id はラテン文字で、
+    日本語の束名には決して現れない。ローダ側の漏洩検査（`names_asset`）が
+    id・label・括弧内の呼び名の3つを見ているのに、こちらだけ id を見ていた。
+    """
+    from irdojo.schema import names_asset
+
+    sc = any_scenario
     for asset in sc.world.assets:
-        # 資産の label に括弧で入っている呼び名（「営業部端末 (佐藤)」→ 佐藤）も
-        # 資産一覧と構成図に出ているので、ラベルが名指ししたものとみなす
-        alias = re.findall(r"[（(]([^）)]+)[）)]", asset.label)
         for a in sc.actions:
-            if asset.id not in a.group:
+            said = names_asset(a.group, asset)
+            if not said:
                 continue
-            named = asset.id in a.label or any(x in a.label for x in alias)
-            assert named, (
-                f"{a.id}: 分類が {asset.id} と言っているのに、"
+            assert names_asset(a.label, asset), (
+                f"{a.id}: 分類「{a.group}」が {asset.id} と言っているのに、"
                 f"ラベル「{a.label}」はそれを名指ししていない"
             )
 
 
-def test_open_questions_do_not_hand_over_the_assessment(client):
+def test_open_questions_do_not_hand_over_the_assessment(client, any_scenario):
     """未解消論点の文が、侵害された資産を名指ししていない。
 
     論点は assisted / standard では **開始0分・0アクション**で画面の左に出る。
@@ -455,7 +459,7 @@ def test_open_questions_do_not_hand_over_the_assessment(client):
     """
     from irdojo.schema import asset_names, briefing_assets
 
-    sc = load_scenario("ransomware-initial-response-01")
+    sc = any_scenario
     gt = sc.world.ground_truth
     secret = set(gt.compromised) | {gt.patient_zero} | set(gt.persistence)
     secret -= briefing_assets(sc)
@@ -477,7 +481,7 @@ def test_open_questions_do_not_hand_over_the_assessment(client):
                 )
 
 
-def test_actions_do_not_name_assets_they_do_not_touch(client):
+def test_actions_do_not_name_assets_they_do_not_touch(client, any_scenario):
     """アクションの文が、そのアクションが触らない侵害資産を名指ししていない。
 
     アクション一覧は**開始0分・0アクション**で画面の右に全部並ぶ。
@@ -495,7 +499,7 @@ def test_actions_do_not_name_assets_they_do_not_touch(client):
     """
     from irdojo.schema import briefing_assets, names_asset
 
-    sc = load_scenario("ransomware-initial-response-01")
+    sc = any_scenario
     gt = sc.world.ground_truth
     secret = set(gt.compromised) | {gt.patient_zero} | set(gt.persistence)
     secret -= briefing_assets(sc)
@@ -651,12 +655,12 @@ def test_declaring_without_investigating_cannot_reach_a_full_fact_score(scenario
     assert best < skilled, f"0手 {best} が最短経路 {skilled} に並んでいる（{minutes}分）"
 
 
-def test_command_transcripts_say_no_more_than_the_action(client):
+def test_command_transcripts_say_no_more_than_the_action(client, any_scenario):
     """実行の記録に「見つかったこと」を書かない（SPEC 5.6）。
 
     何をしたかは見せてよいが、結果は証拠の側の仕事である。
     """
-    sc = load_scenario("ransomware-initial-response-01")
+    sc = any_scenario
     NG = ("侵害", "攻撃者", "マルウェア", "不審", "疑わ", "検体を発見", "痕跡を発見")
     for a in sc.actions:
         assert a.command, f"{a.id}: command が無い"
@@ -1029,7 +1033,8 @@ def test_the_two_places_that_decide_nothing_happened_agree():
     i = body.index("var empty =")
     statement = body[i:body.index(";", i)]
 
-    for name in ("revealed", "stopped", "purged", "halted", "already", "prevented"):
+    for name in ("revealed", "stopped", "purged", "halted", "already", "prevented",
+                 "notice"):
         assert name in statement, f"画面側の空振り判定が {name} を数えていない"
 
     # エンジン側（ActionOutcome.empty）と項目が揃っていること
@@ -1039,6 +1044,9 @@ def test_the_two_places_that_decide_nothing_happened_agree():
     for name in ("revealed", "contained", "eradicated", "halted",
                  "already", "prevented"):
         assert f"self.{name}" in prop, f"エンジン側の空振り判定が {name} を数えていない"
+    # 連絡はどちらの側でも空振りにならない。片方だけ直すと、
+    # 「周知が行き渡った」の下にオレンジの「何も出てこなかった」が並ぶ
+    assert "COMMUNICATE" in prop, "エンジン側が連絡を除外していない"
 
 
 def test_the_projection_is_never_shown_during_play(client):

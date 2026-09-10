@@ -217,3 +217,39 @@ def test_consequences_are_labelled_where_they_are_shown(index_html):
     assert "帰結" in strip and "採点しません" in strip, "帯が帰結の位置づけを言っていない"
     # 理由まで帯に書くと説明文で埋まる。押せば開く形になっていること
     assert 'id="btn-what-play"' in strip
+
+
+# ── シナリオが2本以上あるときの選択 ──────────────────────
+
+
+def test_the_scenario_list_can_actually_be_chosen(app_js):
+    """一覧に並べたものは押して選べること。
+
+    **1本しか無い間、この欠落は見えない。** 一覧を描いたあと
+    無条件に先頭を選んでいたので、カードに押し手が付いていなくても
+    画面は正しく動いていた。2本目を足した瞬間、
+    「並んではいるが2本目は始められない」という形になる。
+
+    見るのは「押せる形になっているか」までで、選んだ結果は
+    `tools/playtest.mjs` が実画面で確かめる。
+    """
+    src = strip_comments(app_js)
+    body = src[src.index("function renderScenarioList"):src.index("function selectScenario")]
+    assert "addEventListener('click'" in body, "カードに押し手が付いていない"
+    assert "selectScenario" in body, "押しても選択が切り替わらない"
+    # キーボードでも選べること（div に role を付けた以上、Enter で動く必要がある）
+    assert "keydown" in body and "'Enter'" in body
+
+
+def test_switching_scenarios_does_not_carry_the_previous_policy(app_js):
+    """シナリオを選び直したら、方針は選び直したシナリオのものに戻ること。
+
+    方針 id はシナリオごとに定義される。持ち越すと、そのシナリオに
+    存在しない id をサーバへ送ることになる。同梱の2本がたまたま
+    同じ id を使っていると、この間違いは動いてしまう。
+    """
+    src = strip_comments(app_js)
+    body = src[src.index("function selectScenario"):]
+    body = body[:body.index("\n}\n") + 3]
+    assert "S.scenario.id !== sc.id" in body, "選び直しを検出していない"
+    assert "S.policy = sc.default_policy" in body, "方針が持ち越される"

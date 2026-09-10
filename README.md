@@ -89,6 +89,18 @@ YAML を1つ置くだけで増える。Python は1行も触らない。
 書き方は [docs/scenario-authoring.md](docs/scenario-authoring.md)、
 DSL の全項目は [SPEC.md](SPEC.md) の Part 5 を参照。
 
+同梱は2本ある。
+
+| id | 題材 | 判断の形 |
+|---|---|---|
+| `ransomware-initial-response-01` | 深夜のファイルサーバ異常 | 記録を消すのは**自分の手**。誤導は時刻の近さ |
+| `oauth-consent-abuse-01` | SaaS テナントの不正同意 | 記録を消すのは**時計**（保持期間）。誤導は権限の広さ |
+
+**2本目は幅を足すためだけのものではない。** DSL が1本目の世界を
+前提にしていた箇所（業務停止と揮発性の消失を同一視していた条件、
+依存が木である前提、束の検査が資産 id しか見ていなかったこと）は、
+2本目を書いて初めて表に出た。経緯は SPEC 8.6。
+
 複雑度（★1〜5）は**作者が書かない。** 誤導証拠の数と plausibility、
 critical 論点の数、証拠数からローダが算出する。
 作者の主観で付けるとシナリオ間で一貫しないため。
@@ -97,7 +109,7 @@ critical 論点の数、証拠数からローダが算出する。
 
 ```
 pip install -e ".[dev]"
-pytest                                   # 177本
+pytest                                   # 195本
 ```
 
 - `tests/test_scoring.py` — SPEC 6.8 の計算例をそのまま検証する
@@ -110,8 +122,9 @@ pytest                                   # 177本
 
 ```
 python tools/balance.py                  # 設計の均衡（SPEC 8.3 のチェックリスト）
+python tools/balance.py <シナリオID>     # 同梱のどれでも
 npm install
-node tools/playtest.mjs --dpr 2          # 実際に遊んで壊れを拾う＋スクショ
+node tools/playtest.mjs --dpr 2 --scenario <シナリオID>   # 実際に遊ぶ＋スクショ
 ```
 
 `tools/balance.py` はプレイ像（巧い / 止めるだけ / 全部押す / 誤導を追う /

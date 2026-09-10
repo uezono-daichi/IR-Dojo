@@ -1085,25 +1085,40 @@ def _reject_uneradicable_persistence(sc: "Scenario") -> None:
 
 
 def _reject_stops_that_erase_without_stopping(sc: "Scenario") -> None:
-    """業務を止めない封じ込めが、稼働中の痕跡を消していないか（SPEC 6.3）。
+    """通り道を塞ぐだけの封じ込めが、稼働中の痕跡を消していないか（SPEC 6.3 / 5.6）。
 
-    `side_effects.business_impact: false` は「資産は動き続ける」という宣言で、
-    境界での遮断や論理的な切り離しがこれに当たる。動いている資産から
-    揮発性の情報が消える理由は無い。
-
-    ここを許すと「業務影響ゼロで証拠だけ消える」手が書けてしまい、
+    境界での遮断や論理的な切り離しは、資産に手を触れずに通り道だけを塞ぐ手で、
+    そこから揮発性の情報が消える理由は無い。ここを許すと
+    「業務影響ゼロで証拠だけ消える」手が書けてしまい、
     業務継続と証拠保全のどちらの方針からも一方的に安い抜け道になる。
-    消したいなら止めること — `business_impact: true` にするのが正しい。
+
+    **除くのは `eradicates` を持つ手である**（v1.38）。取り除く手は定義上、
+    その資産に残されたものを消しに行くのだから、消しに行った先の
+    「現在の状態」が消えるのは当たり前で、業務が止まるかどうかとは関係ない。
+
+    この条件はもともと `business_impact: false` だけで書かれていた。
+    「業務が止まる」と「資産が動き続ける」が一致する世界
+    （端末は電源を切ると業務も止まる）でしか正しくない近似で、
+    2本目のシナリオ（SaaS）で破れた — 委任同意を利用者ごとに取り消す手は、
+    生きている同意の一覧を確実に消すが、業務は1分も止まらない。
+    そこで `business_impact: true` と書かせるのは世界について嘘をつくことで、
+    `volatile: false` と書かせるのは証拠について嘘をつくことだった。
+
+    抜け道が開かないのは、取り除く手が盤面で最も価値のある手だからである。
+    「一方的に安い」ことはありえない。
     """
     volatile = {e.id for e in sc.evidence if e.volatile}
     for a in sc.actions:
         if a.type != ActionType.CONTAIN or a.side_effects.business_impact:
             continue
+        if a.eradicates:
+            continue
         bad = sorted(set(a.destroys) & volatile)
         if bad:
             raise ValueError(
-                f"{a.id}: 業務を止めない封じ込めが揮発性の証拠を消しています: {bad}。"
-                "動き続けている資産から稼働中の痕跡は消えません"
+                f"{a.id}: 通り道を塞ぐだけの封じ込めが揮発性の証拠を消しています: {bad}。"
+                "資産に手を触れていないなら、稼働中の痕跡は消えません"
+                "（取り除く手なら eradicates を書いてください）"
             )
 
 
