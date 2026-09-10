@@ -138,6 +138,7 @@ def decide(sid: str, body: Decision) -> dict[str, Any]:
             "halted": [],
             "already": [],
             "halts_business": False,
+            "preserved": False,
             "business_impact_delta": 0.0,
             "events": [],
             "finished": False,
@@ -203,6 +204,11 @@ def decide(sid: str, body: Decision) -> dict[str, Any]:
         # その手が業務を止める種類のものか。description が既に言っている
         # 機構であって、答えではない（「端末は動いたまま、通信だけを止める」）
         "halts_business": bool(acted and acted.side_effects.business_impact),
+        # 保全の手だったか（SPEC 5.6.3）。**件数も中身も返さない。**
+        # 仕掛けは証拠を1件も産まないので、これが無いと画面は
+        # 「何も出てこなかった」と出す。件数を返すと 0 と 1 の差が
+        # 「間に合ったか」の答えになり、プレイ中に賭けの結果を告げる（原則5）
+        "preserved": bool(acted and acted.secures),
         "business_impact_delta": outcome.business_impact_delta,
         # 実行の様子。何をしたのかを見せる（SPEC 7.6.8）
         # 向こうから入ってきたこと。証拠ではないので、別枠で返す

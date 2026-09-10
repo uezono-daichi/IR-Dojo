@@ -215,6 +215,12 @@ class Action(Strict):
     # このアクションに辿り着くための手がかり。いずれか1つを持っていれば解放される。
     # 空なら最初から選べる。知らない資産は調べられない、という当たり前を表す。
     requires_evidence: list[str] = []
+    # **この手を打ってからでないと押せない手**（SPEC 5.6.2）。
+    # `requires_evidence` が「何が分かったら次を思いつくか」を表すのに対し、
+    # こちらは「何を先に仕掛けたか」を表す。全部が実行済みで初めて解放される。
+    # 取っていないイメージは読めない — 仕掛けと読解を割るための門であって、
+    # 手がかりの連鎖ではない（証拠を1件も産まない手を前提にできる）。
+    requires_actions: list[str] = []
     investigates: list[str] = []
     targets: list[str] = []
     # contain 専用。**その資産に残された永続化を取り除く**手であることを表す。
@@ -226,6 +232,13 @@ class Action(Strict):
     eradicates: list[str] = []
     yields: list[str] = []
     destroys: list[str] = []
+    # **時計にだけ効く保全**（SPEC 5.6.3）。この手を打ち終わった時刻から先、
+    # ここに書かれた証拠は timeline の `destroys` では失われなくなる。
+    # **自分の手の `destroys` では失われる** — 排他はそのまま残る。
+    # 世界に奪われることと、自分で消すことは設計上の意味が違い（8.2）、
+    # 前者は「先に仕掛けておけ」で防げるべきもの、後者は
+    # 「順序そのものが判断」である（3.8）。両方に効かせると排他が消える。
+    secures: list[str] = []
     # communicate 専用。以後この出来事は起きなくなる（既に起きた分には効かない）。
     # 学習者には渡さない。ラベルが世界の言葉で何をするかを言えば足りる
     prevents: list[str] = []
@@ -252,6 +265,27 @@ class Action(Strict):
                     f"{self.id}: eradicates が targets に含まれていません: {stray}。"
                     "手を触れていない資産から永続化だけが消えることはない"
                 )
+        if self.secures:
+            # 保全は調査の一部である。**費用は調査フェーズの予算から出る** —
+            # 仕掛けと読解を割る意味は、限られた時間の中で先に仕掛けるか
+            # どうかを選ばせることにあり、他の型に付けると
+            # 「連絡（出来事ごと止める）」との違いが消える（5.6.1 / 5.6.3）
+            if self.type != ActionType.INVESTIGATE:
+                raise ValueError(f"{self.id}: secures は investigate 専用")
+            both = sorted(set(self.secures) & set(self.yields))
+            if both:
+                raise ValueError(
+                    f"{self.id}: 自分が産む証拠を secures しています: {both}。"
+                    "取得済みの証拠は初めから失われない（守る意味がない）"
+                )
+            clash = sorted(set(self.secures) & set(self.destroys))
+            if clash:
+                raise ValueError(
+                    f"{self.id}: 同じ証拠を secures と destroys の両方に"
+                    f"書いています: {clash}"
+                )
+        if self.id in self.requires_actions:
+            raise ValueError(f"{self.id}: 自分自身を requires_actions に指定しています")
         if self.type == ActionType.COMMUNICATE:
             # 連絡は「何かを起きなくする」ためだけにある。
             # 何も防がない連絡は、時間を溶かすだけのボタンになる
@@ -260,7 +294,7 @@ class Action(Strict):
                     f"{self.id}: communicate には prevents が必要。"
                     "何も防がない連絡は時間を溶かすだけのボタンになる"
                 )
-            for field in ("yields", "destroys", "targets", "investigates"):
+            for field in ("yields", "destroys", "targets", "investigates", "secures"):
                 if getattr(self, field):
                     raise ValueError(f"{self.id}: communicate に {field} は使えない")
         elif self.prevents:
@@ -759,9 +793,12 @@ def _validate_scenario(sc: "Scenario") -> None:
                 raise ValueError(f"{act.id}: 未定義の出来事を prevents しています: {tid}")
         if act.phase not in phase_ids:
             raise ValueError(f"{act.id}: 未定義のフェーズ {act.phase}")
-        for e in act.yields + act.destroys:
+        for e in act.yields + act.destroys + act.secures:
             if e not in ev_ids:
                 raise ValueError(f"{act.id}: 未定義の証拠 {e}")
+        for aid in act.requires_actions:
+            if aid not in act_ids:
+                raise ValueError(f"{act.id}: 未定義のアクションを前提にしています: {aid}")
         for a in act.investigates + act.targets:
             if a not in asset_ids:
                 raise ValueError(f"{act.id}: 未定義の資産 {a}")
@@ -802,6 +839,8 @@ def _validate_scenario(sc: "Scenario") -> None:
             )
 
     _reject_toothless_constraints(sc)
+    _reject_toothless_secures(sc)
+    _reject_prerequisite_action_cycle(sc)
     _reject_unsatisfiable_capture_requirement(sc)
     _reject_policies_that_forbid_every_stop(sc)
     _reject_unreachable_actions(sc)
@@ -1222,6 +1261,58 @@ def _reject_policies_that_forbid_every_stop(sc: "Scenario") -> None:
                 )
 
 
+def _reject_toothless_secures(sc: "Scenario") -> None:
+    """時計から何も守らない `secures` を拒否する（SPEC 5.6.3）。
+
+    `secures` が効くのは **timeline の `destroys` に対してだけ**である。
+    どの出来事もその証拠を奪わないなら、この手は 20分を払って
+    何も変えないボタンになる。症状が出るのは書いた場所ではなく
+    **均衡の側**で、「仕掛けを先に押す意味がある」と信じて書いた盤面が、
+    実測すると押しても押さなくても同じ、という形で現れる。
+    `_reject_toothless_timeline`（何も奪わない出来事）と同じ形の検査で、
+    見ている向きが逆になっただけである。
+
+    **自分の手の `destroys` は数えない。** そちらから守る力は
+    そもそも持たせていない（排他を消してしまうため）。
+    """
+    taken_by_world = {e for ev in sc.timeline for e in ev.destroys}
+    for a in sc.actions:
+        idle = sorted(set(a.secures) - taken_by_world)
+        if idle:
+            raise ValueError(
+                f"{a.id}: どの出来事も奪わない証拠を secures しています: {idle}。"
+                "secures が効くのは timeline の destroys に対してだけなので、"
+                "この手は時間を払って何も変えないボタンになります"
+                "（自分の手の destroys からは、そもそも守れません）"
+            )
+
+
+def _reject_prerequisite_action_cycle(sc: "Scenario") -> None:
+    """`requires_actions` の循環を拒否する（SPEC 5.6.2）。
+
+    輪になった前提はどれも永久に押せない。`_reject_unreachable_actions` は
+    「手がかりを辿って到達できるか」を見るので輪も検出はするが、
+    メッセージが「到達できないアクション」になり、
+    原因が前提の輪であることが読み手に伝わらない。
+    """
+    by_id = {a.id: a for a in sc.actions}
+    state: dict[str, int] = {}
+
+    def walk(aid: str, path: list[str]) -> None:
+        if state.get(aid) == 2:
+            return
+        if state.get(aid) == 1:
+            cycle = path[path.index(aid):] + [aid]
+            raise ValueError(f"requires_actions が循環しています: {' → '.join(cycle)}")
+        state[aid] = 1
+        for nxt in by_id[aid].requires_actions:
+            walk(nxt, path + [aid])
+        state[aid] = 2
+
+    for a in sc.actions:
+        walk(a.id, [])
+
+
 def _reject_unsatisfiable_capture_requirement(sc: "Scenario") -> None:
     """`require_capture_of_target` を、守れない方針にしていないか（SPEC 5.3）。
 
@@ -1416,6 +1507,11 @@ def _reject_unreachable_actions(sc: "Scenario") -> None:
 
     到達できないアクションは死蔵であり、そこでしか得られない証拠があると
     論点が解消不能になる。destroys は考えない（最善手を仮定した到達性を見る）。
+
+    門は2種類ある。`requires_evidence` は「どれか1つ持っていれば」で開き、
+    `requires_actions` は「全部押し終えていれば」で開く（SPEC 5.6.2）。
+    **両方を辿らないと、仕掛けの手を消したときに読解の手が死蔵になったことに
+    気づけない。**
     """
     reached: set[str] = set()
     evidence: set[str] = set()
@@ -1426,6 +1522,8 @@ def _reject_unreachable_actions(sc: "Scenario") -> None:
             if a.id in reached:
                 continue
             if a.requires_evidence and not (set(a.requires_evidence) & evidence):
+                continue
+            if not set(a.requires_actions) <= reached:
                 continue
             reached.add(a.id)
             evidence |= set(a.yields)

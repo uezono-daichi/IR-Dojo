@@ -56,6 +56,10 @@ class GameState(BaseModel):
     obtained_at: dict[str, int] = {}  # 証拠ID → 取得した時刻（分）
     destroyed_evidence: list[str] = []
     destroyed_at: dict[str, int] = {}   # 証拠ID → 失われた時刻（分）
+    # 先に仕掛けて、時計から守ってある証拠（SPEC 5.6.3）。
+    # timeline の destroys はこれを飛ばす。**自分の手の destroys は飛ばさない** —
+    # 排他（メモリ vs ディスクイメージ）はそのまま残す
+    secured_evidence: list[str] = []
     # 世界の側に奪われたもの。自分の手で壊したものとは講評での言い方が変わる
     destroyed_by_world: dict[str, str] = {}   # 証拠ID → 出来事ID
     # 破壊された証拠のうち、取得する前に失ったもの。
@@ -134,6 +138,10 @@ class ActionOutcome(BaseModel):
     prevented: list[str] = []
     # どの型の手だったか。**連絡は空振りにならない**（下記）
     kind: ActionType = ActionType.INVESTIGATE
+    # 保全の手だったか（`secures` を持つ手）。**件数ではなく真偽で持つ。**
+    # 件数にすると 0 と 1 の差が「間に合ったか」の答えになり、
+    # プレイ中に賭けの結果を告げることになる（原則5）
+    preserves: bool = False
 
     @property
     def empty(self) -> bool:
@@ -147,6 +155,13 @@ class ActionOutcome(BaseModel):
         # プレイ中に告げる**ことになる（原則5）。速さへの賭けに負けたことは、
         # 講評まで開かない。文言も勝った回と揃える。
         if self.kind == ActionType.COMMUNICATE:
+            return False
+        # **保全の手も決して空振りにしない。** 仕掛けは証拠を1件も産まない
+        # （産むのは後で読む手のほう）ので、ここを見落とすと
+        # 20分をかけて「何も出てこなかった」と返ることになる。
+        # しかも既に奪われていた回だけ文言が変わると、それが
+        # 「間に合わなかった」の合図になる — 連絡と同じ理由で揃える
+        if self.preserves:
             return False
         return (
             not self.revealed
@@ -276,11 +291,21 @@ class Player(Protocol):
     def choose(self, view: PlayerView) -> Decision: ...
 
 
-def _unlocked_by(action: Action, obtained: set[str]) -> bool:
-    """手がかりを1つでも持っていれば解放される。空なら最初から選べる。"""
-    if not action.requires_evidence:
-        return True
-    return bool(set(action.requires_evidence) & obtained)
+def _unlocked_by(action: Action, obtained: set[str], executed: set[str]) -> bool:
+    """その手が今、一覧に出るか。
+
+    門は2種類あり、**意味が違うので合成の仕方も違う**（SPEC 5.6.2）。
+
+      requires_evidence … 手がかりを**1つでも**持っていれば開く。
+                          「何が分かったら次を思いつくか」の連鎖
+      requires_actions  … 前提の手を**全部**打ち終えていれば開く。
+                          「何を先に仕掛けたか」。取っていないイメージは読めない
+
+    どちらも空なら最初から選べる。
+    """
+    if action.requires_evidence and not (set(action.requires_evidence) & obtained):
+        return False
+    return set(action.requires_actions) <= executed
 
 
 # ─────────── 例外 ───────────
@@ -343,10 +368,11 @@ class Engine:
     def available_actions(self) -> list[Action]:
         unlocked = self.scenario.phases_up_to(self.state.current_phase)
         got = set(self.state.obtained_evidence)
+        done = set(self.state.executed_actions)
         return [
             a
             for a in self.scenario.actions
-            if a.phase in unlocked and _unlocked_by(a, got)
+            if a.phase in unlocked and _unlocked_by(a, got, done)
         ]
 
     # ── 遷移 ──
@@ -382,9 +408,12 @@ class Engine:
         unlocked = self.scenario.phases_up_to(self.state.current_phase)
         if action.phase not in unlocked:
             raise InvalidDecision(f"このフェーズでは実行できません: {action_id}")
-        if not _unlocked_by(action, set(st_evidence := self.state.obtained_evidence)):
+        if not _unlocked_by(
+            action,
+            set(self.state.obtained_evidence),
+            set(self.state.executed_actions),
+        ):
             raise InvalidDecision(f"まだ手がかりがありません: {action_id}")
-        del st_evidence
         if not action.repeatable and action_id in self.state.executed_actions:
             raise InvalidDecision(f"実行済みです: {action_id}")
 
@@ -427,6 +456,8 @@ class Engine:
             if ev.id in st.prevented_events:
                 continue
             for eid in ev.destroys:
+                if eid in st.secured_evidence:
+                    continue  # 先に仕掛けてある。現場が触っても、もう手元にある
                 if eid in st.destroyed_evidence:
                     continue
                 st.destroyed_evidence.append(eid)
@@ -471,6 +502,16 @@ class Engine:
             st.destroyed_at[eid] = end
             if eid not in st.obtained_evidence:
                 st.lost_evidence.append(eid)
+
+        # 5.5 保全。**時計にだけ効く**（SPEC 5.6.3）。以後この証拠は
+        #     timeline の destroys では失われない。効き始めるのは
+        #     連絡と同じく**打ち終わった時刻**（end）から — 取りに行っている
+        #     20分の間に現場が触ってしまうことはある。
+        #     **自分の手の destroys には効かない**（上の 5 は secured を見ない）。
+        #     排他は順序そのものが判断であり、そこまで守ると 3.8 が消える
+        for eid in action.secures:
+            if eid not in st.secured_evidence:
+                st.secured_evidence.append(eid)
 
         # 6. 論点の解消状態を再評価
         st.resolved_questions = questions_mod.resolved_ids(
@@ -568,6 +609,7 @@ class Engine:
             averted=averted,
             prevented=prevented,
             kind=action.type,
+            preserves=bool(action.secures),
         )
 
     def _record_violations(
@@ -732,6 +774,7 @@ def build_view(
     unlocked = scenario.phases_up_to(state.current_phase)
     phase_labels = {p.id: p.label for p in scenario.phases}
     got = set(state.obtained_evidence)
+    done = set(state.executed_actions)
     # 手がかりの無いアクションは一覧に出さない。灰色で見せると
     # 「まだ知らない資産が存在する」ことを教えてしまう
     actions = [
@@ -750,7 +793,7 @@ def build_view(
             group=a.group or phase_labels.get(a.phase, a.phase),
         )
         for a in scenario.actions
-        if a.phase in unlocked and _unlocked_by(a, got)
+        if a.phase in unlocked and _unlocked_by(a, got, done)
     ]
 
     phase_ids = [p.id for p in scenario.phases]

@@ -362,26 +362,32 @@ def test_complexity_counts_multi_step_by_mode_not_by_count(raw):
     （any で候補が2つ）を多段と数えていた。棄却の材料が増えるほど
     複雑度が上がるのは向きが逆で、作者が狙って設計できない。
 
-    **候補の件数を揃えて、条件だけを入れ替える。** ev_007 の refuted_by を
+    **候補の件数を揃えて、条件だけを入れ替える。** 誤導の refuted_by を
     2件にしたうえで any と all を比べると、`len(refuted_by)` は
     どちらも 2 で同じなのに★が変わる。件数で数えていたら、
     この2つは区別できない（逃げ道が2本ある易しい誤導のほうまで
     多段と数えてしまう）。
+
+    **入れ替えるのは2つ。** 同梱の盤面から多段が無くなった（v1.43 で
+    ev_005 が「向きの取り違え」型になり、棄却がもう一方の端の1つで
+    閉じるようになった）ので、1つ足すだけでは★の丸めをまたがない。
+    測りたいのは丸めの位置ではなく、mode が数え方を変えることである。
     """
     assert compute_complexity(build(raw)) == 3
 
-    def with_ev_007(mode):
+    def with_mode(mode):
         data = copy.deepcopy(raw)
+        pairs = {"ev_007": ["ev_003", "ev_012"], "ev_020": ["ev_021", "ev_017"]}
         for e in data["evidence"]:
-            if e["id"] == "ev_007":
-                e["refuted_by"] = ["ev_003", "ev_012"]
+            if e["id"] in pairs:
+                e["refuted_by"] = pairs[e["id"]]
                 e["refutation_mode"] = mode
         return compute_complexity(build(data))
 
     # 逃げ道が2本ある（any）だけでは、盤面は難しくならない
-    assert with_ev_007("any") == 3
-    # 2つ揃って初めて棄却できる（all）なら、多段が1つ増えて★が上がる
-    assert with_ev_007("all") == 4
+    assert with_mode("any") == 3
+    # 2つ揃って初めて棄却できる（all）なら、多段が増えて★が上がる
+    assert with_mode("all") == 4
 
     # 候補を1つに減らしても同じ（any で1件と、any で2件は同じ難しさ）
     data = copy.deepcopy(raw)
@@ -460,10 +466,13 @@ def test_capture_must_be_of_the_asset_being_stopped(scenario):
     無言で成立してしまうので、テストでしか見張れない。
     """
     # ws-042 の分を取っただけでは、fs01 を止める要件は満たさない
-    # （メモリダンプの手がかりを開けるために、先に2手押す必要がある）
+    # （メモリ取得の手がかりを開けるために、先に2手押す必要がある）
+    # **要件を満たすのは仕掛けの手のほうである**（v1.43）。読む前でも
+    # 「その資産から揮発性の情報を取った」ことは成立している
     assert _capture_then_stop(
         scenario,
-        ["act_collect_evtx_fs01", "act_netflow_overview", "act_memory_dump_ws042"],
+        ["act_collect_evtx_fs01", "act_netflow_overview",
+         "act_memory_capture_ws042"],
         "act_stop_share_fs01",
     ) == ["require_capture_of_target"]
 
@@ -1014,7 +1023,7 @@ def test_loader_rejects_eradication_by_something_that_is_not_containment(raw):
     根拠のない書き方が通る。
     """
     data = copy.deepcopy(raw)
-    act = next(a for a in data["actions"] if a["id"] == "act_memory_dump_ws042")
+    act = next(a for a in data["actions"] if a["id"] == "act_memory_analyze_ws042")
     act["eradicates"] = ["ws-042"]
     with pytest.raises(ScenarioError) as exc:
         build(data)
@@ -1175,3 +1184,104 @@ def test_an_eradicating_hand_may_erase_the_state_it_removes(raw):
     act["destroys"] = ["ev_010"]        # volatile な稼働中の痕跡
     sc = build(data)                    # 通ること
     assert "ev_010" in sc.action_by_id["act_purge_persistence_ws042"].destroys
+
+
+# ─────────── 仕掛けと読解（SPEC 5.6.2 / 5.6.3） ───────────
+
+
+def test_loader_rejects_securing_what_the_clock_never_takes(raw):
+    """時計から何も守らない `secures` を拒否する。
+
+    `secures` が効くのは timeline の `destroys` に対してだけである
+    （自分の手の `destroys` から守る力は、そもそも持たせていない —
+    そこまで守ると 3.8 の排他が盤面から消える）。
+    どの出来事もその証拠を奪わないなら、その手は時間を払って
+    盤面を1ミリも変えないボタンになる。
+
+    **症状が出るのは書いた場所ではない。** 作者は「先に仕掛ける意味がある」
+    つもりで盤面を出荷し、実測して初めて「押しても押さなくても同じ」と
+    分かる。`_reject_toothless_timeline`（何も奪わない出来事）と同じ形の
+    検査で、見ている向きが逆になっただけである。
+    """
+    data = copy.deepcopy(raw)
+    # ev_011 はどの出来事にも奪われない（プロキシのログは消えない）
+    _action(data, "act_memory_capture_ws042")["secures"] = ["ev_011"]
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "ev_011" in str(exc.value)
+
+
+def test_loader_rejects_securing_what_you_produce_yourself(raw):
+    """自分が産む証拠を守っても意味がない。
+
+    取得済みの証拠は初めから失われない（`destroys` は「以後取得できなく
+    なる」だけ。5.6）。同じ手が産んで同じ手が守るなら、守る側は飾りである。
+    """
+    data = copy.deepcopy(raw)
+    act = _action(data, "act_memory_analyze_ws042")
+    act["secures"] = ["ev_009"]         # この手が yields しているもの
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "ev_009" in str(exc.value)
+
+
+def test_loader_rejects_a_ring_of_prerequisites(raw):
+    """`requires_actions` が輪になっていたら拒否する。
+
+    輪の中の手はどれも永久に押せない。到達性の検査（死蔵アクション）でも
+    引っかかるが、そちらのメッセージは「到達できないアクション」で、
+    原因が前提の輪であることが読み手に伝わらない。
+    """
+    data = copy.deepcopy(raw)
+    _action(data, "act_memory_capture_ws042")["requires_actions"] = [
+        "act_memory_analyze_ws042"
+    ]
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "循環" in str(exc.value)
+
+
+def test_loader_rejects_a_prerequisite_that_does_not_exist(raw):
+    """綴りを間違えた前提は、黙って「最初から押せる手」にならないこと。
+
+    `requires_actions` は**全部**押し終えて初めて開く門なので、
+    未定義の id を無視すると門そのものが消える（空集合は常に満たされる）。
+    ここを黙って通すと、仕掛けを押さずに読める盤面が出荷される。
+    """
+    data = copy.deepcopy(raw)
+    _action(data, "act_memory_analyze_ws042")["requires_actions"] = ["act_typo"]
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "act_typo" in str(exc.value)
+
+
+def test_loader_rejects_a_deadlock_that_crosses_the_two_gates(raw):
+    """2種類の門をまたいだ手詰まりを、到達性の検査が拾うこと。
+
+    門は2つある — 手がかり（`requires_evidence`、どれか1つで開く）と、
+    前提の手（`requires_actions`、全部押して初めて開く）。
+    **輪の検査だけでは足りない。** `requires_actions` の中だけを見ても、
+    「読む手 → 前提の手 → その手を開く証拠 → 読む手」のように
+    2つの門をまたいだ輪は見つからない。
+
+    到達性の検査が `requires_evidence` の連鎖しか辿っていなかった頃は、
+    前提の手を持つものが**最初から押せる手**として数えられ、
+    こういう盤面が黙って出荷された。
+    """
+    data = copy.deepcopy(raw)
+    data["actions"].append({
+        "id": "act_dead",
+        "label": "ws-042 の解析結果を突き合わせる",
+        "group": "ws-042（営業部端末）",
+        "phase": "investigation",
+        "type": "investigate",
+        "cost_minutes": 10,
+        "requires_evidence": ["ev_009"],     # 読む手だけが産む証拠
+        "investigates": ["ws-042"],
+        "yields": [],
+    })
+    _action(data, "act_memory_analyze_ws042")["requires_actions"] = ["act_dead"]
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "到達できない" in str(exc.value)
+    assert "act_memory_analyze_ws042" in str(exc.value)

@@ -686,6 +686,7 @@ function decide(payload) {
       S.lastOutcome.haltsBusiness = !!res.halts_business;
       S.lastOutcome.impact = res.business_impact_delta || 0;
       S.lastOutcome.prevented = res.prevented_count || 0;
+      S.lastOutcome.preserved = !!res.preserved;
       S.lastOutcome.command = res.command || S.lastOutcome.command;
       S.lastOutcome.running = false;
     }
@@ -937,10 +938,18 @@ function renderResult(v) {
   // 残っていない」ときだけで、そこで「何も出てこなかった」と出すのは
   // **間に合わなかったことをプレイ中に告げる**ことになる（原則5）
   var notice = (o.type === 'communicate');
-  var empty = !notice && !o.revealed && !stopped && !purged.length
+  // 保全の手（仕掛け）も決して空振りにしない。産む証拠が無いのが
+  // 仕掛けの定義なので、ここを見落とすと 20分かけて
+  // 「何も出てこなかった」と返る。しかも既に奪われていた回だけ
+  // 文言が変わると、それが「間に合わなかった」の合図になる。
+  // エンジン側 ActionOutcome.empty と揃える（片方だけ直すと、
+  // 緑の枠の中にオレンジの「何も出てこなかった」が並ぶ）
+  var preserve = !!o.preserved;
+  var empty = !notice && !preserve && !o.revealed && !stopped && !purged.length
               && !halted.length && !already.length && !o.prevented;
   var note = el('div', 'outcome'
-    + (notice || stopped || purged.length || halted.length || already.length || o.prevented
+    + (notice || preserve || stopped || purged.length || halted.length
+       || already.length || o.prevented
         ? ' outcome-contained'
                               : (empty ? ' outcome-empty' : '')));
 
@@ -957,6 +966,16 @@ function renderResult(v) {
   if (notice) {
     note.appendChild(el('div', 'outcome-msg notified',
       '周知が行き渡った。以後、現場判断で状態が変わることは無くなる。'));
+    note.appendChild(el('div', 'outcome-cascade',
+      '既に起きてしまったことには戻らない。効くのはここから先だけ。'));
+  }
+
+  // 仕掛けの手。**何を守ったかは言わない**（それは答えの側）。
+  // 言うのは機構だけで、文言は「間に合った回」と「間に合わなかった回」で
+  // 揃える（連絡と同じ理由。SPEC 5.6.3 / 原則5）
+  if (preserve) {
+    note.appendChild(el('div', 'outcome-msg notified',
+      '取得して保全した。以後、現場で端末が触られても、手元の中身は変わらない。'));
     note.appendChild(el('div', 'outcome-cascade',
       '既に起きてしまったことには戻らない。効くのはここから先だけ。'));
   }
@@ -1172,7 +1191,7 @@ function renderActions(v) {
             command: '', running: true,
             revealed: 0, unlocked: 0, contained: [], eradicated: [],
             halted: [], already: [],
-            haltsBusiness: false, impact: 0, prevented: 0
+            haltsBusiness: false, impact: 0, prevented: 0, preserved: false
           };
           // 走らせている間もその場で見せる。押した瞬間に何か起きる
           renderResult(S.view);

@@ -33,6 +33,10 @@ FORBIDDEN_KEYS = {
     # `clears` は points_to の逆向きで、**印としてはより強い** —
     # 「この所見は白く見えるだけだ」と教えるのと同じになる（SPEC 3.4）
     "points_to", "clears", "yields", "destroys", "investigates", "targets",
+    # 仕掛けの手が何を守るかは答えの側（SPEC 5.6.3）。
+    # **渡すと「失われうる証拠の一覧」になる。**
+    # `requires_actions` も同じで、まだ見えていない手の存在を教える
+    "secures", "requires_actions",
     # 何を防げるかは答えの側。ラベルが世界の言葉で何をするかを言えば足りる
     "prevents", "averted_text", "averted_label",
     # 採点の内部情報
@@ -723,12 +727,13 @@ def test_command_is_returned_only_after_the_action_is_taken(client):
 
 
 def test_pressing_a_dead_end_returns_a_transcript_with_nothing_in_it(client):
-    """世界に奪われた後にその手を押すと、記録は返るが中身は返らない。
+    """失われた後にその手を押すと、記録は返るが中身は返らない。
 
-    fs01 は 200分に現場判断で再起動され、ev_010（稼働中プロセス）は消える。
-    その後で「fs01 のメモリダンプ取得・解析」を押すと、証拠は出てこない。
-    このとき端末の記録に PID やハンドル数が書かれていると、
-    **取り損ねたものの中身を、失った後に見せている**ことになる。
+    ev_010（fs01 の稼働中プロセス）は、現場の再起動でも、自分で行う
+    セーフモード再起動でも消える。その後で「fs01 のメモリダンプ取得・解析」を
+    押すと、証拠は出てこない。このとき端末の記録に PID やハンドル数が
+    書かれていると、**取り損ねたものの中身を、失った後に見せている**
+    ことになる。
     """
     sc = load_scenario("ransomware-initial-response-01")
     res = client.post("/api/session", json={"scenario_id": sc.meta.id}).json()
@@ -740,18 +745,20 @@ def test_pressing_a_dead_end_returns_a_transcript_with_nothing_in_it(client):
             json={"kind": "action", "action_id": aid},
         ).json()
 
-    # 200分を越えるまで時計を進める（tl_fs01_restart が ev_010 を奪う）
-    burned = 0
+    # ev_010 が取れなくなるまで盤面を進める。**押せる手だけを押す。**
+    # 前提のある手（`requires_evidence` / `requires_actions`）を
+    # 押したつもりで数えると、返ってくるのは 400 なのに時計だけが
+    # 進んだことになり、前提が黙って崩れる。
+    # ev_010 を奪うものは盤面に2つある（現場の再起動と、自分で行う
+    # セーフモード再起動）。**どちらで失ったかはこの検査の主題ではない** —
+    # 見たいのは、失った後に押した手が中身を渡さないことである
     for a in sc.actions:
         if a.type.value != "investigate" or a.id == "act_memory_dump_fs01":
             continue
-        if a.requires_evidence:
+        if a.requires_evidence or a.requires_actions:
             continue
         out = act(a.id)
-        burned += a.cost_minutes
-        if burned > 210:
-            break
-    assert burned > 200, f"時計が進みきっていない（{burned}分）"
+    assert out["view"]["elapsed_minutes"] > 200, "時計が進みきっていない"
 
     out = act("act_memory_dump_fs01")
     assert not out["revealed_evidence"], "ev_010 がまだ取れている。前提が崩れた"
@@ -1037,11 +1044,14 @@ def test_the_two_places_that_decide_nothing_happened_agree():
     """「空振り」の判定は、エンジンと画面の二重にある（SPEC 7.6.8）。
 
     片方だけ直すと、緑の完了メッセージの下にオレンジの
-    「何も出てこなかった」が並ぶ。実際に2回それをやっている:
-    連絡（証拠を産まない）と、既に止めてある資産への2手目
-    （同じ資産に手が2つあるので普通に起きる）。
+    「何も出てこなかった」が並ぶ。実際に3回それをやっている:
+    連絡（証拠を産まない）、既に止めてある資産への2手目
+    （同じ資産に手が2つあるので普通に起きる）、
+    そして仕掛けの手（`secures`。産むのは後で読む手のほう。v1.43）。
 
     ここで見張るのは文言ではなく、**両方が同じ項目を数えていること**。
+    名前の一覧だけでは足りない — 片側に項目を1つ足したときに、
+    一覧を書き足し忘れれば黙って通る。**数も突き合わせる。**
     """
     root = pathlib.Path(__file__).resolve().parents[1]
     app_js = (root / "web" / "app.js").read_text(encoding="utf-8")
@@ -1051,20 +1061,31 @@ def test_the_two_places_that_decide_nothing_happened_agree():
     i = body.index("var empty =")
     statement = body[i:body.index(";", i)]
 
-    for name in ("revealed", "stopped", "purged", "halted", "already", "prevented",
-                 "notice"):
+    screen_items = ("revealed", "stopped", "purged", "halted", "already",
+                    "prevented", "notice", "preserve")
+    for name in screen_items:
         assert name in statement, f"画面側の空振り判定が {name} を数えていない"
+    # 一覧に無いものが増えていないか。`!` の数＝否定した項目の数で見る
+    assert statement.count("!") == len(screen_items), (
+        f"画面側の空振り判定の項目数が一覧と合わない: {statement}"
+    )
 
     # エンジン側（ActionOutcome.empty）と項目が揃っていること
     engine_py = (root / "irdojo" / "engine.py").read_text(encoding="utf-8")
     j = engine_py.index("    def empty(self)")
     prop = engine_py[j:engine_py.index("\n\n", j)]
-    for name in ("revealed", "contained", "eradicated", "halted",
-                 "already", "prevented"):
+    engine_items = ("revealed", "contained", "eradicated", "halted",
+                    "already", "prevented")
+    for name in engine_items:
         assert f"self.{name}" in prop, f"エンジン側の空振り判定が {name} を数えていない"
-    # 連絡はどちらの側でも空振りにならない。片方だけ直すと、
+    # 連絡と仕掛けは、どちらの側でも空振りにならない。片方だけ直すと、
     # 「周知が行き渡った」の下にオレンジの「何も出てこなかった」が並ぶ
     assert "COMMUNICATE" in prop, "エンジン側が連絡を除外していない"
+    assert "self.preserves" in prop, "エンジン側が仕掛けを除外していない"
+    # 両側の項目数が揃っていること（片側にだけ足した日に落ちる）
+    assert len(engine_items) + 2 == len(screen_items), (
+        "エンジン側と画面側で、空振り判定の項目数が食い違っている"
+    )
 
 
 def test_the_projection_is_never_shown_during_play(client):

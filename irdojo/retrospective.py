@@ -118,6 +118,33 @@ def _candidates(scenario: Scenario) -> list[Action]:
     return [a for a in scenario.actions if set(a.yields) & needed]
 
 
+def _with_prerequisites(scenario: Scenario, action: Action) -> list[Action]:
+    """その手を押すために必ず先に押す手を、順番どおりに並べて返す（SPEC 5.6.2）。
+
+    **`requires_evidence` は辿らない。** あれは「何が分かったら次を思いつくか」
+    の連鎖で、最短経路は理論的な下限として**手がかりの連鎖を無視する**
+    （元からそう定義されている）。`requires_actions` は種類が違う —
+    取っていないイメージは、何を知っていても読めない。ここを無視すると、
+    講評が「読む 25分で足りた」という**盤面では押せない**下限を提示する。
+    """
+    by_id = scenario.action_by_id
+    out: list[Action] = []
+    seen: set[str] = set()
+
+    def walk(a: Action) -> None:
+        if a.id in seen:
+            return
+        seen.add(a.id)
+        for pid in a.requires_actions:
+            prior = by_id.get(pid)
+            if prior is not None:
+                walk(prior)
+        out.append(a)
+
+    walk(action)
+    return out
+
+
 def minimal_path(scenario: Scenario) -> tuple[int | None, list[str], bool]:
     """正しい被疑判定に到達する最小コストの経路を求める（集合被覆）。"""
     actions = _candidates(scenario)
@@ -133,19 +160,26 @@ def minimal_path(scenario: Scenario) -> tuple[int | None, list[str], bool]:
     actions.sort(key=lambda a: a.cost_minutes)
     best: dict[str, object] = {"cost": None, "ids": []}
 
-    def dfs(i: int, chosen: list[Action], cost: int, evidence: set[str]) -> None:
+    def dfs(i: int, chosen: list[str], cost: int, evidence: set[str]) -> None:
         cur_best = best["cost"]
         if cur_best is not None and cost >= cur_best:  # type: ignore[operator]
             return
         if _requirements_met(scenario, evidence):
             best["cost"] = cost
-            best["ids"] = [a.id for a in chosen]
+            best["ids"] = list(chosen)
             return
         if i >= len(actions):
             return
         for j in range(i, len(actions)):
             a = actions[j]
-            dfs(j + 1, chosen + [a], cost + a.cost_minutes, evidence | set(a.yields))
+            # 前提の手は、選んだ手と一緒に必ず付いてくる（費用も証拠も）
+            add = [x for x in _with_prerequisites(scenario, a) if x.id not in chosen]
+            dfs(
+                j + 1,
+                chosen + [x.id for x in add],
+                cost + sum(x.cost_minutes for x in add),
+                evidence | {e for x in add for e in x.yields},
+            )
 
     dfs(0, [], 0, set())
     if best["cost"] is None:
@@ -357,22 +391,35 @@ def minimal_response(
 
 
 def _greedy(scenario: Scenario, actions: list[Action]) -> list[Action]:
-    """大きいシナリオ用の近似。被覆できていない要件を最も安く減らす順に取る。"""
+    """大きいシナリオ用の近似。被覆できていない要件を最も安く減らす順に取る。
+
+    **前提の手（`requires_actions`）は費用に入れる。** 読む手だけを
+    25分で数えると、取っていないイメージを読む経路が下限として出る。
+    """
     picked: list[Action] = []
+    taken: set[str] = set()
     evidence: set[str] = set()
     remaining = list(actions)
     while remaining and not _requirements_met(scenario, evidence):
         best_a = None
+        best_add: list[Action] = []
         best_gain = 0.0
         for a in remaining:
-            gain = len(set(a.yields) - evidence) / a.cost_minutes
+            add = [x for x in _with_prerequisites(scenario, a) if x.id not in taken]
+            cost = sum(x.cost_minutes for x in add)
+            if not cost:
+                continue
+            gain = len({e for x in add for e in x.yields} - evidence) / cost
             if gain > best_gain:
-                best_gain, best_a = gain, a
+                best_gain, best_a, best_add = gain, a, add
         if best_a is None:
             break
-        picked.append(best_a)
-        evidence |= set(best_a.yields)
-        remaining.remove(best_a)
+        for x in best_add:
+            picked.append(x)
+            taken.add(x.id)
+            evidence |= set(x.yields)
+            if x in remaining:
+                remaining.remove(x)
     return picked
 
 

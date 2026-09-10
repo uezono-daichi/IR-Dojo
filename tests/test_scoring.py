@@ -16,7 +16,10 @@ INVESTIGATION = [
     ("act_asset_inventory", 10),
     ("act_backup_config", 15),
     ("act_smb_session_fs01", 30),      # q_lateral_movement を解消
-    ("act_memory_dump_ws042", 45),
+    # 仕掛けと読解に割れている（SPEC 5.6.2）。合計は割る前と同じ 45分で、
+    # 6.8 の計算例の経過時間は 1分も変わらない
+    ("act_memory_capture_ws042", 20),
+    ("act_memory_analyze_ws042", 25),
     ("act_proxy_log", 20),
     ("act_dlp_review", 25),            # ev_007 取得後に ws-107 を調べる 25分
 ]
@@ -196,8 +199,12 @@ def test_minimal_path(scenario):
     assert minutes == 170
     assert sorted(ids) == [
         "act_collect_evtx_fs01", "act_local_collect_ws055", "act_mail_gateway",
-        "act_memory_dump_ws042", "act_smb_session_fs01",
+        "act_memory_analyze_ws042", "act_memory_capture_ws042",
+        "act_smb_session_fs01",
     ]
+    # 仕掛けは読解の前に置かれていること。順序を落とすと、講評は
+    # **盤面では押せない**下限（取っていないイメージを読む）を提示する
+    assert ids.index("act_memory_capture_ws042") < ids.index("act_memory_analyze_ws042")
 
 
 def test_counterfactual_reports_held_refutation(scenario):
@@ -211,47 +218,78 @@ def test_counterfactual_reports_held_refutation(scenario):
     assert cfs[0].refuting_obtained == ["ev_003"]
 
 
+def _with_mode(mode: str, refuted_by: list[str]):
+    """ev_005 の棄却条件だけを差し替えた盤面を作る。
+
+    **同梱シナリオに `all` の誤導が無くなったので、盤面から借りない**（v1.43）。
+    ev_005 は「向きの取り違え」型になり、棄却はもう一方の端のログ 1つで
+    閉じる（3.4 の型の表）。多段はもともと「攻撃と時刻が近い」型に固有の
+    組み立てで、型を変えたときに一緒に降りた。
+    `refutation_mode` はエンジンの機構なので、盤面がたまたま使っているか
+    どうかとは別に見張る — ここを盤面依存にすると、盤面を書き換えた日に
+    機構の検査ごと消える。
+    """
+    import copy
+
+    import yaml
+
+    from irdojo.loader import SCENARIO_DIR, load_scenario_text
+
+    data = yaml.safe_load(
+        (SCENARIO_DIR / "ransomware-initial-response-01.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    data = copy.deepcopy(data)
+    ev = next(e for e in data["evidence"] if e["id"] == "ev_005")
+    ev["refuted_by"] = list(refuted_by)
+    ev["refutation_mode"] = mode
+    return load_scenario_text(yaml.safe_dump(data, allow_unicode=True))
+
+
 def test_refutation_needs_every_piece_when_mode_is_all(scenario):
     """揃って初めて棄却できる誤導は、片方だけ持っていても棄却されない。
 
-    ev_005（ws-113 の深夜の管理者ログオン）は、承認済みの作業予定（ev_008）と
-    端末側の実行履歴（ev_013）が揃って初めて取り下げられる。台帳が言うのは
-    「その時間帯に作業が承認されていた」ことであって、記録されたログオンが
-    その作業だったことではない — 攻撃者が保守作業の時間帯に紛れるのは
-    実務でよくある形である。逆に端末側だけでも足りない（収集範囲の外に
-    メモリ上の痕跡と手動操作が残っている）。
+    「その時間帯に作業が承認されていた」（台帳）は、記録された動きが
+    その作業だったことまでは言わない。攻撃者が保守作業の時間帯に紛れるのは
+    実務でよくある形なので、承認の存在だけでは取り下げられない盤面が
+    書けなければならない。
 
-    片方で棄却できてしまうと、この誤導は台帳1枚（10分）で畳めることになり、
-    盤面が教えたいこと（否定の材料は1つでは閉じない）が消える。
+    片方で棄却できてしまうと、その型の誤導は台帳1枚（10分）で畳めることになり、
+    「否定の材料は1つでは閉じない」が盤面から消える。
     """
-    ev = scenario.evidence_by_id["ev_005"]
-    assert ev.refutation_mode == "all"
-    assert not ev.is_refuted({"ev_008"})
-    assert not ev.is_refuted({"ev_013"})
-    assert ev.is_refuted({"ev_008", "ev_013"})
+    two_step = _with_mode("all", ["ev_008", "ev_013"]).evidence_by_id["ev_005"]
+    assert not two_step.is_refuted({"ev_008"})
+    assert not two_step.is_refuted({"ev_013"})
+    assert two_step.is_refuted({"ev_008", "ev_013"})
 
-    # 同じ盤面に「1つで足りる」型も居ること。どちらか一方しか無い盤面では、
+    # 同梱の盤面は「1つで足りる」側。どちらか一方しか作れない実装では、
     # refutation_mode は書いてあるだけで何も分けていない
-    one_shot = scenario.evidence_by_id["ev_007"]
+    one_shot = scenario.evidence_by_id["ev_005"]
     assert one_shot.refutation_mode == "any"
-    assert one_shot.is_refuted({"ev_003"})
+    assert one_shot.is_refuted({"ev_013"})
+    assert not one_shot.is_refuted({"ev_008"})
 
 
-def test_counterfactual_does_not_call_a_half_refutation_enough(scenario):
+def test_counterfactual_does_not_call_a_half_refutation_enough():
     """all の誤導で片方しか持っていない人に「材料は手元にあった」と言わない。
 
     講評の言い回しは refuted（棄却できたか）で決まる。ここを画面側が
     「未取得が残っているか」で判断すると、any で候補が2つある誤導に
     「これだけでは足りません」と出る。条件を知っているのは
     Evidence.is_refuted だけなので、結論はエンジン側で出して渡す。
+
+    盤面は借りずに作る（`_with_mode`）。同梱シナリオの誤導はすべて
+    1つで閉じる型になったが、**言い回しの分岐は機構として残っている。**
     """
-    e = Engine(scenario, "business_continuity", None)
+    sc = _with_mode("all", ["ev_008", "ev_013"])
+    e = Engine(sc, "business_continuity", None)
     e.decide(Decision(kind="action", action_id="act_dc_authlog"))      # ev_005
     e.decide(Decision(kind="action", action_id="act_asset_inventory"))  # ev_008
     e.decide(Decision(kind="declare_assessment", assessment=["ws-113"]))
     e.decide(Decision(kind="finish"))
 
-    cfs = [c for c in retrospective.build(e.state, scenario).counterfactuals
+    cfs = [c for c in retrospective.build(e.state, sc).counterfactuals
            if c.evidence_id == "ev_005"]
     assert len(cfs) == 1
     cf = cfs[0]
@@ -260,6 +298,27 @@ def test_counterfactual_does_not_call_a_half_refutation_enough(scenario):
     assert cf.refuting_obtained == ["ev_008"]
     assert cf.refuting_evidence == ["ev_013"]
     assert cf.obtainable_by                   # 取りに行ける手が盤面にある
+
+
+def test_the_other_end_is_what_takes_the_direction_trap_down(scenario):
+    """向きの取り違えは、もう一方の端のログでしか畳めない（SPEC 3.4）。
+
+    dc01 に残るのは、自分に向かって来たものだけである。端末の名前は
+    渡すが、その端末の上で何が動いていたかは渡さない。台帳を引いても
+    決まらない — 台帳が言うのは時間帯であって、向きではない。
+
+    ここが緩む（台帳でも畳める）と、盤面の誤導は「攻撃と時刻が近い」型
+    2つに戻り、教えられる棄却の型が1つ減る。
+    """
+    ev = scenario.evidence_by_id["ev_005"]
+    assert ev.misleading and ev.points_to == ["ws-113"]
+    assert ev.is_refuted({"ev_013"})          # もう一方の端
+    assert not ev.is_refuted({"ev_008"})      # 台帳は向きを決めない
+
+    # 棄却材料に辿り着く手が、その端末そのものを調べる手であること
+    by_action = [a for a in scenario.actions if "ev_013" in a.yields]
+    assert len(by_action) == 1
+    assert by_action[0].investigates == ["ws-113"]
 
 
 def test_assist_level_does_not_change_scoring(scenario):
@@ -307,7 +366,8 @@ SKILLED_T = ["act_collect_evtx_fs01"]
 SKILLED_I = [
     "act_mail_gateway", "act_smb_session_fs01",
     # 3台目を名指しに載せる唯一の手。管理コンソールの照会では出てこない
-    "act_local_collect_ws055", "act_memory_dump_ws042",
+    "act_local_collect_ws055",
+    "act_memory_capture_ws042", "act_memory_analyze_ws042",
 ]
 
 
@@ -355,10 +415,13 @@ def test_volatile_first_keeps_everything(scenario):
     「見たことを忘れる」挙動にしてはいけない。
     """
     e, outs = _play_order(
-        scenario, ["act_memory_dump_ws042", "act_disk_image_ws042"]
+        scenario,
+        ["act_memory_capture_ws042", "act_memory_analyze_ws042",
+         "act_disk_image_ws042"],
     )
-    assert outs[0].revealed == ["ev_009"]
-    assert outs[1].revealed == ["ev_014"]
+    assert outs[0].revealed == []           # 仕掛けは証拠を産まない
+    assert outs[1].revealed == ["ev_009"]
+    assert outs[2].revealed == ["ev_014"]
     assert "ev_009" in e.state.obtained_evidence
     assert "q_persistence" in e.state.resolved_questions
     assert e.state.lost_evidence == []
@@ -367,10 +430,15 @@ def test_volatile_first_keeps_everything(scenario):
 def test_destroying_first_loses_it_for_good(scenario):
     """先に止めてしまうと、その情報は二度と取れない（順序の問題）。"""
     e, outs = _play_order(
-        scenario, ["act_disk_image_ws042", "act_memory_dump_ws042"]
+        scenario,
+        ["act_disk_image_ws042", "act_memory_capture_ws042",
+         "act_memory_analyze_ws042"],
     )
     assert outs[0].revealed == ["ev_014"]
-    assert outs[1].empty            # 45分かけて何も出てこない
+    # 仕掛けは空振りにならない（**時計にしか効かない**保全なので、
+    # 自分の手で消したものは戻ってこない）。読む手のほうが空振りになる
+    assert not outs[1].empty
+    assert outs[2].empty            # 25分かけて何も出てこない
     assert "ev_009" not in e.state.obtained_evidence
     assert "q_persistence" not in e.state.resolved_questions
     assert e.state.lost_evidence == ["ev_009"]
@@ -381,10 +449,19 @@ def test_every_action_returns_something(scenario):
 
     実務でやるべき調査を「押しても何も出ない罠」にすると、
     探索そのものを避けることを教えてしまう（SPEC 6.6）。
+
+    **返すものは証拠だけではない**（v1.43）。仕掛けの手（`secures`）は
+    証拠を1件も産まないが、盤面を変える — 以後その証拠は時計では
+    失われなくなる（SPEC 5.6.3）。ここを `yields` だけで見張ると、
+    仕掛けと読解を割った瞬間に「罠を置いた」と誤判定する。
+    見るべき性質は `ActionOutcome.empty` と同じ「押して何かが起きるか」で、
+    ここが両者で食い違うと、画面に緑の枠と「何も出てこなかった」が並ぶ。
     """
     for a in scenario.actions:
         if a.type is ActionType.INVESTIGATE:
-            assert a.yields, f"{a.id}: 何も返さない調査アクションになっている"
+            assert a.yields or a.secures, (
+                f"{a.id}: 押しても盤面が何も変わらない調査アクションになっている"
+            )
 
 
 def test_orthogonal_findings_exist(scenario):
@@ -443,7 +520,8 @@ def test_destroyed_evidence_cannot_be_reacquired(scenario):
     e = Engine(scenario, "business_continuity", None)
     e.decide(Decision(kind="action", action_id="act_collect_evtx_fs01"))
     e.decide(Decision(kind="action", action_id="act_disk_image_ws042"))
-    out = e.decide(Decision(kind="action", action_id="act_memory_dump_ws042"))
+    e.decide(Decision(kind="action", action_id="act_memory_capture_ws042"))
+    out = e.decide(Decision(kind="action", action_id="act_memory_analyze_ws042"))
     assert out.empty
     assert "ev_009" not in e.state.obtained_evidence
 
@@ -470,13 +548,13 @@ def test_actions_unlock_from_findings(scenario):
     e = Engine(scenario, "damage_minimization", None)
     at_start = {a.id for a in e.available_actions()}
     # ブリーフィングは fs01 しか言っていないので、ws-042 はまだ視界にない
-    assert "act_memory_dump_ws042" not in at_start
+    assert "act_memory_capture_ws042" not in at_start
     assert "act_disk_image_ws042" not in at_start
 
     out = e.decide(Decision(kind="action", action_id="act_collect_evtx_fs01"))
     assert "ev_001" in out.revealed          # ここで ws-042 の名前が出る
-    assert "act_memory_dump_ws042" in out.unlocked
-    assert "act_memory_dump_ws042" in {a.id for a in e.available_actions()}
+    assert "act_memory_capture_ws042" in out.unlocked
+    assert "act_memory_capture_ws042" in {a.id for a in e.available_actions()}
 
 
 def test_misleading_evidence_also_opens_doors(scenario):
@@ -565,7 +643,8 @@ def test_timeline_fires_while_you_work(scenario):
     assert out.events == []                       # まだ何も来ない
 
     e.decide(Decision(kind="action", action_id="act_netflow_overview"))         # 30→50分
-    e.decide(Decision(kind="action", action_id="act_memory_dump_ws042"))        # 50→95分
+    e.decide(Decision(kind="action", action_id="act_memory_capture_ws042"))     # 50→70分
+    e.decide(Decision(kind="action", action_id="act_memory_analyze_ws042"))     # 70→95分
     e.decide(Decision(kind="action", action_id="act_disk_image_ws042"))         # 95→155分
     e.decide(Decision(kind="action", action_id="act_local_collect_ws055"))     # 155→195分
     assert e.state.fired_events == []             # ここまでは何も起きない
@@ -627,7 +706,8 @@ def test_empty_counts_only_the_action(scenario):
     e = Engine(scenario, "damage_minimization", None)
     e.decide(Decision(kind="action", action_id="act_collect_evtx_fs01"))       #  0→ 30分
     e.decide(Decision(kind="action", action_id="act_disk_image_ws042"))        # 30→ 90分
-    out = e.decide(Decision(kind="action", action_id="act_memory_dump_ws042")) # 90→135分
+    e.decide(Decision(kind="action", action_id="act_memory_capture_ws042"))    # 90→110分
+    out = e.decide(Decision(kind="action", action_id="act_memory_analyze_ws042"))  # →135分
     assert out.empty                              # 先に壊したので空振り
     assert out.events == []
     e.decide(Decision(kind="action", action_id="act_smb_session_fs01"))       # 135→165分
@@ -641,7 +721,8 @@ def test_empty_counts_only_the_action(scenario):
 # 解放を見ない理論的な下限なので、そのままでは打てない）
 REACHABLE_PATH = [
     "act_collect_evtx_fs01", "act_netflow_overview", "act_mail_gateway",
-    "act_smb_session_fs01", "act_memory_dump_ws042",
+    "act_smb_session_fs01",
+    "act_memory_capture_ws042", "act_memory_analyze_ws042",
 ]
 
 
@@ -737,7 +818,7 @@ def test_exhaustive_play_crosses_the_bend_early(scenario):
     """全部押す側は中盤で折れ点を踏む。網羅は戦略ではない、を体で知る。"""
     e = Engine(scenario, "damage_minimization", None)
     bend = scenario.damage.acceleration.threshold_minutes
-    crossed_at, total = None, 0
+    crossed_at, crossed_minutes, total = None, None, 0
     while True:
         avail = [
             a for a in e.available_actions()
@@ -748,13 +829,22 @@ def test_exhaustive_play_crosses_the_bend_early(scenario):
         total += 1
         e.decide(Decision(kind="action", action_id=avail[0].id))
         if crossed_at is None and e.state.elapsed_minutes > bend:
-            crossed_at = total
+            crossed_at, crossed_minutes = total, e.state.elapsed_minutes
+    total_minutes = e.state.elapsed_minutes
     assert crossed_at is not None, "全部押しても折れ点に届かない"
-    # 「中盤までに」。**6割にしてあるのは、折れ点が L に紐づいているから。**
+    # 「中盤までに」。**数えるのは手ではなく分である**（v1.43）。
+    # 手で数えていた頃、45分の1手を 20分＋25分に割っただけで
+    # 12/20手（0.60）が 13/21手（0.62）になり、盤面では 1分も
+    # 変わっていないのにここが落ちた。折れ点は時刻で定義されているので、
+    # 比べる単位も時刻にする — メニューの分け方を変えても動かない。
+    # **6割にしてあるのは、折れ点が L に紐づいているから。**
     # L は方針ごとに違い、折れ点は最も高くつく方針で置く（v1.40）ので、
     # メニューの長さは変わらないまま折れ点だけが後ろへ動く。
     # ここを厳密に半分で切ると、方針を1本足すたびにこの数字が動く
-    assert crossed_at <= total * 0.6, f"{total}手中 {crossed_at}手目でようやく到達"
+    assert crossed_minutes <= total_minutes * 0.6, (
+        f"全部で {total_minutes}分のうち {crossed_minutes}分でようやく到達"
+        f"（{total}手中 {crossed_at}手目）"
+    )
 
 
 # ── 先手を打って、消えるのを止める ──────────────────────────
@@ -840,7 +930,8 @@ def test_notice_is_a_bet_on_your_own_pace(scenario):
         "act_smb_session_fs01", "act_collect_evtx_fs01", "act_dlp_review",
         "act_console_query_ws055", "act_triage_ws113", "act_interview_sato",
         "act_mail_gateway", "act_backup_config", "act_proxy_log",
-        "act_memory_dump_fs01", "act_memory_dump_ws042",
+        "act_memory_dump_fs01",
+        "act_memory_capture_ws042", "act_memory_analyze_ws042",
     ]
     pol = scenario.policy_by_id["evidence_preservation"]
 
@@ -863,6 +954,157 @@ def test_notice_is_right_or_wrong_depending_on_the_policy(scenario):
     assert e.state.violations_by_policy["business_continuity"]
     assert not e.state.violations_by_policy["evidence_preservation"]
     assert not e.state.violations_by_policy["damage_minimization"]
+
+
+# ── 先に仕掛けておく（SPEC 5.6.2 / 5.6.3） ─────────────────────
+
+
+CAPTURE = "act_memory_capture_ws042"
+ANALYZE = "act_memory_analyze_ws042"
+
+
+def _burn_until(scenario, minutes, skip=()):
+    """押せる手を押して、指定の時刻を越える。"""
+    e = Engine(scenario, "damage_minimization", None)
+    while e.state.elapsed_minutes <= minutes:
+        avail = [
+            a for a in e.available_actions()
+            if a.type == ActionType.INVESTIGATE
+            and a.id not in e.state.executed_actions
+            and a.id not in skip
+        ]
+        if not avail:
+            break
+        e.decide(Decision(kind="action", action_id=avail[0].id))
+    return e
+
+
+def test_you_cannot_read_an_image_you_did_not_take(scenario):
+    """読む手は、仕掛けを打ち終わるまで一覧に出ない（SPEC 5.6.2）。
+
+    `requires_evidence` は「何が分かったら次を思いつくか」の連鎖で、
+    どれか1つ持っていれば開く。仕掛けの門はそれとは種類が違う —
+    取っていないイメージは、何を知っていても読めない。
+
+    ここが緩むと 20分は**払わなくてよい費用**になり、
+    「長く回るものを先に仕掛けろ」という主題そのものが消える。
+    """
+    e = Engine(scenario, "damage_minimization", None)
+    e.decide(Decision(kind="action", action_id="act_collect_evtx_fs01"))
+    e.decide(Decision(kind="action", action_id="act_netflow_overview"))
+    assert CAPTURE in {a.id for a in e.available_actions()}
+    assert ANALYZE not in {a.id for a in e.available_actions()}
+    with pytest.raises(InvalidDecision):
+        e.decide(Decision(kind="action", action_id=ANALYZE))
+
+    out = e.decide(Decision(kind="action", action_id=CAPTURE))
+    assert ANALYZE in out.unlocked
+    assert ANALYZE in {a.id for a in e.available_actions()}
+
+
+def test_setting_the_trap_is_never_an_empty_move(scenario):
+    """仕掛けは、間に合っても間に合わなくても同じ顔で返る（SPEC 5.6.3）。
+
+    仕掛けは証拠を1件も産まない。ここを空振り扱いにすると、20分かけて
+    「何も出てこなかった」と返る。さらに、既に奪われていた回にだけ
+    文言が変われば、それが**間に合わなかったことの告知**になる（原則5）。
+    連絡（5.6.1）で一度踏んだのと同じ穴で、対処も同じ — 型で決める。
+
+    壊れ方: 画面側の判定だけを直すと、緑の枠の中にオレンジの
+    「何も出てこなかった」が並ぶ（両方を見張るのは test_ui_rules）。
+    """
+    e = Engine(scenario, "damage_minimization", None)
+    e.decide(Decision(kind="action", action_id="act_collect_evtx_fs01"))
+    e.decide(Decision(kind="action", action_id="act_netflow_overview"))
+    in_time = e.decide(Decision(kind="action", action_id=CAPTURE))
+    assert in_time.revealed == []
+    assert not in_time.empty
+    assert in_time.preserves
+
+    # 先に自分の手で消してから仕掛けた場合。**返り方は1文字も変わらない**
+    late = Engine(scenario, "damage_minimization", None)
+    late.decide(Decision(kind="action", action_id="act_collect_evtx_fs01"))
+    late.decide(Decision(kind="action", action_id="act_netflow_overview"))
+    late.decide(Decision(kind="action", action_id="act_disk_image_ws042"))
+    out = late.decide(Decision(kind="action", action_id=CAPTURE))
+    assert out.revealed == []
+    assert not out.empty
+    assert out.preserves == in_time.preserves
+
+
+def test_securing_stops_the_clock_but_not_your_own_hand(scenario):
+    """`secures` は時計にだけ効き、排他には効かない（SPEC 5.6.3 / 3.8）。
+
+    奪われた原因を時計と排他に仕分けるのは 8.2 が定めた区別で、
+    設計上の意味がまるで違う。時計に奪われるのは「先に仕掛けておけ」で
+    防げるべきもの、自分の手で消すのは「順序そのものが判断」である。
+
+    両方に効かせると、メモリとディスクイメージの排他（3.8 の中核）が
+    盤面から消える — 仕掛けてから 60分の停止採取をすれば両方手に入る、
+    という一方通行の得になってしまう。
+    """
+    # 時計の側: 仕掛けてあれば、現場が端末を触っても読める
+    field_reboot = next(t for t in scenario.timeline if "ev_009" in t.destroys)
+    skip = {ANALYZE, "act_disk_image_ws042"}     # 読む手と排他の手は取っておく
+    e = _burn_until(scenario, field_reboot.at_minutes, skip=skip)
+    assert CAPTURE in e.state.executed_actions, "仕掛けが押されていない"
+    assert field_reboot.id in e.state.fired_events, "現場の再起動まで進んでいない"
+    out = e.decide(Decision(kind="action", action_id=ANALYZE))
+    assert out.revealed == ["ev_009"], "仕掛けてあったのに時計に奪われている"
+    assert "ev_009" not in e.state.lost_evidence
+
+    # 排他の側: 仕掛けてあっても、自分で停止採取すれば読めなくなる
+    own = Engine(scenario, "damage_minimization", None)
+    own.decide(Decision(kind="action", action_id="act_collect_evtx_fs01"))
+    own.decide(Decision(kind="action", action_id="act_netflow_overview"))
+    own.decide(Decision(kind="action", action_id=CAPTURE))
+    own.decide(Decision(kind="action", action_id="act_disk_image_ws042"))
+    assert own.decide(Decision(kind="action", action_id=ANALYZE)).empty
+    assert "ev_009" in own.state.lost_evidence
+
+
+def test_taking_it_is_not_the_same_as_reading_it(scenario):
+    """取っただけでは根拠にならない（SPEC 5.6.2 / 6.2）。
+
+    仕掛けだけ打って読まずに止めることは選べる。25分は被害を伸ばすだけで、
+    被害最小化最優先の下では実際に安く上がる。**その選択が、判断の根拠を
+    1つ欠いた状態で終わることは採点に出る。** 仕掛けが論点まで解いて
+    しまうと「取った」と「読んだ」が同じことになり、割った意味がなくなる。
+
+    **「読まないほうが得」にはしない。** 読まない側が総合で勝つ盤面を
+    作ると、8.3 の「調べない像は調べた像のどれにも勝たない」が先に壊れる。
+    ここは両方を同時に見張る — 25分の代価は本物（被害が増える）で、
+    それでも総合は読むほうが上、という形でなければならない。
+    """
+    def play(read: bool):
+        e = Engine(scenario, "damage_minimization", None)
+        for aid in ("act_collect_evtx_fs01", "act_netflow_overview",
+                    "act_mail_gateway", "act_smb_session_fs01", CAPTURE):
+            e.decide(Decision(kind="action", action_id=aid))
+        if read:
+            e.decide(Decision(kind="action", action_id=ANALYZE))
+        e.decide(Decision(kind="declare_assessment",
+                          assessment=["ws-042", "fs01", "ws-055"]))
+        for aid in ("act_isolate_ws055", "act_shutdown_fs01", "act_rebuild_ws042"):
+            e.decide(Decision(kind="action", action_id=aid))
+        e.decide(Decision(kind="finish"))
+        return e
+
+    took = play(read=False)
+    read = play(read=True)
+    assert "q_persistence" not in took.state.resolved_questions
+    assert "q_persistence" in read.state.resolved_questions
+    assert took.state.assessment_snapshot.unresolved_critical
+
+    pol = scenario.policy_by_id["damage_minimization"]
+    thin = scoring.score(took.state, scenario, pol)
+    thick = scoring.score(read.state, scenario, pol)
+    # 25分の代価は本物。読んだ分だけ被害は伸びる
+    assert thick.consequences.total_damage > thin.consequences.total_damage
+    # それでも総合は読むほうが上。動くのは論点であって、名指しの支持率ではない
+    assert thick.composite_score > thin.composite_score
+    assert thick.metrics["unresolved_questions"] < thin.metrics["unresolved_questions"]
+    assert thick.metrics["assessment_support"] == thin.metrics["assessment_support"]
 
 
 # ── 復旧地平（SPEC 5.8 / 6.3） ──────────────────────────────
@@ -1011,20 +1253,29 @@ def test_losing_everything_losable_reaches_the_bottom_of_the_band(scenario):
 
 
 def _play_until(scenario, minutes, skip):
-    """指定の分を越えるまで、調査を安い順に押す。"""
+    """指定の分を越えるまで、調査を安い順に押す。
+
+    **まだ開いていない手は、開いてからもう一度試す。** 1周だけ回して
+    諦めていた頃は、前提のある手（`requires_evidence` / `requires_actions`）が
+    順に落ちるので、押せる手が残っているのに時計だけが止まった。
+    """
     e = Engine(scenario, "damage_minimization", None)
     acts = sorted(
         (a for a in scenario.actions
          if a.type == ActionType.INVESTIGATE and a.id not in skip),
         key=lambda a: a.cost_minutes,
     )
-    for a in acts:
-        if e.state.elapsed_minutes >= minutes:
+    todo = [a.id for a in acts]
+    while todo and e.state.elapsed_minutes < minutes:
+        for aid in list(todo):
+            try:
+                e.decide(Decision(kind="action", action_id=aid))
+            except InvalidDecision:
+                continue
+            todo.remove(aid)
             break
-        try:
-            e.decide(Decision(kind="action", action_id=a.id))
-        except InvalidDecision:
-            continue
+        else:
+            break            # どれも押せない＝手詰まり
     return e
 
 

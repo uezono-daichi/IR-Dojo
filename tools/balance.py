@@ -155,14 +155,31 @@ def _shallow(sc: Scenario) -> list[str]:
     return [min(acts, key=lambda a: (a.cost_minutes, a.id)).id]
 
 
+# **最短経路を押す像は、途中で降りない**（v1.43）。
+# `stop_when_confident` は「分かったと思ったら動く」という**不確実性の模型**で、
+# 答えを知っている像には当てはまらない。最短経路は
+# 「侵害資産を全部名指しでき、critical 論点が全部解ける」最小の集合として
+# 解かれているので（retrospective._requirements_met）、critical が
+# 片付いた時点で降りると**自分で立てた計画の後半を捨てる**ことになる。
+#
+# ここを既定のままにしていた頃は、実際に降りるかどうかが
+# `minimal_path` が id を吐く順（DFS の列挙順＝実装の都合）で決まっていた。
+# v1.42 までは持続化を解く手がたまたま最も高くつき、最後尾に落ちていたので
+# 一度も降りなかった。仕掛けと読解を割って 45分が 20+25 になった途端、
+# 同じ集合が安い側へ動いて像が 130分で降り、
+# 「巧いプレイ」が ws-055 を名指ししなくなった。測っていたのは
+# 盤面ではなく列挙順である。
+SKILLED_STOPS = False
+
 PROFILES = [
     Profile("skilled", "巧い", "最短経路のあと、作り直すところまで行く", _skilled,
-            eradicates_named=True),
+            stop_when_confident=SKILLED_STOPS, eradicates_named=True),
     # skilled と**調査量が1分も違わない**対照。違うのは封じ込めの束だけ。
     # これが無いと「根絶したか」の差を調査量の差と切り分けられない
     # （誤導を追う／棄却する の対で使ったのと同じ作り方）
     Profile("skilled_halfway", "止めるだけ",
-            "同じ調査量で、通信を断つところまでで降りた場合", _skilled),
+            "同じ調査量で、通信を断つところまでで降りた場合", _skilled,
+            stop_when_confident=SKILLED_STOPS),
     Profile("exhaustive", "全部押す", "取捨選択をしない", _exhaustive,
             stop_when_confident=False, contains_everything=True),
     Profile("wanderer", "誤導を追う", "棄却の材料を持ったまま名指しする", _wanderer,
@@ -189,7 +206,7 @@ PROFILES = [
     # **対応フェーズで最も高くつく選択肢**でもある。この像が無いと
     # 依存の根を止める手が一度も押されず、封じ込めの取捨選択が測れない
     Profile("decapitate", "根元を落とす", "依存の根を止めれば全部止まると考える",
-            _skilled, contains_root=True),
+            _skilled, stop_when_confident=SKILLED_STOPS, contains_root=True),
     # **名指ししすぎる失敗の、逆側の像**（v1.42）。
     # 画面の並び順に押していき、安い手が何も指さずに返ってきた資産は
     # そこで打ち切る。「調べた。何も出なかった。次へ」は、
@@ -568,8 +585,15 @@ def press_orders(sc: Scenario) -> dict[str, list[str]]:
         "画面の並び順": [a.id for a in acts],
         "安い順": [a.id for a in sorted(acts, key=lambda a: (a.cost_minutes, a.id))],
         "高い順": [a.id for a in sorted(acts, key=lambda a: (-a.cost_minutes, a.id))],
+        # 「揮発性を先に」は**仕掛けの手も揮発性の手として見る**。
+        # 産む証拠だけで並べると、証拠を1件も産まない保全の手（5.6.3）が
+        # 最後尾に落ちる — それは「揮発性を先に」と教わった人の押し順ではない。
+        # 画面に出ているのはラベルと所要だけだが、「取得して保全」という
+        # 動詞を読んだ人はそこから押す
         "揮発性を先に": [
-            a.id for a in sorted(acts, key=lambda a: not (set(a.yields) & volatile))
+            a.id for a in sorted(
+                acts, key=lambda a: not ((set(a.yields) | set(a.secures)) & volatile)
+            )
         ],
         "群ごと": [a.id for a in sorted(acts, key=lambda a: groups[a.group])],
         "ブリーフィングの資産から": [
@@ -1085,6 +1109,41 @@ def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
         "再現率を下げる誤導が盤面にある",
         f"侵害資産を白と読ませる誤導: {traps or 'なし'}"
         f"（誤導 {[e.id for e in sc.evidence if e.misleading]} のうち）",
+    ))
+
+    # **誤導の棄却手段は、1種類に寄っていないか**（SPEC 3.4 の型の表 / v1.43）。
+    # 盤面に誤導が3つあっても、全部が同じ出所で畳めるなら、
+    # 学習者が覚えるのは「まず台帳を引け」の1手であって、棄却の型ではない。
+    # v1.42 まで実際にそうなりかけていた — ev_005 と ev_007 はどちらも
+    # 「攻撃と時刻が近い」型で、どちらも台帳系の資料が棄却材料だった。
+    #
+    # 見るのは**出所（group）**である。証拠そのものの id ではない —
+    # 同じ束から2枚引くのは1種類の手であって2種類ではない。
+    # 判定は2本立てで、後者のほうが強い:
+    #   ① 盤面全体で、棄却の出所が2種類以上に分かれていること
+    #   ② どの1つの出所も、2つ以上の誤導を単独で畳めないこと
+    by_evidence = {e: a.group for a in sc.actions for e in a.yields}
+    traps_all = [e for e in sc.evidence if e.misleading]
+    sources: dict[str, set[str]] = {}
+    for e in traps_all:
+        sources[e.id] = {by_evidence.get(r, "（出所不明）") for r in e.refuted_by}
+    spread = set().union(*sources.values()) if sources else set()
+    # ある出所だけで畳める誤導。all の誤導は材料が全部その出所に無いと畳めない
+    def _closes(group: str, ev) -> bool:
+        got = {r for r in ev.refuted_by if by_evidence.get(r) == group}
+        return ev.is_refuted(got)
+
+    monopoly = {
+        g: [e.id for e in traps_all if _closes(g, e)]
+        for g in spread
+    }
+    hoarding = {g: ids for g, ids in monopoly.items() if len(ids) >= 2}
+    out.append(Check(
+        len(spread) >= 2 and not hoarding,
+        "誤導の棄却手段が1種類に寄っていない",
+        " / ".join(f"{e}: {'・'.join(sorted(sources[e])) or 'なし'}" for e in sources)
+        + f"（出所 {len(spread)}種類）"
+        + (f" 1種類でまとめて畳める組: {hoarding}" if hoarding else ""),
     ))
 
     # 逆側の失敗が、名指ししすぎる失敗と同格に高くつくか。
