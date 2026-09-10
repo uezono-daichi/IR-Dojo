@@ -726,8 +726,8 @@ open_questions:
       封じ込めは時間稼ぎにしかなりません。
 
   - id: q_lateral_movement
-    label: "横展開の経路"
-    question: "ws-042 から fs01 へどう到達したか"
+    label: "横展開の有無と経路"
+    question: "fs01 で起きた大量のファイル操作は、どこから来たか"
     resolved_by: [ev_006]
     resolution_mode: any
     critical: true

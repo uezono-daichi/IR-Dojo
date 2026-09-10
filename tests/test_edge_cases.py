@@ -325,6 +325,73 @@ def test_loader_rejects_a_preventable_event_with_nothing_to_say(raw):
     assert "averted_text が要る" in str(exc.value)
 
 
+def _question(data, qid):
+    return next(q for q in data["open_questions"] if q["id"] == qid)
+
+
+def test_loader_rejects_a_question_that_names_a_compromised_asset(raw):
+    """論点の問い文に答えの資産名を書いたら拒否する。
+
+    これは同梱シナリオが実際に踏んだ形である。「ws-042 から fs01 へ
+    どう到達したか」は、開始0分の画面で compromised と patient_zero を
+    渡していた。論点は最初から出ているので、ここに書いたものは
+    「調べれば分かること」ではなく「最初から配られたもの」になる。
+    """
+    for field, text in (
+        ("question", "ws-042 から fs01 へどう到達したか"),
+        ("label", "ws-042 の横展開"),
+        ("implication", "ws-042 を止めないと同じ経路で他へ広がります。\n"),
+    ):
+        data = copy.deepcopy(raw)
+        _question(data, "q_lateral_movement")[field] = text
+        with pytest.raises(ScenarioError) as exc:
+            build(data)
+        assert "名指し" in str(exc.value), field
+        assert "ws-042" in str(exc.value), field
+
+
+def test_loader_rejects_the_label_of_a_compromised_asset_too(raw):
+    """id を避けても、資産一覧に出ている呼び名で書けば同じことである。"""
+    data = copy.deepcopy(raw)
+    _question(data, "q_lateral_movement")["question"] = "営業部端末から fs01 へどう到達したか"
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "営業部端末" in str(exc.value)
+
+    data = copy.deepcopy(raw)
+    _question(data, "q_lateral_movement")["question"] = "佐藤の端末から何が起きたか"
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "佐藤" in str(exc.value)
+
+
+def test_loader_allows_what_the_briefing_already_gave(raw):
+    """ブリーフィングが渡した資産は、論点で名指ししてよい。
+
+    「fs01 で大量のファイル名変更が検知された」は一次情報として最初に渡している。
+    それを問い文が繰り返しても、新しいことは何も渡していない。
+    ここまで禁じると、何を調べればいいか分からない問いしか書けなくなる。
+    """
+    data = copy.deepcopy(raw)
+    _question(data, "q_lateral_movement")["question"] = "fs01 のファイル操作はどこから来たか"
+    build(data)  # 例外が出ないこと
+
+
+def test_loader_allows_naming_an_innocent_asset(raw):
+    """無関係な資産の名前は禁じない。それは誤導であって漏洩ではない。"""
+    data = copy.deepcopy(raw)
+    _question(data, "q_exfiltration")["question"] = "ws-107 の外部通信は持ち出しか C2 か"
+    build(data)  # 例外が出ないこと
+
+
+def test_every_shipped_question_passes_the_rule(raw):
+    """同梱シナリオの4論点のうち、規則に引っかかるのは1つも無い。
+
+    規則を足した側が「例外を1つ抱えたまま」になっていないことの確認。
+    """
+    build(copy.deepcopy(raw))
+
+
 def test_loader_rejects_prevents_on_a_non_communicate_action(raw):
     data = copy.deepcopy(raw)
     for a in data["actions"]:

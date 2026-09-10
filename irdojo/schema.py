@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 from enum import Enum
 from typing import Literal
 
@@ -521,6 +522,38 @@ class Scenario(Strict):
         return self
 
 
+# ─────────── 資産の名指し（漏洩検査の共通部品） ───────────
+
+
+def asset_names(asset: "Asset") -> set[str]:
+    """その資産を名指ししていると見なす文字列の集合。
+
+    id だけでは足りない。資産一覧と構成図には label がそのまま出ているので、
+    「営業部端末 (佐藤)」と書いても「ws-042」と書いても、読む側には
+    同じ資産を指したことになる。括弧の中の呼び名も同じ。
+    """
+    names = {asset.id}
+    for alias in re.findall(r"[（(]([^）)]+)[）)]", asset.label):
+        alias = alias.strip()
+        if alias:
+            names.add(alias)
+    bare = re.sub(r"[（(][^）)]*[）)]", "", asset.label).strip()
+    if bare:
+        names.add(bare)
+    return names
+
+
+def briefing_assets(sc: "Scenario") -> set[str]:
+    """meta.briefing が既に名指ししている資産の id。
+
+    ブリーフィングは一次情報である。「fs01 で大量のファイル名変更が
+    検知された」と最初に渡した以上、その後の文がその資産に触れても
+    新しいことは何も渡していない。漏洩検査はここを除外する。
+    """
+    text = sc.meta.briefing
+    return {a.id for a in sc.world.assets if any(n in text for n in asset_names(a))}
+
+
 def _validate_scenario(sc: "Scenario") -> None:
     """構造要件と参照整合性（SPEC 7.1）。"""
     asset_ids = {a.id for a in sc.world.assets}
@@ -652,9 +685,48 @@ def _validate_scenario(sc: "Scenario") -> None:
     _reject_unreachable_actions(sc)
     _reject_criticality_inversion(sc)
     _reject_toothless_timeline(sc)
+    _reject_questions_that_name_the_truth(sc)
 
     # 被害モデルの params
     _validate_damage_params(sc.damage)
+
+
+def _reject_questions_that_name_the_truth(sc: "Scenario") -> None:
+    """未解消論点の文が、被疑判定の答えを名指ししていないか。
+
+    論点は assisted / standard では**開始0分・0アクション**で画面の左に出る。
+    そこに侵害された資産の名前を書くと、被疑判定はログを1行も読まずに
+    転記で済む。同梱シナリオの「ws-042 から fs01 へどう到達したか」が
+    まさにそれで、compromised と patient_zero の両方をこの1行で渡していた。
+
+    見るのは label / question / implication の3つ。禁じるのは
+    `compromised ∪ {patient_zero} ∪ persistence` に属する資産の名指しで、
+    **ブリーフィングが既に名指ししている資産は除く** — 一次情報として
+    渡したものを問い文で繰り返しても、新しいことは何も渡していない。
+
+    innocent は禁じない。無関係な資産の名前が問い文に出ることは
+    誤導であって漏洩ではなく、それを潰すのは演習の中身そのものである。
+
+    この検査は ground_truth を見るので作者にしか回らない。PlayerView は
+    通らない（そちらには ground_truth が無い）。
+    """
+    gt = sc.world.ground_truth
+    secret = set(gt.compromised) | {gt.patient_zero} | set(gt.persistence)
+    secret -= briefing_assets(sc)
+    by_id = sc.asset_by_id
+
+    for q in sc.open_questions:
+        for field in ("label", "question", "implication"):
+            text = getattr(q, field) or ""
+            for asset_id in sorted(secret):
+                for name in sorted(asset_names(by_id[asset_id])):
+                    if name in text:
+                        raise ValueError(
+                            f"{q.id}.{field}: 侵害された資産「{name}」を名指ししています。"
+                            "未解消論点は開始直後から画面に出るため、"
+                            "被疑判定の答えを転記できてしまいます"
+                            "（ブリーフィングで既に渡した資産だけが書けます）"
+                        )
 
 
 def _reject_criticality_inversion(sc: "Scenario") -> None:

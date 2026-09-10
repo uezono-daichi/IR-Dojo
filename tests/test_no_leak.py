@@ -353,6 +353,89 @@ def test_group_says_no_more_than_the_label(client):
             )
 
 
+def test_open_questions_do_not_hand_over_the_assessment(client):
+    """未解消論点の文が、侵害された資産を名指ししていない。
+
+    論点は assisted / standard では **開始0分・0アクション**で画面の左に出る。
+    そこに答えの資産名があると、被疑判定はログを1行も読まずに転記で済む。
+    実際「ws-042 から fs01 へどう到達したか」の1行は、compromised と
+    patient_zero の両方をこの時点で渡していた。
+
+    ブリーフィングが既に名指しした資産（fs01）は除く。一次情報として
+    渡したものを問い文で繰り返しても、新しいことは何も渡していない。
+    """
+    from irdojo.schema import asset_names, briefing_assets
+
+    sc = load_scenario("ransomware-initial-response-01")
+    gt = sc.world.ground_truth
+    secret = set(gt.compromised) | {gt.patient_zero} | set(gt.persistence)
+    secret -= briefing_assets(sc)
+    assert secret, "検査対象が空になっている（ブリーフィングが答えを全部渡している）"
+
+    created = client.post(
+        "/api/session",
+        json={"scenario_id": sc.meta.id, "assist_level": "assisted"},
+    ).json()
+    questions = created["view"]["open_questions"]
+    assert questions, "assisted で論点が出ていない"
+
+    for q in questions:
+        text = q["label"] + " " + q["question"]
+        for asset_id in secret:
+            for name in asset_names(sc.asset_by_id[asset_id]):
+                assert name not in text, (
+                    f"{q['id']}: 開始直後の画面が「{name}」を名指ししている"
+                )
+
+
+def test_declaring_without_investigating_cannot_reach_a_full_fact_score(scenario):
+    """何も調べずに宣言したら、どう当てても事実認識層は満点にならない。
+
+    当てずっぽうでも転記でも、資産の組み合わせは 5 台なら 32 通りしかない。
+    そのどれかが満点になるなら、この演習は当てもの（あるいは
+    画面のどこかからの転記）で解けることになる。未解消論点の重みが
+    その穴を塞いでいる — 論点を1つも解消していない状態は、
+    正しい判定であっても「根拠を示せていない」からである。
+    """
+    from itertools import combinations
+
+    from irdojo import retrospective, scoring
+    from irdojo.engine import Decision, Engine, InvalidDecision
+
+    ids = [a.id for a in scenario.world.assets]
+    best = 0.0
+    for n in range(len(ids) + 1):
+        for combo in combinations(ids, n):
+            e = Engine(scenario, scenario.meta.default_policy, None)
+            e.decide(Decision(kind="declare_assessment", assessment=list(combo)))
+            e.decide(Decision(kind="finish"))
+            r = scoring.score(e.state, scenario)
+            assert e.state.elapsed_minutes == 0
+            best = max(best, r.fact_score)
+
+    assert best < 1.0, f"0手で事実認識層が満点になる（{best}）"
+
+    # 調べたプレイには届かないこと。ここが逆転すると、調べる意味が消える
+    minutes, path, _exact = retrospective.minimal_path(scenario)
+    e = Engine(scenario, scenario.meta.default_policy, None)
+    todo = list(path)
+    while todo:
+        for aid in list(todo):
+            try:
+                e.decide(Decision(kind="action", action_id=aid))
+            except InvalidDecision:
+                continue
+            todo.remove(aid)
+            break
+        else:
+            break
+    truth = list(scenario.world.ground_truth.compromised)
+    e.decide(Decision(kind="declare_assessment", assessment=truth))
+    e.decide(Decision(kind="finish"))
+    skilled = scoring.score(e.state, scenario).fact_score
+    assert best < skilled, f"0手 {best} が最短経路 {skilled} に並んでいる（{minutes}分）"
+
+
 def test_command_transcripts_say_no_more_than_the_action(client):
     """実行の記録に「見つかったこと」を書かない（SPEC 5.6）。
 
