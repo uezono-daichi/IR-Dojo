@@ -1,0 +1,335 @@
+"""SPEC 6.7 の端値と、ローダが拒否すべき構造。"""
+
+import copy
+
+import pytest
+import yaml
+
+from irdojo import scoring
+from irdojo.damage import expand_containment
+from irdojo.engine import AssessmentRequired, Decision, Engine, InvalidDecision
+from irdojo.loader import SCENARIO_DIR, ScenarioError, load_scenario_text
+from irdojo.schema import compute_complexity
+
+
+@pytest.fixture
+def raw():
+    path = SCENARIO_DIR / "ransomware-initial-response-01.yaml"
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def build(data):
+    return load_scenario_text(yaml.safe_dump(data, allow_unicode=True))
+
+
+# ─────────── 端値（SPEC 6.7） ───────────
+
+
+def test_empty_assessment_scores_zero_precision_and_zero_misled(scenario):
+    """判断放棄は誤導耐性で加点されてはならない。"""
+    e = Engine(scenario, "business_continuity", None)
+    e.decide(Decision(kind="action", action_id="act_netflow_overview"))
+    e.decide(Decision(kind="declare_assessment", assessment=[]))
+    e.decide(Decision(kind="finish"))
+
+    r = scoring.score(e.state, scenario)
+    assert r.metrics["assessment_precision"] == 0.0
+    assert r.metrics["assessment_recall"] == 0.0
+    # 配分成分は 0（誤導に引っかかってはいない）だが行動成分は残る
+    assert r.metrics["misled_score"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_zero_investigation_time(scenario):
+    """1つも調査せずに対応へ移っても、misled の行動成分で落ちない。"""
+    e = Engine(scenario, "business_continuity", None)
+    e.decide(Decision(kind="declare_assessment", assessment=["fs01"]))
+    e.decide(Decision(kind="finish"))
+    r = scoring.score(e.state, scenario)
+    assert e.state.investigation_minutes == 0
+    assert r.metrics["misled_score"] == 0.0
+    assert r.metrics["unresolved_questions"] == 1.0  # 何も解消していない
+
+
+def test_no_containment(scenario):
+    """封じ込めを一度もしなければ完全性 0、被害も減衰しない。"""
+    e = Engine(scenario, "business_continuity", None)
+    e.decide(Decision(kind="declare_assessment", assessment=["ws-042"]))
+    e.decide(Decision(kind="finish"))
+    c = scoring.score(e.state, scenario).consequences
+    assert c.containment_completeness == 0.0
+    assert c.business_impact == 0.0
+
+
+def test_empty_persistence_is_not_a_penalty(raw):
+    raw["world"]["ground_truth"]["persistence"] = []
+    sc = build(raw)
+    e = Engine(sc, "business_continuity", None)
+    e.decide(Decision(kind="declare_assessment", assessment=[]))
+    e.decide(Decision(kind="finish"))
+    assert scoring.score(e.state, sc).metrics["persistence_missed"] == 0.0
+
+
+def test_cannot_finish_without_declaring_assessment(scenario):
+    """被疑判定なしの終了は起こらない（SPEC 6.7 の「✕」）。"""
+    e = Engine(scenario, "business_continuity", None)
+    with pytest.raises(AssessmentRequired):
+        e.decide(Decision(kind="finish"))
+
+
+def test_cannot_advance_into_assessment_phase_without_declaring(scenario):
+    """不可逆な移行は1つだけで、それは必ず被疑判定を伴う（SPEC 3.8）。"""
+    e = Engine(scenario, "business_continuity", None)
+    with pytest.raises(AssessmentRequired):
+        e.decide(Decision(kind="advance_phase"))
+
+
+def test_snapshot_is_frozen_at_declaration(scenario):
+    """対応フェーズ中に論点を解消しても、遡っての加点はしない。"""
+    e = Engine(scenario, "business_continuity", None)
+    e.decide(Decision(kind="action", action_id="act_collect_evtx_fs01"))
+    e.decide(Decision(kind="declare_assessment", assessment=["ws-042"]))
+    before = scoring.score(e.state, scenario).metrics["unresolved_questions"]
+    # 対応フェーズからでも前フェーズのアクションは実行できる（解放は累積）
+    e.decide(Decision(kind="action", action_id="act_mail_gateway"))
+    e.decide(Decision(kind="action", action_id="act_smb_session_fs01"))
+    assert "q_initial_access" in e.state.resolved_questions
+    e.decide(Decision(kind="finish"))
+    assert scoring.score(e.state, scenario).metrics["unresolved_questions"] == before
+
+
+def test_assessment_editable_but_snapshot_kept(scenario):
+    e = Engine(scenario, "business_continuity", None)
+    e.decide(Decision(kind="declare_assessment", assessment=["ws-042"]))
+    snap = e.state.assessment_snapshot.model_copy(deep=True)
+    e.decide(Decision(kind="declare_assessment", assessment=["ws-042", "fs01"]))
+    assert e.state.assessment == ["ws-042", "fs01"]
+    assert e.state.assessment_snapshot == snap
+
+
+# ─────────── ローダが拒否する構造 ───────────
+
+
+@pytest.mark.parametrize(
+    "mutate, fragment",
+    [
+        (lambda d: d["world"]["ground_truth"].__setitem__("compromised", []), "compromised が空"),
+        (lambda d: d.__setitem__("policies", d["policies"][:1]), "最低2つ"),
+        (lambda d: [q.__setitem__("critical", False) for q in d["open_questions"]], "critical"),
+        (lambda d: [e.__setitem__("misleading", False) for e in d["evidence"]], "誤導証拠"),
+        (lambda d: d["meta"].__setitem__("default_policy", "nope"), "default_policy"),
+        (lambda d: d["evidence"][6].__setitem__("refuted_by", []), "棄却不能"),
+        (lambda d: d["actions"][0].__setitem__("yields", ["ev_999"]), "未定義の証拠"),
+        (lambda d: d["actions"][0].__setitem__("phase", "nope"), "未定義のフェーズ"),
+        (lambda d: d["actions"][0].__setitem__("type", "communicate"), "communicate"),
+        (lambda d: d["world"]["assets"][0].__setitem__("depends_on", ["fs01"]), "循環"),
+        (lambda d: d["policies"][0]["weights"].__setitem__("total_damage", 0.9), "1.0 でない"),
+        (lambda d: d["actions"][0].__setitem__("cost_minutes", 0), "greater than 0"),
+    ],
+)
+def test_loader_rejects(raw, mutate, fragment):
+    data = copy.deepcopy(raw)
+    mutate(data)
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert fragment in str(exc.value)
+
+
+def test_loader_rejects_unknown_keys(raw):
+    raw["meta"]["compromised_hint"] = "ws-042"
+    with pytest.raises(ScenarioError) as exc:
+        build(raw)
+    assert "Extra inputs" in str(exc.value) or "extra" in str(exc.value).lower()
+
+
+def test_loader_ignores_author_written_complexity(raw):
+    raw["meta"]["complexity"] = 5
+    with pytest.warns(UserWarning, match="complexity"):
+        sc = build(raw)
+    assert sc.complexity == 2  # 内容から算出した値が使われる
+
+
+def test_loader_uses_safe_load_only():
+    """任意コード実行になる YAML タグを拒否する（SPEC 7.7.1）。"""
+    with pytest.raises(ScenarioError):
+        load_scenario_text("!!python/object/apply:os.system ['echo pwned']")
+
+
+def test_loader_rejects_path_traversal():
+    from irdojo.loader import load_scenario
+
+    for bad in ("../SPEC", "..%2Fetc%2Fpasswd", "a/b", "/etc/passwd", ""):
+        with pytest.raises(ScenarioError):
+            load_scenario(bad)
+
+
+# ─────────── 個別の関数 ───────────
+
+
+def test_expand_containment_takes_earliest_time():
+    from irdojo.schema import Asset, Criticality
+
+    assets = {
+        a.id: a
+        for a in [
+            Asset(id="dc01", label="dc", criticality=Criticality.CRITICAL),
+            Asset(id="fs01", label="fs", criticality=Criticality.HIGH, depends_on=["dc01"]),
+            Asset(id="app", label="app", criticality=Criticality.LOW, depends_on=["fs01"]),
+        ]
+    }
+    # 多段の連鎖。直接停止した app も、上流がより早ければその時刻に繰り上がる
+    out = expand_containment({"dc01": 100, "app": 200}, assets)
+    assert out == {"dc01": 100, "fs01": 100, "app": 100}
+
+
+def test_complexity_matches_spec_table(raw):
+    """SPEC 3.12 の想定表と一致するか。"""
+    sc = build(raw)
+    assert compute_complexity(sc) == 2
+
+    data = copy.deepcopy(raw)
+    for e in data["evidence"]:
+        if e.get("misleading"):
+            e["plausibility"] = "high"
+    assert compute_complexity(build(data)) == 2
+
+    # 誤導を増やすと上がる（作者が狙って設計できる）
+    data = copy.deepcopy(raw)
+    for e in data["evidence"]:
+        if e["id"] == "ev_013":          # ネガティブ所見を誤導に仕立て直す
+            e["misleading"] = True
+            e["plausibility"] = "high"
+            e["points_to"] = ["ws-113"]
+            e["refuted_by"] = ["ev_008"]
+    assert compute_complexity(build(data)) == 3
+
+
+def test_repeated_action_rejected(scenario):
+    e = Engine(scenario, "business_continuity", None)
+    e.decide(Decision(kind="action", action_id="act_asset_inventory"))
+    with pytest.raises(InvalidDecision):
+        e.decide(Decision(kind="action", action_id="act_asset_inventory"))
+
+
+def test_action_from_later_phase_rejected(scenario):
+    e = Engine(scenario, "business_continuity", None)
+    with pytest.raises(InvalidDecision):
+        e.decide(Decision(kind="action", action_id="act_mail_gateway"))
+
+
+def test_evidence_preservation_constraint_fires(scenario):
+    """揮発性証拠を取らずに封じ込めると、証拠保全最優先では違反になる。"""
+    e = Engine(scenario, "evidence_preservation", None)
+    e.decide(Decision(kind="declare_assessment", assessment=["ws-042"]))
+    e.decide(Decision(kind="action", action_id="act_isolate_ws042"))
+    e.decide(Decision(kind="finish"))
+    viol = e.state.violations_by_policy["evidence_preservation"]
+    assert len(viol) == 1
+    assert viol[0].constraint_type == "require_before"
+    # 同じ行動でも業務継続最優先では違反にならない
+    assert e.state.violations_by_policy["business_continuity"] == []
+
+
+def test_loader_rejects_criticality_inversion(raw):
+    """重要度と業務影響が逆転していたら拒否する（SPEC 3.1）。
+
+    学習者には重要度しか見せないため、逆転していると表示が実態と食い違う。
+    """
+    data = copy.deepcopy(raw)
+    for a in data["world"]["assets"]:
+        if a["id"] == "ws-042":          # low なのに dc01 より高コストにする
+            a["business_impact_per_hour"] = 999
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "逆転" in str(exc.value)
+
+
+def test_criticality_is_display_only(scenario):
+    """重要度は採点に一切効かない。効くのは business_impact_per_hour。"""
+    from irdojo.schema import CRITICALITY_RANK
+
+    e = Engine(scenario, "business_continuity", None)
+    e.decide(Decision(kind="declare_assessment", assessment=["ws-042"]))
+    e.decide(Decision(kind="action", action_id="act_shutdown_fs01"))
+    e.decide(Decision(kind="finish"))
+    before = scoring.score(e.state, scenario).composite_score
+
+    # 重要度だけを一段上げても、順序が保たれる限りスコアは動かない
+    for a in scenario.world.assets:
+        if a.id == "ws-107":
+            a.criticality = list(CRITICALITY_RANK)[1]
+    assert scoring.score(e.state, scenario).composite_score == before
+
+
+def test_same_second_plays_do_not_overwrite_each_other(tmp_path, monkeypatch):
+    """ファイル名の時刻は秒まで。同じ秒に終わった記録を消してはいけない。"""
+    from datetime import datetime, timezone
+
+    from irdojo import records as records_mod
+    from irdojo.schema import AssistLevel
+
+    monkeypatch.setenv("IRDOJO_HOME", str(tmp_path))
+    at = datetime(2026, 3, 14, 2, 17, 0, tzinfo=timezone.utc)
+
+    def rec(score):
+        return records_mod.Record(
+            scenario_id="s", scenario_title="s", scenario_version="1.0.0",
+            policy_id="p", policy_label="p", assist_level=AssistLevel.ASSISTED,
+            played_at=at, is_first_play=False,
+            fact_score=score, policy_score=score, composite_score=score, metrics={},
+            elapsed_minutes=1, total_damage=0.0, business_impact=0.0,
+            evidence_preserved=1.0, containment_completeness=1.0,
+            assessment=[], unresolved_at_decision=[], constraint_violations=0,
+        )
+
+    paths = [records_mod.save(rec(v)) for v in (0.1, 0.2, 0.3)]
+    assert len({p.name for p in paths}) == 3
+    got = records_mod.load_all("s")
+    assert len(got) == 3
+    assert sorted(r.composite_score for _n, r in got) == [0.1, 0.2, 0.3]
+
+
+def test_loader_rejects_a_notice_that_prevents_nothing(raw):
+    """何も防がない連絡は、時間を溶かすだけのボタンになる。"""
+    data = copy.deepcopy(raw)
+    data["actions"].append({
+        "id": "act_chat", "label": "関係者に一報を入れる", "phase": "investigation",
+        "type": "communicate", "cost_minutes": 10,
+    })
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "prevents が必要" in str(exc.value)
+
+
+def test_loader_rejects_a_notice_that_gathers_evidence(raw):
+    """連絡で証拠が出てくるなら、それは調査である。"""
+    data = copy.deepcopy(raw)
+    data["actions"].append({
+        "id": "act_chat", "label": "関係者に一報を入れる", "phase": "investigation",
+        "type": "communicate", "cost_minutes": 10,
+        "prevents": ["tl_field_reboot"], "yields": ["ev_001"],
+    })
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "yields は使えない" in str(exc.value)
+
+
+def test_loader_rejects_a_preventable_event_with_nothing_to_say(raw):
+    """不発を無言で済ませると、打った手が効いたことが伝わらない。"""
+    data = copy.deepcopy(raw)
+    for ev in data["timeline"]:
+        if ev["id"] == "tl_field_reboot":
+            ev.pop("averted_text", None)
+            ev.pop("averted_label", None)
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "averted_text が要る" in str(exc.value)
+
+
+def test_loader_rejects_prevents_on_a_non_communicate_action(raw):
+    data = copy.deepcopy(raw)
+    for a in data["actions"]:
+        if a["id"] == "act_smb_session_fs01":
+            a["prevents"] = ["tl_field_reboot"]
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "communicate 専用" in str(exc.value)

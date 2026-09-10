@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IR Dojo — インシデント対応 判断演習</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%2312151a'/%3E%3Cpath d='M4 11.5 8 4l4 7.5' stroke='%237aa2f7' stroke-width='1.6' fill='none'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- ① トップ -->
+<section id="screen-top" class="screen active">
+  <div class="wrap center">
+    <h1>IR Dojo</h1>
+    <p class="sub">インシデント対応 判断演習</p>
+    <hr class="rule">
+    <div class="lede" style="text-align:left">
+      <p>この演習は、あなたの判断が<strong>正しかったか</strong>ではなく、
+         その判断を支える<strong>根拠が健全だったか</strong>を測ります。</p>
+      <ul>
+        <li>もっともらしい偽の手がかりに引っ張られなかったか</li>
+        <li>説明できていないことを残したまま決断しなかったか</li>
+      </ul>
+      <p>対応の当否は問いません。何を封じ込めるべきかは組織の方針で変わるからです。
+         <strong>方針は演習が与えます。</strong></p>
+      <p class="faint">満点は存在しますが、正解は一つではありません。
+         方針を差し替えれば、別の行動列が満点になります。</p>
+    </div>
+    <hr class="rule">
+    <div class="btn-row">
+      <button class="primary" id="btn-to-select">演習を選ぶ</button>
+      <button id="btn-what">何を測るのか</button>
+    </div>
+  </div>
+</section>
+
+<!-- ② シナリオ選択 -->
+<section id="screen-select" class="screen">
+  <div class="wrap">
+    <h1 style="font-size:22px">演習を選ぶ</h1>
+    <p class="sub">同じシナリオを、方針とアシストレベルを変えて解けます。</p>
+    <div id="scenario-list"></div>
+    <fieldset>
+      <legend>対応方針 — 以降すべての評価基準になります</legend>
+      <div id="policy-list"></div>
+    </fieldset>
+    <fieldset>
+      <legend>アシストレベル — 採点式は変わりません</legend>
+      <div id="assist-list"></div>
+    </fieldset>
+    <div class="btn-row right">
+      <button id="btn-back-top">戻る</button>
+      <button class="primary" id="btn-start">開始する</button>
+    </div>
+  </div>
+</section>
+
+<!-- ③ ブリーフィング -->
+<section id="screen-briefing" class="screen">
+  <div class="wrap">
+    <h1 style="font-size:22px" id="brief-title"></h1>
+    <p class="briefing" id="brief-body"></p>
+    <div class="policy-box">
+      <div class="name" id="brief-policy-name"></div>
+      <div class="body" id="brief-policy-body"></div>
+    </div>
+
+    <h2 style="margin-top:34px" id="brief-topo-head">この環境の構成</h2>
+    <div class="topo" id="brief-topo"></div>
+    <p class="faint" id="brief-topo-note">
+      <strong>線は依存</strong>を表します。上のものが止まると、下のものも実質止まります。
+      dc01 を止めれば、それに依存する4台も一緒に止まります。<br>
+      <strong>色と右上の印は「止めたときに業務が受ける影響の大きさ」</strong>です
+      （最重要 &gt; 重要 &gt; 中 &gt; 小）。侵害されているかどうかとは無関係で、
+      これは平常時から決まっている性質です。
+    </p>
+
+    <details class="primer" id="brief-primer" open>
+      <summary>はじめての人へ — この演習の考え方</summary>
+      <div class="primer-body">
+        <h4>「侵害されている」とは</h4>
+        <p>その資産で、<strong>攻撃者の行為として説明できる事象</strong>が
+           起きている状態を指します。ファイルが一斉に暗号化された、
+           身に覚えのないプログラムが動いていた、普段使われない認証方式で
+           ログインされた——そういう事実が観測できるかどうかです。
+           <strong>「怪しい」ではなく「観測された事実で説明がつくか」</strong>で決めます。</p>
+
+        <h4>証拠には、もっともらしいが無関係なものが混ざっています</h4>
+        <p>どれがそうかは表示されません。<strong>見抜けたかどうかが、この演習の採点対象です。</strong>
+           1つの資産を指す証拠が1つしかないなら、その1つが本物か確かめる必要があります。</p>
+
+        <h4>引っかからないための手がかりは2つ</h4>
+        <ul>
+          <li><strong>平常時の姿と比べる。</strong>
+              台帳や運用設定を見れば「いつもそうなのか、今日だけか」が分かります。
+              たいていの場合、これが最も安く速い確かめ方です。</li>
+          <li><strong>時刻の近さは、関係の証明になりません。</strong>
+              同じ時間帯に起きたことが、同じ原因とは限りません。</li>
+        </ul>
+
+        <h4>説明できていないことは、分かっていないことです</h4>
+        <p>「未解消の論点」に残っているのは、まだ答えが出ていない問いです。
+           抱えたまま対応に移ることもできますが、<strong>その状態で決めたことは記録され、
+           採点されます。</strong></p>
+      </div>
+    </details>
+
+    <h2 style="margin-top:34px">この演習の進み方</h2>
+    <ol class="flow" id="brief-phases"></ol>
+    <ul class="rules">
+      <li><strong>フェーズを進めるのは、あなたが宣言したとき。</strong>
+          自動では進みません。いつ調査を打ち切って動くかの判断も、評価の対象です。</li>
+      <li><strong>移行は取り消せません。</strong>
+          ただし前のフェーズのアクションは、移行後も引き続き実行できます。</li>
+      <li><strong>調べると、調べられることが増えます。</strong>
+          知らない資産は調べられません。手がかりが出て初めて選択肢になります。</li>
+      <li id="brief-assessment-rule" hidden></li>
+    </ul>
+
+    <h2 style="margin-top:34px">画面の見方</h2>
+    <p class="faint" style="margin-top:-8px">実際の画面です。番号の説明を下に並べます。</p>
+    <div class="mini" id="brief-mini"></div>
+    <ol class="mini-notes" id="brief-legend"></ol>
+
+    <div class="btn-row right">
+      <button class="primary" id="btn-begin">対応を開始</button>
+    </div>
+  </div>
+</section>
+
+<!-- ④ プレイ -->
+<section id="screen-play" class="screen">
+  <header class="bar">
+    <div>
+      <span class="title" id="play-title"></span>
+      <span class="policy" id="play-policy"></span>
+    </div>
+    <div>
+      <button id="btn-show-topo">構成</button>
+      <button id="btn-show-policy">方針を再表示</button>
+      <button id="btn-show-assessment" style="display:none">被疑判定</button>
+    </div>
+  </header>
+  <!-- 状況は横一列。判断に使うものを画面の端に押し込まない -->
+  <div class="strip">
+    <div class="strip-stats">
+      <div class="stat"><div class="k">経過時間</div><div class="v" id="stat-time">00:00</div></div>
+      <div class="stat"><div class="k">累積被害</div><div class="v" id="stat-damage">0</div></div>
+      <div class="stat"><div class="k">業務影響</div><div class="v" id="stat-impact">0</div></div>
+    </div>
+    <div class="strip-chart"><canvas id="damage-chart" height="96"></canvas></div>
+    <div class="strip-questions" id="questions-panel">
+      <h3>未解消の論点</h3>
+      <div id="questions-list"></div>
+    </div>
+  </div>
+  <div class="wrap-wide play-main">
+    <ol class="phase-bar" id="play-phase"></ol>
+
+    <!-- 結果とアクションを横に並べる。縦に積むと、ログが出たとたんに
+         アクションが画面外へ押し出される（実測 1266px） -->
+    <div class="play-cols">
+      <div class="play-result">
+        <!-- 対応フェーズの枠組み。何を訊かれているのかを、その場に置く -->
+        <div class="respond-frame" id="respond-frame" hidden></div>
+        <!-- 向こうから入ってきたこと。押した結果とは別の箱に置く。
+             結果の中に混ぜると証拠の間に挟まって読み飛ばされる -->
+        <section class="incoming-feed" id="incoming-feed" hidden>
+          <h3>入ってきた連絡 <span id="incoming-count"></span></h3>
+          <div id="incoming-list"></div>
+        </section>
+        <div id="result-area"></div>
+        <!-- 読み返すためのもの。既定では畳んでおく -->
+        <details class="past" id="past-evidence">
+          <summary id="past-summary">これまでに取得した証拠</summary>
+          <div id="evidence-list"></div>
+        </details>
+      </div>
+
+      <section class="play-actions">
+        <div class="panel panel-actions">
+          <h3>実行可能なアクション</h3>
+          <div id="actions-list"></div>
+        </div>
+        <div class="btn-row right">
+          <button id="btn-advance" style="display:none"></button>
+          <button id="btn-finish">対応を終了する</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+
+<!-- ⑤ 講評 -->
+<section id="screen-debrief" class="screen">
+  <div class="wrap">
+    <h1 style="font-size:22px">講評</h1>
+    <p class="sub" id="debrief-sub"></p>
+    <div id="debrief-body"></div>
+    <div class="btn-row">
+      <button class="primary" id="btn-replay">別の条件で再挑戦</button>
+    </div>
+  </div>
+</section>
+
+<!-- モーダル: フェーズ移行 -->
+<div class="modal-bg" id="modal-advance">
+  <div class="modal">
+    <h2 id="advance-title"></h2>
+    <p id="advance-detail" class="dim"></p>
+    <p>この移行は取り消せません。<br>
+       移行後も、現フェーズのアクションは引き続き実行できます。</p>
+    <div class="btn-row right">
+      <button data-close="modal-advance">戻る</button>
+      <button class="primary" id="btn-advance-confirm">移行する</button>
+    </div>
+  </div>
+</div>
+
+<!-- モーダル: 被疑判定 -->
+<div class="modal-bg" id="modal-assessment">
+  <div class="modal">
+    <h2 id="assess-title">被疑判定</h2>
+    <p>現時点で「侵害されている」と判断する資産を選択してください。</p>
+    <p class="criterion" id="assess-criterion">侵害されていると言えるのは、その資産で
+       <strong>攻撃者の行為として説明できる事象</strong>を、取得した証拠で示せるときです。<br>
+       <strong>何を止めるべきかは、ここでは訊いていません。</strong></p>
+    <div id="assess-list"></div>
+    <div class="warn" id="assess-warn"></div>
+    <div class="btn-row right">
+      <button data-close="modal-assessment">戻る</button>
+      <button class="primary" id="btn-assess-confirm">この判断で確定</button>
+    </div>
+  </div>
+</div>
+
+<!-- モーダル: 終了確認 -->
+<div class="modal-bg" id="modal-finish">
+  <div class="modal">
+    <h2>対応を終了しますか？</h2>
+    <div class="summary-grid" id="finish-summary"></div>
+    <div class="btn-row right">
+      <button data-close="modal-finish">戻る</button>
+      <button class="primary" id="btn-finish-confirm">終了して講評へ</button>
+    </div>
+  </div>
+</div>
+
+<!-- モーダル: 環境の構成 -->
+<div class="modal-bg" id="modal-topo">
+  <div class="modal" style="max-width:760px">
+    <h2>この環境の構成</h2>
+    <div class="topo" id="play-topo"></div>
+    <p class="faint">線は依存を表します。上のものが止まると、下のものも実質止まります。<br>
+       色と印は「止めたときに業務が受ける影響の大きさ」です。侵害の有無とは無関係です。</p>
+    <div class="btn-row right">
+      <button data-close="modal-topo">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<!-- モーダル: 何を測るのか -->
+<div class="modal-bg" id="modal-what">
+  <div class="modal">
+    <h2>この演習が測るもの</h2>
+    <div class="primer-body">
+      <p>測るのは<strong>判断の結果ではなく、判断を支えた根拠</strong>です。
+         採点は3つの層に分かれています。</p>
+      <h4>事実認識 — 方針に依存しない（重み 0.7）</h4>
+      <ul>
+        <li>侵害された資産を正しく特定できたか</li>
+        <li>もっともらしい偽の手がかりに引っ張られなかったか</li>
+        <li>説明できていないことを残したまま決断しなかったか</li>
+      </ul>
+      <h4>方針適合 — 方針に依存する（重み 0.3）</h4>
+      <p>与えられた方針の重みと制約に、対応がどれだけ整合していたか。
+         <strong>方針が変われば同じ行動の評価が変わります。</strong></p>
+      <h4>帰結 — 採点しません</h4>
+      <p>経過時間・被害額・業務影響・証拠保全は、数値として提示するだけです。
+         被害額を直接採点すると「早く封じ込めるのが正しい」という規範を
+         押し付けることになるため、方針の重みを通してのみ評価に入ります。</p>
+      <h4>採点しないこと</h4>
+      <p>侵害資産を隔離すべきだったか。もっと早く動くべきだったか。
+         証拠保全を優先すべきだったか。<strong>これらは組織の方針で変わるので、
+         方針抜きに当否は問いません。</strong></p>
+    </div>
+    <div class="btn-row right">
+      <button data-close="modal-what">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<!-- モーダル: 方針の再表示 -->
+<div class="modal-bg" id="modal-policy">
+  <div class="modal">
+    <h2 id="policy-modal-name"></h2>
+    <div class="body" id="policy-modal-body"></div>
+    <div class="btn-row right">
+      <button data-close="modal-policy">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/chart.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

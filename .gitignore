@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.DS_Store
+
+# プレイ記録（利用者の手元のデータ。共有しない）
+.irdojo/
+results/
+
+# エージェントの作業メモ
+.claude/scratch/
