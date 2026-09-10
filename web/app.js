@@ -685,7 +685,8 @@ function terminal(o) {
   bar.appendChild(el('span', 'dots'));
   bar.appendChild(el('span', 'term-title', o.label));
   term.appendChild(bar);
-  term.appendChild(termBody(o.command));
+  // 押した直後はまだ手元に無い。枠だけ先に出して、返ってきたら中身が入る
+  if (o.command) { term.appendChild(termBody(o.command)); }
   if (o.running) {
     term.appendChild(el('div', 'term-run', '実行中…'));
   } else if (o.cost) {
@@ -789,7 +790,7 @@ function renderResult(v) {
     h.appendChild(el('span', 'outcome-name', o.label));
     h.appendChild(el('span', 'outcome-cost', '実行中…'));
     box.appendChild(h);
-    if (o.command) { box.appendChild(terminal(o)); }
+    box.appendChild(terminal(o));
     host.appendChild(box);
     return;
   }
@@ -988,9 +989,12 @@ function renderActions(v) {
       if (a.selectable) {
         btn.addEventListener('click', function () {
           btn.disabled = true;
+          // command は押す前には持っていない。端末の記録は
+          // decide のレスポンスで届く（SPEC 7.6.8）。
+          // 実行中の箱は見出しと所要だけで出す
           S.lastOutcome = {
             label: a.label, cost: a.cost_minutes, type: a.type,
-            command: a.command, running: true,
+            command: '', running: true,
             revealed: 0, unlocked: 0, contained: [], impact: 0, prevented: 0
           };
           // 走らせている間もその場で見せる。押した瞬間に何か起きる

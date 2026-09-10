@@ -630,6 +630,8 @@ ul.lessons li { margin-bottom: 8px; }
   padding: 7px 14px; border-top: 1px solid var(--line);
   font-family: var(--mono); font-size: 11px; color: var(--accent);
 }
+/* 押した直後は中身がまだ無い。仕切りが二重に出ないようにする */
+.term-bar + .term-run { border-top: none; }
 .term.running { border-color: var(--accent); }
 
 /* ── 向こうから入ってくること ──

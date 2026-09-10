@@ -148,6 +148,12 @@ class ActionView(BaseModel):
     「停止して」「再起動して」なら揮発性の情報が消えることは動詞から分かる。
     括弧書きの注記で補わない。注記はシステムが自分の罠に印を付ける行為であり、
     原則2 に反する。動詞で言えないなら、シナリオ側の定義が間違っている。
+
+    **command を含めない。** 端末の記録は「何をしたか」であって
+    「何を選ぶか」の材料ではない。押す前に配ると、そこに書かれた件数が
+    機構ではなく結論になる（「0 detections」は 35分かけて買うはずの所見）。
+    押した後に decide のレスポンスで返す（SPEC 7.6.8）。
+    選ぶ材料はラベル（世界の言葉）と所要（費用）で足りる。
     """
 
     id: str
@@ -160,9 +166,6 @@ class ActionView(BaseModel):
     phase: str          # 表示のグループ分けに使う
     phase_label: str
     group: str          # 一覧での並べ分け。空ならフェーズ名でまとめる
-    # 実行の様子。どのレベルでも出す。生の道具立てを見せることは
-    # 答えを教えることではなく、むしろ hard の主題（読解）に近い。
-    command: str
 
 
 class PhaseView(BaseModel):
@@ -663,7 +666,6 @@ def build_view(
             phase=a.phase,
             phase_label=phase_labels.get(a.phase, a.phase),
             group=a.group or phase_labels.get(a.phase, a.phase),
-            command=a.command,
         )
         for a in scenario.actions
         if a.phase in unlocked and _unlocked_by(a, got)

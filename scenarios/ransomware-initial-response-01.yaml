@@ -172,6 +172,9 @@ evidence:
       ParentProcessName: C:\Windows\explorer.exe
       CommandLine      : powershell -nop -w hidden -enc SQBFAFgA...
 
+      収集範囲 : Security / PowerShell-Operational（fs01 に届いた分）
+      非対象   : 各端末のローカルにしか残っていないログ
+
   - id: ev_002
     points_to: [fs01]
     misleading: false
@@ -320,8 +323,9 @@ evidence:
       IpAddress   : 192.0.2.42        <- WS-042
       AuthenticationPackageName : NTLM
 
-      注: CORP\sato は通常 Kerberos で認証している。
-          NTLM での認証は過去90日間で 0 件。
+      過去90日の認証方式内訳 (TargetUserName=CORP\sato):
+        Kerberos  1,204 件
+        NTLM          0 件
 
       EventID     : 5140   (共有オブジェクトへのアクセス)
       TimeCreated : 2026-03-14T02:34:04Z
@@ -424,7 +428,8 @@ evidence:
         "OneDriveSync" = "powershell -nop -w hidden -enc SQBFAFgA..."
         書き込み時刻: 2026-03-14T02:18:02Z
 
-      注: この端末を再起動しても、この Run キーにより再度 C2 へ接続する。
+      取得範囲 : 物理メモリ全域（プロセス一覧・接続・文字列・HKCU の Run キー）
+      非対象   : ディスク上のファイル、$MFT、ShimCache
 
   - id: ev_010
     points_to: [fs01]
@@ -455,7 +460,8 @@ evidence:
         _HOW_TO_RESTORE_.txt
         C:\share\
 
-      注: このプロセスは fs01 停止時に失われる。
+      取得範囲 : 物理メモリ全域（プロセス一覧・ハンドル・文字列）
+      非対象   : ディスク上のファイル、イベントログ
 
   - id: ev_011
     points_to: [ws-042]
@@ -482,8 +488,8 @@ evidence:
         bytes_in     : 402,118  (合計)
         User-Agent   : Mozilla/5.0 (Windows NT 10.0; Win64; x64)
 
-      注: 通信量は小さく、周期性が明確。データ持ち出しではなく
-          コマンド＆コントロールの挙動に一致する。
+      集計対象 : プロキシを経由した外向き HTTP/HTTPS
+      非対象   : プロキシを経由しない直接通信、UDP・ICMP
 
   - id: ev_012
     points_to: []
@@ -508,8 +514,9 @@ evidence:
 
       未承認宛先への 10MB 超の送信: 0 件
 
-      注: fs01 の共有からの読み出しは 12,847 件記録されているが、
-          いずれも社内 IP 宛であり外部送信は観測されていない。
+      集計対象: 境界を越える送信（宛先が社外 IP のもの）
+      非対象  : 社内 IP 宛のアクセス。同期間の \\FS01\share からの読み出し
+                12,847 件はここに含まれない
 
   - id: ev_013
     points_to: []
@@ -540,7 +547,8 @@ evidence:
         02:44:52  wusa.exe        /quiet /norestart  (CHG-2026-0271)
         03:31:08  gpupdate.exe    /force
 
-      注: この端末に攻撃の痕跡は認められない。
+      収集範囲 : autoruns / shimcache / tasks / persistence
+      非対象   : メモリ上にのみ存在するもの、記録を残さない手動操作
 
   - id: ev_014
     points_to: [ws-042]
@@ -573,7 +581,8 @@ evidence:
         2026-03-14T02:17:31Z  powershell.exe
         2026-03-14T02:34:00Z  net.exe  use \\FS01\share
 
-      注: 初期侵入がこの端末で起きたことが、端末側の痕跡から裏づけられる。
+      取得範囲 : 内蔵ディスク全域（$MFT / レジストリ / ShimCache）
+      非対象   : 稼働中のメモリ上にしか存在しない情報（実行中プロセス、確立中の接続）
 
   - id: ev_015
     points_to: [fs01]
@@ -604,7 +613,8 @@ evidence:
           SHA-256: 0000000000000000000000000000000000000000000000000000000000000000
                    (架空の値)
 
-      自動起動項目: 登録なし（この端末に永続化は仕掛けられていない）
+      自動起動項目: 該当なし（autorunsc -a *、31 エントリを照合）
+      非対象      : 稼働中のメモリ上にしか存在しない情報（実行中プロセス、確立中の接続）
 
   - id: ev_016
     points_to: []
@@ -655,10 +665,11 @@ evidence:
         WS-107   完了  検出 0
         WS-113   完了  検出 0
 
+        検査方式     : 既知シグネチャ照合
         定義ファイル : 2026-03-13 22:10 更新（最新）
         スキャン範囲 : 全ドライブ / アーカイブ内も展開
-
-      備考: シグネチャに一致するファイルは見つからなかった。
+        非対象       : スクリプトのみで完結する実行、ディスクに実体を残さない手法、
+                       定義に未登録の検体
 
   - id: ev_018
     points_to: []
@@ -686,7 +697,8 @@ evidence:
 
         世代保持    : 日次 14世代 / 週次 8世代
 
-      備考: 暗号化された領域は、この世代から復旧できる見込み。
+        検証範囲    : 最新世代のチェックサムと、指定世代からの部分復元
+        非対象      : 復元先での業務再開可否、アプリケーション側の整合性
 
   - id: ev_019
     points_to: []
@@ -711,7 +723,8 @@ evidence:
 
         EventID 4728/4732/4756（グループへの追加）: 該当なし
 
-      備考: 攻撃者によるアカウントの追加・昇格は行われていない。
+        照会対象 : グループメンバーの追加・削除イベント（4728/4732/4756）
+        非対象   : 既存の特権アカウントの資格情報を用いた利用
 
 open_questions:
   - id: q_initial_access
@@ -981,8 +994,6 @@ actions:
 
       $ vol.py -f fs01.raw windows.pslist
         94 processes
-      $ vol.py -f fs01.raw windows.handles --pid 6644
-        12,847 handles
     group: "fs01（ファイルサーバ）"
     phase: investigation
     type: investigate
@@ -1109,7 +1120,7 @@ actions:
     requires_evidence: [ev_001, ev_007]
     command: |
       $ Stop-Computer -ComputerName WS-042 -Force
-        WS-042: powered off  (揮発性の情報はここで失われる)
+        WS-042: powered off
 
       $ ftkimager \\.\PHYSICALDRIVE0 /mnt/ir/ws042 --e01 --frag 2G
         Acquiring 512 GB ... done   (00:41:20)
@@ -1137,7 +1148,7 @@ actions:
     label: "fs01 をセーフモードで再起動して確認"
     command: |
       $ Restart-Computer -ComputerName FS01 -Wait -For WinRM
-        FS01: rebooting into Safe Mode  (稼働中プロセスの情報はここで失われる)
+        FS01: rebooting into Safe Mode
         back online  (00:06:31)
 
       $ autorunsc.exe -accepteula -a * -h \\FS01
@@ -1169,7 +1180,7 @@ actions:
         delivered: 412 recipients
 
       $ helpdesk-cli script set --id first-response --file notice-hd.txt
-        1 script updated   (一次応答の文面を差し替え)
+        1 script updated
 
       $ chatops post --channel #all-announce --pin
         pinned

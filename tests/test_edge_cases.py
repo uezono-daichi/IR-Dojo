@@ -400,3 +400,100 @@ def test_loader_rejects_prevents_on_a_non_communicate_action(raw):
     with pytest.raises(ScenarioError) as exc:
         build(data)
     assert "communicate 専用" in str(exc.value)
+
+
+# ─────────── 端末の記録と、資料の中の結論（SPEC 5.4 / 5.6） ───────────
+
+
+def _action(data, aid):
+    return next(a for a in data["actions"] if a["id"] == aid)
+
+
+def _evidence(data, eid):
+    return next(e for e in data["evidence"] if e["id"] == eid)
+
+
+def test_loader_rejects_a_transcript_that_names_losable_evidence(raw):
+    """失われうる証拠にしか無い値を、端末の記録に書いたら拒否する。
+
+    これは同梱シナリオが実際に踏んだ形である。
+    `vol.py ... windows.handles --pid 6644` の 6644 は ev_010（fs01 の
+    稼働中プロセス）にしか無い。fs01 が現場判断で再起動された後に
+    この手を押すと、証拠は出てこないのに端末の記録だけが返り、
+    取り損ねたものの中身をそこで渡してしまう。
+    """
+    data = copy.deepcopy(raw)
+    _action(data, "act_memory_dump_fs01")["command"] += (
+        "\n$ vol.py -f fs01.raw windows.handles --pid 6644\n  12,847 handles\n"
+    )
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "6644" in str(exc.value)
+
+
+def test_loader_allows_a_constant_the_responder_can_type_before_pressing(raw):
+    """押す前から打てる定数は通す。
+
+    `Where-Object Id -eq 4104` の 4104 は公開されたイベントIDで、
+    ev_001 の中身にしか出てこなくても「結果を先に見た」ことにはならない。
+    ここまで拒否すると、コマンドに絞り込み条件が書けなくなる。
+    """
+    data = copy.deepcopy(raw)
+    _action(data, "act_dc_authlog")["command"] += (
+        "\n$ Get-WinEvent -ComputerName DC01 | Where-Object Id -eq 4104\n  12 events\n"
+    )
+    build(data)  # 例外が出ないこと
+
+
+def test_loader_rejects_a_parenthetical_note_in_a_transcript(raw):
+    """括弧の注記は、システムが自分の罠に印を付ける行為である。
+
+    害は書いた手よりも**書かなかった手**に出る。同じ destroys を持つ
+    「fs01 を停止」には注記が無く、注記の有無がそのまま
+    「調査の排他ペアはこの2つ」という目印になっていた。
+    """
+    data = copy.deepcopy(raw)
+    _action(data, "act_disk_image_ws042")["command"] = (
+        "$ Stop-Computer -ComputerName WS-042 -Force\n"
+        "  WS-042: powered off  (揮発性の情報はここで失われる)\n"
+    )
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "括弧" in str(exc.value)
+
+
+def test_loader_allows_a_parenthetical_label_in_a_transcript(raw):
+    """禁じるのは節であって、名札ではない。
+
+    「架電 03:24 携帯（登録番号）」の括弧は呼び分けであって主張ではない。
+    `(egress only)` `(00:11:42)` も資料である。
+    """
+    data = copy.deepcopy(raw)
+    _action(data, "act_dc_authlog")["command"] += (
+        "\n$ 架電 04:02  携帯（登録番号）  呼出 30秒\n"
+    )
+    build(data)  # 例外が出ないこと
+
+
+def test_loader_rejects_a_conclusion_in_the_raw_material(raw):
+    """content は全レベルで出る。そこに要約が混ざると hard が死ぬ。
+
+    `summary` を伏せて生ログを読ませるのが hard の主題なのに、
+    生ログの末尾が summary と同じ主張を述べていた（19件中6件）。
+    """
+    data = copy.deepcopy(raw)
+    _evidence(data, "ev_013")["content"] += "\n注: この端末に攻撃の痕跡は認められない。\n"
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "ev_013.content" in str(exc.value)
+
+
+def test_loader_does_not_police_the_summary(raw):
+    """summary は結論を言ってよい。それが summary の仕事である。
+
+    一行で所見を言うことが summary の役割で、それこそが hard で
+    伏せられる中身である。ここまで縛るとアシストが何も残らない。
+    """
+    data = copy.deepcopy(raw)
+    _evidence(data, "ev_013")["summary"] = "ws-113 に攻撃の痕跡は認められない"
+    build(data)  # 例外が出ないこと

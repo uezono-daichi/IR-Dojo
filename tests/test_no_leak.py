@@ -220,15 +220,24 @@ def test_reading_and_description_follow_assist_level(client):
 
 
 def test_reading_never_states_the_conclusion(client):
-    """読み方に結論を書かない。書くと推論を代行してしまう（SPEC 3.10）。"""
+    """読み方に結論を書かない。書くと推論を代行してしまう（SPEC 3.10）。
+
+    語彙表は `irdojo.schema.CONCLUSION_WORDS` に一本化してローダへ昇格した。
+    ここで見張っていた語だけを検査していたころは、同じ結論が
+    `content` や `command` へ移って通り抜けていた。
+    テストとローダで別々の表を持つと、片方に足した語がもう片方に無くなる。
+    """
+    from irdojo.schema import CONCLUSION_WORDS
+
     sc = load_scenario("ransomware-initial-response-01")
-    NG = ("侵害されている", "侵害された端末", "攻撃者の常套", "疑うべき", "無関係である",
-          "だからこの", "正常である")
+    for word in ("侵害されている", "侵害された端末", "攻撃者の常套", "疑うべき",
+                 "無関係である", "だからこの", "正常である"):
+        assert word in CONCLUSION_WORDS, f"表から {word} が落ちている"
     for e in sc.evidence:
-        for word in NG:
+        for word in CONCLUSION_WORDS:
             assert word not in e.reading, f"{e.id}: reading が結論を述べている（{word}）"
     for a in sc.actions:
-        for word in NG:
+        for word in CONCLUSION_WORDS:
             assert word not in a.description, f"{a.id}: description が結論を述べている"
 
 
@@ -239,6 +248,78 @@ def test_misleading_readings_are_not_thinner(client):
     real = [len(e.reading) for e in sc.evidence if not e.misleading]
     assert all(mis) and all(real)
     assert sum(mis) / len(mis) >= 0.7 * (sum(real) / len(real))
+
+
+# 資料が自分の守備範囲を書くときの見出し。
+# 「非対象」だけを見ると、ネガティブ所見にしか付かない印になっていないかを
+# 測れない（範囲を書く欄はすべて同じ役割を持つ）
+SCOPE_MARKERS = ("非対象", "収集範囲", "検査範囲", "取得範囲",
+                 "集計対象", "照会対象", "検証範囲", "スキャン範囲")
+
+
+def test_scope_lines_are_not_a_marker_for_negative_findings(client):
+    """検査範囲の欄が、ネガティブ所見の目印になっていないこと。
+
+    0件を返す証拠に「どこを見て、どこを見ていないか」を書かせる規則
+    （SPEC 5.4）は、その欄がネガティブ所見にだけ付くと逆効果になる。
+    「非対象欄がある＝この端末は白」を読む側に教えることになり、
+    misleading に印を付けるのと変わらない。
+    どちらの側にも同じくらい付いていることを機械に見張らせる。
+    """
+    sc = load_scenario("ransomware-initial-response-01")
+    neg = [e for e in sc.evidence if not e.points_to]
+    pos = [e for e in sc.evidence if e.points_to]
+    assert neg and pos
+
+    def rate(group):
+        marked = [e for e in group if any(m in e.content for m in SCOPE_MARKERS)]
+        return len(marked) / len(group)
+
+    r_neg, r_pos = rate(neg), rate(pos)
+    assert r_neg > 0 and r_pos > 0, (
+        f"範囲欄が片側にしか無い（なし {r_neg:.2f} / あり {r_pos:.2f}）"
+    )
+    assert abs(r_neg - r_pos) <= 0.35, (
+        f"範囲欄の付き方が偏っている（なし {r_neg:.2f} / あり {r_pos:.2f}）"
+    )
+
+
+def test_negative_findings_are_not_thinner_than_the_rest(client):
+    """0件を返す証拠だけ薄いと、厚みがそのまま「何も無い」の合図になる。
+
+    誤導の注釈と同じ論法（test_misleading_readings_are_not_thinner）。
+    読む前に長さで振り分けられるなら、読ませていることにならない。
+    """
+    sc = load_scenario("ransomware-initial-response-01")
+    neg = [len(e.content) for e in sc.evidence if not e.points_to]
+    pos = [len(e.content) for e in sc.evidence if e.points_to]
+    assert neg and pos
+    ratio = (sum(neg) / len(neg)) / (sum(pos) / len(pos))
+    assert ratio >= 0.6, f"0件の証拠が薄すぎる（{ratio:.2f} 倍）"
+
+
+def test_content_is_the_material_and_summary_is_the_reading(client):
+    """content に要約を混ぜない。混ぜると hard という設計軸が死ぬ。
+
+    `summary` は hard で伏せる。`content` は全レベルで出る。
+    content の地の文が summary と同じ主張を述べていると、
+    「要約を伏せて生ログを読ませる」ことができなくなる。
+
+    ここで見るのは結論の言い回しだけで、**網羅検査ではない**
+    （SPEC 5.4）。網羅は構造側の規則が担う。
+    """
+    from irdojo.schema import CONCLUSION_WORDS
+
+    sc = load_scenario("ransomware-initial-response-01")
+    for e in sc.evidence:
+        for word in CONCLUSION_WORDS:
+            assert word not in e.content, f"{e.id}: content が結論を述べている（{word}）"
+    # summary は縛らない。一行で所見を言うのが summary の仕事である。
+    # 実際に結論の言い回しを含む summary が残っていることを確かめる —
+    # ここが空になったら、規則が summary まで飲み込んだということ
+    stated = [e.id for e in sc.evidence
+              if any(w in e.summary for w in CONCLUSION_WORDS)]
+    assert stated, "結論を言う summary が1つも無い。アシストが消えている"
 
 
 def test_phase_structure_is_disclosed_upfront(client):
@@ -456,15 +537,127 @@ def test_command_transcripts_say_no_more_than_the_action(client):
                 assert line not in a.command, f"{a.id}: {e.id} の中身を先出ししている"
 
 
-def test_command_is_shown_at_every_assist_level(client):
-    """道具立ては hard でも見せる。生の道具を見せることは答えを教えることではない。"""
+def test_command_is_returned_only_after_the_action_is_taken(client):
+    """端末の記録は押した後にだけ返る。押す前の一覧には載せない。
+
+    載せると、そこに書かれた件数が機構ではなく結論になる。
+    「0 detections ×5ホスト」は 35分かけて買うはずの所見であり、
+    それを押す前に読めるなら、その手は押さないのが最適になる。
+    どのアシストレベルでも同じ（hard で伏せる話ではなく、構造の話）。
+    """
     sc = load_scenario("ransomware-initial-response-01")
     for level in ("assisted", "standard", "hard"):
         res = client.post(
             "/api/session",
             json={"scenario_id": sc.meta.id, "assist_level": level},
         ).json()
-        assert all(a["command"] for a in res["view"]["available_actions"]), level
+        sid = res["session_id"]
+        acts = res["view"]["available_actions"]
+        assert acts, level
+        for a in acts:
+            assert "command" not in a, f"{level}: {a['id']} が押す前に command を配っている"
+
+        # 押した後は返る。何をしたのかは見せる（SPEC 7.6.8）
+        aid = acts[0]["id"]
+        out = client.post(
+            f"/api/session/{sid}/decide",
+            json={"kind": "action", "action_id": aid},
+        ).json()
+        assert out["command"].strip(), f"{level}: 押した後に command が返っていない"
+
+
+def test_pressing_a_dead_end_returns_a_transcript_with_nothing_in_it(client):
+    """世界に奪われた後にその手を押すと、記録は返るが中身は返らない。
+
+    fs01 は 200分に現場判断で再起動され、ev_010（稼働中プロセス）は消える。
+    その後で「fs01 のメモリダンプ取得・解析」を押すと、証拠は出てこない。
+    このとき端末の記録に PID やハンドル数が書かれていると、
+    **取り損ねたものの中身を、失った後に見せている**ことになる。
+    """
+    sc = load_scenario("ransomware-initial-response-01")
+    res = client.post("/api/session", json={"scenario_id": sc.meta.id}).json()
+    sid = res["session_id"]
+
+    def act(aid):
+        return client.post(
+            f"/api/session/{sid}/decide",
+            json={"kind": "action", "action_id": aid},
+        ).json()
+
+    # 200分を越えるまで時計を進める（tl_fs01_restart が ev_010 を奪う）
+    burned = 0
+    for a in sc.actions:
+        if a.type.value != "investigate" or a.id == "act_memory_dump_fs01":
+            continue
+        if a.requires_evidence:
+            continue
+        out = act(a.id)
+        burned += a.cost_minutes
+        if burned > 210:
+            break
+    assert burned > 200, f"時計が進みきっていない（{burned}分）"
+
+    out = act("act_memory_dump_fs01")
+    assert not out["revealed_evidence"], "ev_010 がまだ取れている。前提が崩れた"
+
+    # 行ごと貼っていないかではなく、ev_010 にしか無い値が届いていないかを見る。
+    # 実際に踏んだ形（`--pid 6644` / `12,847 handles`）は行の貼り付けではなく、
+    # 中身から抜いた値の再掲だった
+    from irdojo.schema import _id_tokens
+
+    others = " ".join(e.content for e in sc.evidence if e.id != "ev_010")
+    only = _id_tokens(sc.evidence_by_id["ev_010"].content) - _id_tokens(others)
+    assert only, "ev_010 に固有の値が無いなら、この検査は意味がない"
+    for token in sorted(only):
+        assert token not in out["command"].replace(",", ""), (
+            f"失った ev_010 にしか無い値 {token} が端末の記録で届いている"
+        )
+
+
+def test_pre_press_view_prices_an_action_by_cost_only(client):
+    """押す前に渡してよいのは、ラベル（世界の言葉）と所要（費用）まで。
+
+    「この手は何件返すか」が押す前に分かると、選択が賭けでなくなる。
+    ActionView の項目を固定して、次に何かを足すときに必ずここを通す。
+    """
+    sc = load_scenario("ransomware-initial-response-01")
+    res = client.post("/api/session", json={"scenario_id": sc.meta.id}).json()
+    allowed = {
+        "id", "label", "description", "type", "cost_minutes",
+        "executed", "selectable", "phase", "phase_label", "group",
+    }
+    for a in res["view"]["available_actions"]:
+        extra = set(a) - allowed
+        assert not extra, f"{a['id']}: 押す前に渡している余分な項目 {sorted(extra)}"
+
+
+def test_transcript_does_not_hand_over_evidence_that_was_lost(client):
+    """奪われた後にその手を押しても、端末の記録が中身を渡さない。
+
+    `command` は押した後に返るので、ふつうは証拠と同時に届く重複でしかない。
+    失われうる証拠だけは違う — 証拠が出てこない回にも記録は返るので、
+    そこに中身が書かれていると、取り損ねたものを失った後に見せることになる。
+    """
+    sc = load_scenario("ransomware-initial-response-01")
+    losable = {e.id for e in sc.evidence if e.volatile}
+    for ev in sc.timeline:
+        losable |= set(ev.destroys)
+    for act in sc.actions:
+        losable |= set(act.destroys)
+    assert losable, "失われうる証拠が無いなら、この検査は意味がない"
+
+    for a in sc.actions:
+        for eid in a.yields:
+            if eid not in losable:
+                continue
+            body = sc.evidence_by_id[eid].content
+            for line in body.splitlines():
+                token = line.strip()
+                if len(token) < 12:
+                    continue
+                assert token not in a.command, (
+                    f"{a.id}: 失われうる {eid} の中身が端末の記録に入っている"
+                )
 
 
 def test_bend_is_silent_during_play(client):

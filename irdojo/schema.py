@@ -686,6 +686,9 @@ def _validate_scenario(sc: "Scenario") -> None:
     _reject_criticality_inversion(sc)
     _reject_toothless_timeline(sc)
     _reject_questions_that_name_the_truth(sc)
+    _reject_commands_that_hand_over_losable_evidence(sc)
+    _reject_notes_that_mark_the_trap(sc)
+    _reject_conclusion_vocabulary(sc)
 
     # 被害モデルの params
     _validate_damage_params(sc.damage)
@@ -727,6 +730,165 @@ def _reject_questions_that_name_the_truth(sc: "Scenario") -> None:
                             "被疑判定の答えを転記できてしまいます"
                             "（ブリーフィングで既に渡した資産だけが書けます）"
                         )
+
+
+# ─────────── command の検査（SPEC 5.6 / 7.6.8） ───────────
+
+# 4文字以上の数字列・16進列。桁区切りのカンマは落として比べる
+_ID_TOKEN = re.compile(
+    r"(?<![0-9A-Za-z])(?:[0-9][0-9,]{3,}|[0-9A-Fa-f]{4,})(?![0-9A-Za-z])"
+)
+
+
+def _id_tokens(text: str) -> set[str]:
+    return {m.group(0).replace(",", "") for m in _ID_TOKEN.finditer(text)}
+
+
+def _reject_commands_that_hand_over_losable_evidence(sc: "Scenario") -> None:
+    """端末の記録が、失われうる証拠の中身を名指ししていないか。
+
+    `command` は押した後に返る（7.6.8）。ふつうは証拠と同時に届くので
+    重複でしかない。**失われうる証拠だけは違う。** 世界に奪われた後、
+    あるいは自分の手で壊した後にその手を押すと、証拠は出てこないのに
+    端末の記録だけが残り、取り損ねたものの中身をそこで渡してしまう。
+
+    実際にそうなっていた: `vol.py -f fs01.raw windows.handles --pid 6644` は
+    ev_010（fs01 の稼働中プロセス、`volatile: true`）にしか無い PID で、
+    fs01 が現場判断で再起動された後に押すと、「何も出てこなかった」の上の
+    端末窓に 6644 と 12,847 handles が並んだ。
+
+    見るのは4文字以上の数字列・16進列に限る。短い数や語は誤検出が多い。
+    **失われえない証拠は対象にしない** — 端末の記録と証拠が必ず一緒に届く以上、
+    そこに同じ数が出ていても先出しにも後出しにもならない
+    （`Where-Object Id -eq 4104` のような、押す前から打てる定数まで
+    拒否してしまう）。
+    """
+    losable = {e.id for e in sc.evidence if e.volatile}
+    for ev in sc.timeline:
+        losable |= set(ev.destroys)
+    for act in sc.actions:
+        losable |= set(act.destroys)
+
+    by_id = {e.id: e.content.replace(",", "") for e in sc.evidence}
+    for a in sc.actions:
+        for token in sorted(_id_tokens(a.command)):
+            named = [e for e in a.yields if e in losable and token in by_id[e]]
+            if not named:
+                continue
+            # そのアクション以外の場所から同じ値に辿り着けるなら、
+            # 端末の記録がその値を渡した最初の場所ではない
+            elsewhere = [
+                eid for eid, body in by_id.items()
+                if eid not in a.yields and token in body
+            ]
+            if elsewhere or token in sc.meta.briefing.replace(",", ""):
+                continue
+            raise ValueError(
+                f"{a.id}: command の {token!r} は {named} にしか無い値です。"
+                f"{named} は失われうる証拠なので、奪われた後にこの手を押すと"
+                "端末の記録だけが残り、取り損ねたものの中身をそこで渡します"
+            )
+
+
+# 括弧の中に節を書かせないための助詞。名札（名詞句）なら現れない
+_CLAUSE_PARTICLE = re.compile(r"[をはがにへでもと]|から|より|まで")
+_JAPANESE = re.compile(r"[ぁ-んァ-ヶ一-龥]")
+_PARENS = re.compile(r"[（(]([^）)]*)[）)]")
+
+
+def _reject_notes_that_mark_the_trap(sc: "Scenario") -> None:
+    """`command` の括弧に、日本語の**節**を書いていないか。
+
+    「`WS-042: powered off  (揮発性の情報はここで失われる)`」は、
+    システムが自分の罠に印を付ける行為である（原則2 / 7.4）。
+    失うものは動詞で言う — ラベルが「停止して」と言っている以上、
+    括弧で補う必要は無い。
+
+    印の害は、書いた手より**書かなかった手**に出る。同じ `destroys: [ev_010]`
+    を持つ「fs01 を停止」には注記が無く、注記の有無がそのまま
+    「調査の排他ペアはこの2つ」という目印になっていた。
+
+    禁じるのは節だけで、名札は通す。`(egress only)` `(00:11:42)` は資料だし、
+    「架電 03:24 携帯（登録番号）」の括弧も呼び分けであって主張ではない。
+    区別は格助詞の有無で見る（名詞句には現れず、節には必ず現れる）。
+    完全な判定ではない — 助詞を使わずに主張を書けば通る。
+    """
+    for a in sc.actions:
+        for m in _PARENS.finditer(a.command):
+            note = m.group(1).strip()
+            if not note or not _JAPANESE.search(note):
+                continue
+            if _CLAUSE_PARTICLE.search(note):
+                raise ValueError(
+                    f"{a.id}: command の括弧に日本語の節を書いています"
+                    f"（「{note}」）。括弧の注記はシステムが自分の罠に"
+                    "印を付ける行為です。失うものはラベルの動詞で言い、"
+                    "説明が要るなら description / reading に置いてください"
+                )
+
+
+# ─────────── 結論語のラチェット（SPEC 5.4 / 5.6） ───────────
+
+# **これは網羅検査ではない。** 語彙表は「一度見つけた漏れは二度と戻らない」
+# ための止め具であって、次の作者が別の言い回しで書けば通る。
+# 網羅を担保しているのは構造側の規則（何をどのフィールドに置けるか）で、
+# これはその補助にすぎない。見つけた実例をここへ足していく。
+CONCLUSION_WORDS = (
+    "認められない", "認められなかった",
+    "裏づけ", "裏付け",
+    "に一致する",
+    "行われていない",
+    "仕掛けられていない",
+    "攻撃の痕跡",
+    "ここで失われる",
+    "見つからなかった",
+    "侵害されている", "侵害された端末",
+    "攻撃者の常套",
+    "疑うべき",
+    "無関係である",
+    "だからこの",
+    "正常である",
+)
+
+
+def _reject_conclusion_vocabulary(sc: "Scenario") -> None:
+    """結論の言い回しを、資料・手段・規則の側に書いていないか（原則1）。
+
+    見るのは「アシストレベルに関係なく出るもの」と、既に規則があった
+    `reading` / `description`。
+
+    **`evidence.summary` は見ない。** 一行で所見を言うことが summary の
+    仕事そのもので、それが `hard` で伏せられる中身である。ここまで縛ると
+    アシストが何も残らない。逆に `content` は全レベルで出るので、
+    そこに要約が混ざると hard という設計軸が死ぬ — 実際 19件中6件で
+    content の地の文が summary と同じ主張を述べていた。
+    """
+    targets: list[tuple[str, str, str]] = []
+    for e in sc.evidence:
+        targets.append((e.id, "content", e.content))
+        targets.append((e.id, "reading", e.reading))
+    for a in sc.actions:
+        targets.append((a.id, "command", a.command))
+        targets.append((a.id, "label", a.label))
+        targets.append((a.id, "group", a.group))
+        targets.append((a.id, "description", a.description))
+    for q in sc.open_questions:
+        targets.append((q.id, "label", q.label))
+        targets.append((q.id, "question", q.question))
+        targets.append((q.id, "implication", q.implication))
+    for t in sc.timeline:
+        targets.append((t.id, "label", t.label))
+        targets.append((t.id, "text", t.text))
+        targets.append((t.id, "averted_label", t.averted_label))
+        targets.append((t.id, "averted_text", t.averted_text))
+
+    for oid, field, text in targets:
+        for word in CONCLUSION_WORDS:
+            if word in (text or ""):
+                raise ValueError(
+                    f"{oid}.{field}: 結論の言い回し「{word}」が入っています。"
+                    "資料・手段・規則は書けますが、結論は書けません（原則1）"
+                )
 
 
 def _reject_criticality_inversion(sc: "Scenario") -> None:
