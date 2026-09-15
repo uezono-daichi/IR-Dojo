@@ -21,6 +21,20 @@ def raw_scenario():
     path = SCENARIO_DIR / "ransomware-initial-response-01.yaml"
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
+
+@pytest.fixture
+def raw_oauth():
+    """2本目の生データ。**呼び名まわりの検査はこちらでしか歯が見えない。**
+
+    1本目は端末を id（`ws-042`）で呼び、資料の中でもそう書く。
+    2本目は SaaS で、同じものを資料が「受信箱」と呼ぶ。
+    `aliases` の穴は、盤面が1本しか無い間は原理的に露出しなかった。
+    """
+    import yaml
+
+    path = SCENARIO_DIR / "oauth-consent-abuse-01.yaml"
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
 # プレイ中のレスポンスに現れてはならないキー
 FORBIDDEN_KEYS = {
     # 答えそのもの
@@ -1366,24 +1380,34 @@ def test_the_board_counts_mentions_from_the_text_not_from_points_to(any_scenario
 def test_at_least_one_bundled_board_can_tell_the_two_apart():
     """上の検査に歯があること。
 
-    本文が名指ししていないのに `points_to` に載っている証拠が同梱の
-    どこかに無いと、「本文を数えた」と「構造を数えた」が同じ数になり、
-    実装を取り違えても誰も気づかない。**1本目にはこの形が無い** —
-    2本目の mailbox がそれで、指しているのに本文は別の言葉で書いている。
+    2つの数え方（本文の照合 ／ `points_to` の数）が同梱のどの資産でも
+    同じ値なら、実装を取り違えても上の検査は通ってしまう。
+    **どちらかの向きに食い違う資産が、少なくとも1つ要る。**
 
-    ここが空になったら、上の検査は通っていても意味を失っている。
+    v1.44 まで、この歯は「本文が名指ししないのに points_to に載っている
+    証拠」1種類で測っていた。実例は2本目の mailbox で、指しているのに
+    本文は「受信箱」と書いていた。v1.45 で `aliases` に「受信箱」を
+    宣言したので、その食い違いは消えた — **それは盤が過少に数えていた
+    という欠陥のほうが直ったのであって、検査の歯が要らなくなったのでは
+    ない。** 食い違いは逆向き（本文は名指しするが points_to には無い）
+    にも出るので、向きを決め打ちにせず、差があることだけを見る。
     """
-    from irdojo.schema import names_asset
+    from irdojo.engine import Engine
 
-    found = []
+    apart = []
     for sid in ("ransomware-initial-response-01", "oauth-consent-abuse-01"):
         sc = load_scenario(sid)
-        by_id = sc.asset_by_id
-        for ev in sc.evidence:
-            for aid in ev.points_to:
-                if not names_asset(ev.content, by_id[aid]):
-                    found.append((sid, ev.id, aid))
-    assert found, "本文が名指ししない points_to が同梱に1つも無く、検査に歯が無い"
+        e = Engine(sc)
+        e.state.obtained_evidence = [ev.id for ev in sc.evidence]
+        board = {a.id: a.mentions for a in e.view().assets}
+        for aid, said in board.items():
+            pointed = sum(1 for ev in sc.evidence if aid in ev.points_to)
+            if said != pointed:
+                apart.append((sid, aid, said, pointed))
+    assert apart, (
+        "本文の照合と points_to の数が同梱のどの資産でも同じで、"
+        "盤が構造を数えていても誰も気づかない"
+    )
 
 
 def test_counting_mentions_does_not_find_the_answer(any_scenario):
@@ -1424,3 +1448,380 @@ def test_the_board_never_shows_the_reach_of_a_hand_not_yet_pressed(client):
     assert_clean(created, "POST /api/session")
     assert [a["touched"] for a in created["view"]["assets"]] == [0] * len(sc.world.assets)
     assert [a["mentions"] for a in created["view"]["assets"]] == [0] * len(sc.world.assets)
+
+
+# ── 呼び名の宣言（aliases / SPEC 7.1 / v1.45） ──────────────────
+
+
+def _reload(data):
+    """辞書を YAML に戻してローダへ通す。拒否は例外で出る。"""
+    import yaml
+
+    from irdojo.loader import load_scenario_text
+
+    return load_scenario_text(yaml.safe_dump(data, allow_unicode=True))
+
+
+def test_a_declared_alias_stops_a_leak_that_the_label_alone_lets_through(raw_oauth):
+    """宣言した呼び名は、label と同じ重さで漏洩検査に効く。
+
+    漏洩検査は id と label からしか名前を作れなかった。日本語の盤面は
+    同じものを場所ごとに別の名前で呼ぶので、**同じ漏れ方が語によって
+    通ったり弾かれたりしていた** — 連携アプリを「差出人整理アシスタント」と
+    書けば弾かれ、同じ文が受信箱を「森の受信箱の規則」と書いても通った。
+
+    見るのは2つで、順序に意味がある。
+
+      1. 宣言があると、その呼び名で書いた漏れが拒否されること
+      2. 宣言を外すと、**同じ文が通ってしまう**こと
+
+    2 が無いと、この検査は「もともと弾かれていたもの」を見ているだけに
+    なり、`aliases` が1文字も効いていなくても通る。
+    """
+    import copy
+
+    from irdojo.loader import ScenarioError
+
+    LEAK = "\n森の受信箱に残された規則も、この照会で一緒に確認する。\n"
+
+    def with_leak(data):
+        data = copy.deepcopy(data)
+        for a in data["actions"]:
+            # mailbox を targets にも investigates にも持たない調査の手
+            if a["id"] == "act_signin_review":
+                a["description"] += LEAK
+        return data
+
+    with pytest.raises(ScenarioError) as exc:
+        _reload(with_leak(raw_oauth))
+    assert "受信箱" in str(exc.value)
+
+    stripped = copy.deepcopy(raw_oauth)
+    for a in stripped["world"]["assets"]:
+        a.pop("aliases", None)
+    _reload(stripped)                      # 宣言を外すだけなら盤面は通る
+    _reload(with_leak(stripped))           # **同じ漏れが素通りする**
+
+
+def test_every_asset_a_piece_of_evidence_points_at_is_named_in_it(any_scenario):
+    """証拠が指している資産は、その証拠の文のどこかでそう呼ばれていること。
+
+    `points_to` は採点の構造で、資料の文は学習者が読むものである。
+    **両者がずれていたら、学習者は読んでも辿り着けない。** ずれる原因は
+    たいてい「資料はその資産を別の名前で呼んでいるのに、宣言が無い」で、
+    そのとき盤の言及数は過少に数え、漏洩検査は空振りする。
+
+    ここは書き方の規則であって、`points_to` の正しさの検査ではない。
+    呼び名が足りないなら `aliases` に足す。それが嫌なら文を直す。
+    """
+    from irdojo.schema import names_asset
+
+    by_id = any_scenario.asset_by_id
+    silent = [
+        (ev.id, aid)
+        for ev in any_scenario.evidence
+        for aid in ev.points_to
+        if not (names_asset(ev.content, by_id[aid])
+                or names_asset(ev.summary, by_id[aid])
+                or names_asset(ev.reading, by_id[aid]))
+    ]
+    assert not silent, (
+        f"指している資産を一度も名前で呼んでいない証拠: {silent}"
+        "（資料の呼び名を aliases に宣言するか、文を直す）"
+    )
+
+
+def test_that_naming_rule_is_what_the_aliases_are_paying_for(raw_oauth):
+    """上の検査が、2本目では `aliases` 無しに成り立たないこと。
+
+    「証拠は指した資産をそう呼ぶ」は、1本目では宣言ゼロで成り立つ —
+    端末を `ws-042` と呼び、資料でもそう書くからである。だから
+    1本目だけを見ていた頃は、この性質が**盤面の性質なのか
+    呼び名の宣言のおかげなのかが区別できなかった。**
+
+    2本目で分かれる。宣言を外すと 6件が黙る。
+    つまり `aliases` は飾りではなく、上の検査を成立させている側にある。
+    """
+    import copy
+
+    from irdojo.schema import names_asset
+
+    stripped = copy.deepcopy(raw_oauth)
+    for a in stripped["world"]["assets"]:
+        a.pop("aliases", None)
+    sc = _reload(stripped)
+    by_id = sc.asset_by_id
+    silent = [
+        (ev.id, aid)
+        for ev in sc.evidence
+        for aid in ev.points_to
+        if not (names_asset(ev.content, by_id[aid])
+                or names_asset(ev.summary, by_id[aid])
+                or names_asset(ev.reading, by_id[aid]))
+    ]
+    assert len(silent) >= 5, (
+        f"宣言を外しても黙る証拠がほとんど無い（{silent}）。"
+        "aliases が仕事をしていないか、資料が id で呼ぶ書き方に戻っている"
+    )
+
+
+def test_the_loader_rejects_a_name_that_points_at_two_assets(raw_oauth):
+    """同じ呼び名を2つの資産に付けたら拒否すること。
+
+    漏洩検査は名前で照合するので、衝突した名前は「どちらを名指ししたか」を
+    決められない。片方に許された名指しが、もう片方の漏洩を素通りさせる。
+    `aliases` は著者が自由に書ける欄なので、衝突は黙って入る。
+
+    空白だけの別名も拒否する。空文字はどんな文にも一致するので、
+    **1件入れるだけで全資産の漏洩検査が無効になる。**
+    """
+    import copy
+
+    from irdojo.loader import ScenarioError
+
+    data = copy.deepcopy(raw_oauth)
+    for a in data["world"]["assets"]:
+        if a["id"] == "app-board":
+            a["aliases"] = a.get("aliases", []) + ["受信箱"]
+    with pytest.raises(ScenarioError) as exc:
+        _reload(data)
+    assert "受信箱" in str(exc.value)
+
+    data = copy.deepcopy(raw_oauth)
+    for a in data["world"]["assets"]:
+        if a["id"] == "app-board":
+            a["aliases"] = ["   "]
+    with pytest.raises(ScenarioError):
+        _reload(data)
+
+
+# ── 出来事が運ぶもの（SPEC 5.10 / v1.45） ──────────────────────
+
+
+def test_the_loader_rejects_a_timeline_that_names_a_compromised_asset(raw_oauth):
+    """出来事の文が侵害資産を名指ししたら拒否すること。
+
+    アクションの4フィールドには規則があり、論点にもあった。
+    **出来事だけが無防備だった。** 出来事は押さなくても届く —
+    そこに名前が乗っていたら、待つのが最良の調査になる。
+
+    実際に1件あった。2本目の 300分の連絡が「メールボックスの容量が…」で
+    始まっており、`aliases` に「メールボックス」を宣言した途端に
+    この検査が拾った。**呼び名の宣言が漏洩を1件掘り出した**形である。
+    """
+    import copy
+
+    from irdojo.loader import ScenarioError
+
+    data = copy.deepcopy(raw_oauth)
+    for ev in data["timeline"]:
+        if ev["id"] == "tl_deleted_items":
+            ev["text"] = "「メールボックスの容量が上限に近づいていたので、\n" \
+                         "  自動整理が動きました。」\n"
+    with pytest.raises(ScenarioError) as exc:
+        _reload(data)
+    assert "tl_deleted_items" in str(exc.value)
+
+
+def test_a_timeline_may_still_name_what_the_briefing_already_named(raw_scenario):
+    """ブリーフィングが既に渡した資産は、出来事も名乗ってよい。
+
+    1本目の 295分は「fs01 が応答しなくなっていたので、一度再起動を
+    かけました」と言う。fs01 はブリーフィングの一次情報なので、
+    ここで隠すのは**学習者が既に持っているものを隠す**ことであり、
+    文が何の話か分からなくなるだけである。
+
+    この検査が無いと、上の規則を「出来事に資産名を書くな」と
+    強くしすぎたときに、誰も気づかない。
+    """
+    from irdojo.schema import briefing_assets, names_asset
+
+    sc = _reload(raw_scenario)
+    assert "fs01" in briefing_assets(sc)
+    named = [ev.id for ev in sc.timeline if names_asset(ev.text, sc.asset_by_id["fs01"])]
+    assert named, "免除されているはずの資産を名乗る出来事が1件も無い"
+
+
+def test_the_loader_rejects_a_timeline_that_quotes_what_it_destroys(raw_oauth):
+    """奪う出来事が、奪う証拠の中身をその場で渡していたら拒否すること。
+
+    失ったものは講評で初めて開く（原則5）。中身まで言えば、
+    **買っていない証拠を、失った瞬間に無料で配ったことになる。**
+
+    v1.44 で実際にそうなっていた。350分の連絡が ev_006 を奪いながら、
+    その要約の要点（請求のメールが移されている）を本文で述べていた。
+    しかも先手を打った側（averted_text）の方が情報が少なく、
+    **周知を出さなかった学習者だけがヒントを受け取っていた。**
+    """
+    import copy
+
+    from irdojo.loader import ScenarioError
+
+    quote = "請求と口座を含む受信を既読にして別フォルダへ移す規則"
+    data = copy.deepcopy(raw_oauth)
+    for ev in data["timeline"]:
+        if ev["id"] == "tl_helpdesk_rule":
+            ev["text"] = f"「営業部から申告があり、担当者が{quote}を外したそうです。」\n"
+    with pytest.raises(ScenarioError) as exc:
+        _reload(data)
+    assert "tl_helpdesk_rule" in str(exc.value)
+
+    # 先手を打った側にだけ書いても同じこと。**周知を出した人には
+    # 見えて、出さなかった人には見えない中身**というのも配布である
+    data = copy.deepcopy(raw_oauth)
+    for ev in data["timeline"]:
+        if ev["id"] == "tl_helpdesk_rule":
+            ev["averted_text"] = f"「{quote}は、そのまま預かっています。」\n"
+    with pytest.raises(ScenarioError):
+        _reload(data)
+
+
+def test_both_sides_of_an_event_say_the_same_amount(any_scenario):
+    """起きた側と防げた側で、書いてある量が逆転していないこと。
+
+    周知は「先に手を打った」ことへの報酬である。ところが v1.44 の
+    2本目では、**周知を出さなかった側の文のほうが長くヒントが多かった** —
+
+        text         「…見覚えのないものを片付けた」   ← 何を外したかが読める
+        averted_text 「…そのままにしておいた」
+
+    払った人が情報で損をするなら、周知は「証拠を守るが手がかりを失う手」に
+    なる。これは盤面が意図した取引ではない。
+
+    **この検査が見るのは量だけである。** 上の v1.44 の2文は長さが
+    ほぼ同じで、ここでは落ちない — 実測してある。落ちるのは
+    「片側を書き忘れた」水準で、情報量の逆転そのものはローダの2規則
+    （資産を名指ししない／奪う証拠を引き写さない）と、5.10 の書き方が
+    受け持つ。実際 v1.44 の tl_helpdesk_rule はローダが拒否するように
+    なったが、tl_user_unlink の「見覚えのないものを片付けた」は
+    **いまも機械では拾えない。** 拾えないものを拾えるふりをしないために、
+    ここに書いておく。
+
+    0.6 は同梱2本の実測（最小 0.82）から取った緩い下限で、
+    書き足りない側があることの目印であって、文体の規則ではない。
+    """
+    import re
+
+    def size(t):
+        return len(re.sub(r"\s+", "", t or ""))
+
+    for ev in any_scenario.timeline:
+        if not ev.averted_text:
+            continue
+        a, b = size(ev.text), size(ev.averted_text)
+        assert min(a, b) >= 0.6 * max(a, b), (
+            f"{ev.id}: 起きた側 {a}文字 / 防げた側 {b}文字。"
+            "片側だけが書き足りていない（周知を出した人が情報で損をする）"
+        )
+
+
+# ── 取り除く手の束（SPEC 5.6 / v1.45） ────────────────────────
+
+
+@pytest.mark.parametrize(
+    "fixture_name,decoy",
+    [("raw_scenario", "act_purge_persistence_ws107"),
+     ("raw_oauth", "act_reconsent_app_scan")],
+)
+def test_the_eradication_bundle_must_not_map_the_persistence(
+    request, fixture_name, decoy
+):
+    """取り除く手の当たり先が、侵害資産の中に収まっていたら拒否すること。
+
+    封じ込めの手は `requires_evidence` を持てない（SPEC 5.6）ので、
+    **開始0分・0アクションで全部読める。** そこに「元の状態に戻す」という束が
+    あり、その束の手だけが `eradicates` を持ち、当たり先が侵害資産だけなら、
+    **束の名前がそのまま答えの一部になる。**
+
+    2本目の総当たりで実際に出た。被疑判定は応答フェーズ中も
+    再宣言できる（3.6）ので、0分・0手・証拠0件のまま
+    空宣言 → 束を読む → 宣言し直すだけで適合率 1.00・再現率 1.00 に届いた。
+
+    隔離の束には無実の資産の手が混ざっていたのに、**囮があるのは
+    止める側だけだった。** 囮を1つ外すだけで束は答えに戻るので、
+    外して落ちることをここで確かめる。
+    """
+    import copy
+
+    from irdojo.loader import ScenarioError
+
+    data = copy.deepcopy(request.getfixturevalue(fixture_name))
+    data["actions"] = [a for a in data["actions"] if a["id"] != decoy]
+    with pytest.raises(ScenarioError) as exc:
+        _reload(data)
+    assert "取り除く" in str(exc.value)
+
+
+def test_keeping_the_decoy_but_moving_it_to_another_bundle_does_not_help(raw_oauth):
+    """囮を別の束へ逃がしても拒否すること。
+
+    要求が「どこかに無実の資産への根絶手がある」だけだと、著者は囮を
+    別の束に置いて逃げられる。学習者が読むのは束の見出しなので、
+    「元の状態に戻す」を開いたときに侵害資産しか並んでいなければ、
+    囮がよそにあっても答えは配られている。
+    """
+    import copy
+
+    from irdojo.loader import ScenarioError
+
+    data = copy.deepcopy(raw_oauth)
+    for a in data["actions"]:
+        if a["id"] == "act_reconsent_app_scan":
+            a["group"] = "連携だけを止める"
+    with pytest.raises(ScenarioError) as exc:
+        _reload(data)
+    assert "元の状態に戻す" in str(exc.value)
+
+
+def test_the_eradication_bundle_reaches_an_innocent_asset(any_scenario):
+    """同梱の盤面が、実際にその形になっていること。
+
+    上の2本はローダの歯を見ている。こちらは**出荷物がその歯に
+    掛かっていない**ことを見る。規則を足しても、同梱が規則の外に
+    いたら教材は変わらない。
+    """
+    gt = any_scenario.world.ground_truth
+    secret = set(gt.compromised) | {gt.patient_zero}
+    reach = {t for a in any_scenario.actions for t in a.eradicates}
+    assert reach - secret, (
+        f"取り除く手が侵害資産にしか届かない: {sorted(reach)}。"
+        "束を開いただけで persistence が読める"
+    )
+
+
+def test_no_bundle_readable_at_zero_minutes_spells_out_the_truth(any_scenario):
+    """0分・0手で読めるものだけを足しても、真実そのものにならないこと。
+
+    学習者が開始直後に読めるのは、アクション一覧（束の見出しと当たり先）と
+    ブリーフィングである。封じ込めの手は `requires_evidence` を持てないので、
+    **応答フェーズの束は最初から全部見えている。**
+
+    実際の抜け道はこれだった。2本目の「元の状態に戻す」が
+    {mailbox, app-relay} を、ブリーフィングが {acct-mori} を配っており、
+    足すと侵害資産の集合とぴたり一致した。被疑判定は応答フェーズ中も
+    再宣言できる（3.6）ので、空宣言で進み、束を読み、宣言し直すだけで
+    適合率 1.00・再現率 1.00 が取れた。**ログを1行も読まずにである。**
+
+    論点の重みが総合点を抑えるので満点にはならないが、
+    事実認識の層を丸ごと素通りされたら演習は演習でなくなる。
+    """
+    from irdojo.schema import briefing_assets
+
+    truth = set(any_scenario.world.ground_truth.compromised)
+    given = briefing_assets(any_scenario)
+
+    by_group: dict[str, dict[str, set]] = {}
+    for a in any_scenario.actions:
+        slot = by_group.setdefault(a.group, {"targets": set(), "eradicates": set()})
+        slot["targets"].update(a.targets)
+        slot["eradicates"].update(a.eradicates)
+
+    for group, slot in by_group.items():
+        for field, reach in slot.items():
+            if not reach:
+                continue
+            for extra, tag in ((set(), ""), (given, "＋ブリーフィング")):
+                assert (reach | extra) != truth, (
+                    f"束「{group}」の {field}{tag} が侵害資産と一致する: "
+                    f"{sorted(reach | extra)}。押さずに読めるものだけで答えが出る"
+                )

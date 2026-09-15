@@ -29,6 +29,12 @@ def index_html() -> str:
     return (WEB / "index.html").read_text(encoding="utf-8")
 
 
+@pytest.fixture(scope="module")
+def playtest_mjs() -> str:
+    """遊んで確かめる側の原稿。**検査そのものが痩せていないかを見る。**"""
+    return (WEB.parent / "tools" / "playtest.mjs").read_text(encoding="utf-8")
+
+
 def strip_comments(js: str) -> str:
     """コメントを落とす。規則の理由はコメントに書くので、検査の対象から外す。
 
@@ -380,3 +386,75 @@ def test_the_screen_does_not_compose_the_next_target_line(app_js):
         assert forbidden not in block, (
             f"画面が次の的の文面を組み立てている: {forbidden}"
         )
+
+
+# ── 押した結果の結論（SPEC 7.6.16 / v1.45） ─────────────────
+
+
+def test_the_scroll_after_pressing_aims_at_the_conclusion(app_js):
+    """押したあとの視点は、**結論が読めるところ**まで送る。
+
+    周7 で資産盤を足したとき、確認したのは「盤と結果の見出しが載る」
+    までだった。その下にある結論（「分かったこと N 件」「何も出て
+    こなかった。」）は 1440×800 でも 1440×1000 でも画面の外にあり、
+    押した直後に読めるのは端末の数字だけだった。
+    **空振りした手と当たった手が、同じ顔になっていた。**
+
+    列の頭へ送るだけの実装には戻せない。結論の要素を見て決めること。
+    """
+    body = strip_comments(app_js)
+    fn = body[body.index("function scrollAfterAction"):]
+    fn = fn[: fn.index("\n}")]
+    assert ".outcome-msg" in fn, "押したあとの視点が結論を見ていない"
+    assert "innerHeight" in fn, "画面の高さを見ていないので、狭い画面で落ちる"
+
+
+def test_the_board_starts_folded_so_the_conclusion_fits(app_js):
+    """盤の既定は畳む。開いた状態を既定に戻さない。
+
+    開いたままだと図が 300px 強を占め、結論が下へ押し出される
+    （実測 y=949 / 画面 800）。畳んだままでも数の一行（boardTally）が
+    残るので、「14手を終えて、この資産には手 0」に気づく道は閉じない。
+    """
+    body = strip_comments(app_js)
+    fn = body[body.index("function renderBoard"):]
+    fn = fn[: fn.index("\n}")]
+    assert "b.box.open = !!S.boardOpen;" in fn, (
+        "盤の既定が畳んだ状態になっていない（S.boardOpen !== false に戻すと"
+        "初回が開いた状態になり、結論が画面外へ出る）"
+    )
+
+
+def test_the_folded_board_still_says_what_it_counted(app_js):
+    """畳んだ盤も、数えたものは一行で言う。**ただし促さない**（SPEC 6.6）。
+
+    畳むことで盤の値打ち（触れていない資産に気づく）まで捨てたら、
+    結論を見せるために盤を殺したことになる。数は残す。
+    残りの数（「あと3つ触っていない」）は書かない — 書いた瞬間に
+    盤が「押せ」と言い始める。
+    """
+    body = strip_comments(app_js)
+    assert body.count("function boardTally") == 1
+    fn = body[body.index("function boardTally"):]
+    fn = fn[: fn.index("\n}")]
+    for word in ("手を当てた資産", "止めた", "取り除いた"):
+        assert word in fn, f"畳んだ盤が {word} を言っていない"
+    for urge in ("あと", "残り", "まだ", "触れていない"):
+        assert urge not in fn, f"畳んだ盤が促している: {urge}"
+
+
+def test_the_playtest_watches_the_conclusion_at_more_than_one_height(playtest_mjs):
+    """遊んで確かめる側も、結論の可視性を**複数の画面の高さで**見ること。
+
+    この不具合は高さで出方が変わった。1440×1000 では入り、1440×800 では
+    落ちる回があった。1つの高さでしか見ない検査は、直したつもりの回帰を
+    そのまま通す（dpr 1 でしか見なかった canvas と同じ失敗である）。
+    """
+    body = playtest_mjs
+    assert "checkResultConclusionVisible" in body, "結論の可視性を見ていない"
+    assert ".outcome-msg" in body, "結論の要素を指していない"
+    heights = re.findall(r"HEIGHTS\s*=\s*\{([^}]*)\}", body)
+    assert heights, "画面の高さを切り替える表が無い"
+    assert len(re.findall(r":\s*(\d{3,4})", heights[0])) >= 2, (
+        "画面の高さが1つしか無い（高さで出方が変わる不具合を素通りする）"
+    )

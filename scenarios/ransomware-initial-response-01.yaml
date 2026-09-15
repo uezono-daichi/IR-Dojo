@@ -22,6 +22,13 @@ meta:
 
 world:
   assets:
+    # **この盤面に `aliases` は要らない**（SPEC 5.2 / v1.45）。
+    # 端末とサーバは id（`ws-042` / `fs01`）で呼ばれ、資料の本文でも
+    # コマンド行でもそう書く。id と label から作れる名前で足りている。
+    # 2本目は同じものを資料が「受信箱」と呼ぶので宣言が要る —
+    # **足りているかどうかは盤面ごとに測る。** 見ているのは
+    # `test_every_asset_a_piece_of_evidence_points_at_is_named_in_it`。
+    # 資料の側で呼び方を増やしたら、ここにも宣言を足すこと
     - id: dc01
       label: "ドメインコントローラ"
       criticality: critical
@@ -1708,6 +1715,40 @@ actions:
     destroys: [ev_009, ev_014]
     side_effects:
       business_impact: true
+
+  # **囮**（v1.45）。`eradicates` を持つ手が ws-042 の2つだけだったとき、
+  # この束を読むだけで「取り除くものが残っているのは ws-042」が分かった。
+  # 隔離の束には無実の端末が混ざっているのに、取り除く束だけが
+  # ground_truth.persistence の写しになっていた。
+  # 誤導（ev_007 の外部通信）に乗った学習者は、この端末についても
+  # 同じことをしたくなる。40分は返ってこない。
+  - id: act_purge_persistence_ws107
+    label: "ws-107 の自動実行の登録を EDR で標準状態に戻す"
+    command: |
+      $ edrctl remediate --host WS-107 --scope autorun --restore-baseline
+        HKCU\...\Run           : baseline matched
+        HKLM\...\Run           : baseline matched
+        Scheduled Tasks        : 1 entry reverted
+        Services               : baseline matched
+        applied  (00:05:48)
+
+      $ edrctl scan --host WS-107 --profile deep --verify
+        scanned 168,402 objects   (00:31:55)
+        端末は動作を継続。利用者はそのまま作業できる。
+    group: "元の状態に戻す"
+    phase: response
+    type: contain
+    description: |
+      ws-107 の自動実行まわりの登録を、EDR の標準構成と突き合わせて戻す。
+      端末は動いたままで、利用者の作業も止まらない。
+      戻した先が本当に標準どおりかを確かめる深いスキャンに時間がかかる。
+    cost_minutes: 40
+    targets: [ws-107]
+    eradicates: [ws-107]
+    investigates: []
+    destroys: []
+    side_effects:
+      business_impact: false
 
   - id: act_shutdown_dc01
     label: "dc01 を停止"

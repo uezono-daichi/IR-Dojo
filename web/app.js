@@ -401,17 +401,46 @@ function boardKey() {
        + '止 = 止めた　除 = 取り除いた　破線の箱 = いま業務が止まっている';
 }
 
-/* 盤ひとそろい（見出し・記号の説明・図の入れ物）を組み立てる。
-   プレイ画面と凡例の見本が同じ関数から出る。見本を別に書くと必ず腐る
-   （フェーズ帯で一度腐らせている。SPEC 7.6.7）。 */
-function boardBox() {
+/* 畳んだときに一行だけ残すもの（SPEC 7.6.16）。
+
+   盤は既定で畳む。開いたままだと 300px 強を占め、押した結果の結論が
+   画面の下へ落ちる（実測 y=949 / 画面 800）。**それでも盤が拾っていた
+   ものは残す** — 盤の値打ちは「14手を終えて、この資産には手 0」に
+   気づけることで、それは資産ごとに見なくても総数で分かる。
+
+   **促さない。** 「あと3つ触っていない」と書けば盤が「押せ」と言い始める
+   （SPEC 6.6）。書くのは押した側の数だけで、残りは引き算の結果として
+   読み手の側にある。記号は使わない — 畳んでいるときは記号の意味
+   （boardKey）が見えないので、ここだけは言葉で言う。 */
+function boardTally(assets) {
+  var list = assets || [];
+  var touched = 0, stopped = 0, purged = 0;
+  list.forEach(function (a) {
+    if (a.touched) { touched++; }
+    if (a.contained) { stopped++; }
+    if (a.eradicated) { purged++; }
+  });
+  return '手を当てた資産 ' + touched + ' / ' + list.length
+       + '　止めた ' + stopped + '　取り除いた ' + purged;
+}
+
+/* 盤ひとそろい（見出し・畳んだときの一行・記号の説明・図の入れ物）を
+   組み立てる。プレイ画面と凡例の見本が同じ関数から出る。見本を別に書くと
+   必ず腐る（フェーズ帯で一度腐らせている。SPEC 7.6.7）。
+
+   記号の意味は**図と一緒に**畳む。畳んだ状態で「止 = 止めた」とだけ
+   書いてあっても、その記号はどこにも出ていない。 */
+function boardBox(assets) {
   var d = el('details', 'board');
   var sm = el('summary');
   sm.appendChild(el('span', 'board-title', '環境の構成と、手の当たり方'));
-  sm.appendChild(el('span', 'board-key', boardKey()));
+  sm.appendChild(el('span', 'board-tally', boardTally(assets)));
   d.appendChild(sm);
+  var body = el('div', 'board-body');
+  body.appendChild(el('div', 'board-key', boardKey()));
   var host = el('div', 'topo');
-  d.appendChild(host);
+  body.appendChild(host);
+  d.appendChild(body);
   return { box: d, host: host };
 }
 
@@ -625,7 +654,7 @@ function renderLegend(view, mini, notes) {
 
   var board = null;
   if (view.show_topology) {
-    board = boardBox();
+    board = boardBox(view.assets);
     board.box.open = true;
     row.appendChild(region(board.box,
       '環境の構成に、あなたの手の当たり方を重ねた盤です。' +
@@ -638,7 +667,9 @@ function renderLegend(view, mini, notes) {
       '数が多いことも 0 であることも、当たりでも外れでもありません。' +
       '止めた資産には「止」、取り除いた資産には「除」が付き、' +
       '業務が止まっている資産は箱が破線になります — '
-      + '止めた資産が上流なら、下流もつられて破線になります。'));
+      + '止めた資産が上流なら、下流もつられて破線になります。'
+      + 'プレイ中は畳んであります。畳んだままでも、見出しの横に'
+      + '「手を当てた資産 / 止めた / 取り除いた」の数だけは出ています。'));
   }
   mini.appendChild(row);
 
@@ -787,21 +818,37 @@ function decide(payload) {
   }).catch(fail);
 }
 
-/* 押したあとの視点。**盤の頭に戻す** — 盤・結果の順に見えるところまで。
+/* 押したあとの視点。**押した結果の結論が読めるところまで必ず送る。**
 
    画面の一番上（帯の上）まで戻すと、追従している帯のぶんだけ空振りする。
-   逆に結果の箱まで送ると、押すたびに盤が視界の外へ出てしまい、
-   盤を常設にした意味が無くなる。**盤は押した直後に動く** —
-   手の数が 1 つ増えるのを見るのがこの盤の役目である（SPEC 7.6.16）。
-   結果の箱の頭は盤のすぐ下に来るので、押した意味も同じ画面に残る。
-   盤を畳めば、以前と同じく結果が画面の先頭に来る。 */
+   盤の頭に戻すだけにしていた頃は、盤を開いた人の画面から結論が落ちた
+   （実測 y=949 / 画面 800）。残るのは端末の数字だけなので、空振りした手が
+   成果を出したように読める — **当たりと外れが同じ顔になる**。
+
+   だから規則は2段にする。まず盤の頭へ戻し、そこから結論
+   （結果の箱の最初の一行）が読めないなら、結果の箱の頭まで送る。
+   盤を畳んであれば前者で足り、盤・結果の順に同じ画面へ並ぶ。 */
 function scrollAfterAction() {
-  var cols = document.querySelector('.play-main');
-  if (!cols) { window.scrollTo(0, 0); return; }
+  var main = document.querySelector('.play-main');
+  if (!main) { window.scrollTo(0, 0); return; }
   var css = getComputedStyle(document.documentElement);
   var off = (parseInt(css.getPropertyValue('--header-h'), 10) || 66)
-          + (parseInt(css.getPropertyValue('--strip-h'), 10) || 140);
-  var y = window.pageYOffset + cols.getBoundingClientRect().top - off - 10;
+          + (parseInt(css.getPropertyValue('--strip-h'), 10) || 140) + 10;
+  var top = function (e) {
+    return window.pageYOffset + e.getBoundingClientRect().top - off;
+  };
+  var y = top(main);
+  var box = document.querySelector('#result-area .outcome');
+  var point = box && box.querySelector('.outcome-msg');
+  if (point) {
+    var vh = window.innerHeight;
+    var bottom = window.pageYOffset + point.getBoundingClientRect().bottom + 8;
+    if (bottom > y + vh) {
+      // 箱の頭を上端に寄せてなお結論が入らないなら（端末の記録が長い回）、
+      // 結論の側を画面の下端に合わせる。上より下を優先する
+      y = top(box) + vh >= bottom ? top(box) : bottom - vh;
+    }
+  }
   window.scrollTo(0, Math.max(0, y));
 }
 
@@ -850,14 +897,20 @@ function renderPlay() {
    **hard では出さない。** 盤は自分の行動を1枚に消化して見せる装置で、
    消化された見せ方は hard が奪う側にある（SPEC 3.10）。依存関係そのものは
    被疑判定モーダルに文字で残るので、世界の事実は取り上げていない。
-   畳んだ／開いたは <details> 自身が覚えるので、再描画で戻らない。 */
+   畳んだ／開いたは <details> 自身が覚えるので、再描画で戻らない。
+
+   **既定は畳む。** 開いたままだと図が 300px 強を占め、押した結果の結論
+   （「分かったこと N 件」「何も出てこなかった。」）が画面の下へ落ちる。
+   そうなると画面に残るのは端末の数字だけになり、当たりも外れも同じ顔に
+   見える。畳んでも見出しの一行（boardTally）は出したままなので、
+   「手を当てた資産 3 / 6」が読めなくなることはない。 */
 function renderBoard(v) {
   var slot = $('play-board');
   clear(slot);
   slot.hidden = !v.show_topology;
   if (!v.show_topology) { return; }
-  var b = boardBox();
-  b.box.open = S.boardOpen !== false;
+  var b = boardBox(v.assets);
+  b.box.open = !!S.boardOpen;
   b.box.addEventListener('toggle', function () { S.boardOpen = b.box.open; });
   slot.appendChild(b.box);
   // 画面に入れてから描く。非表示のままだと clientWidth が 0 になる

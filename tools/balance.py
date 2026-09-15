@@ -873,9 +873,25 @@ def innocent_containment_cost(
 
 @dataclass
 class Check:
+    """1項目の判定。
+
+    **`ok` は bool でなければならない**（v1.45）。`if check.ok` としか
+    読まないので、集合や整数を入れても表示側は意図どおり動いてしまう。
+    動いてしまうから誰も気づかず、`--json` だけが
+    `TypeError: Object of type set is not JSON serializable` で死んでいた。
+    機械可読の口は普段の目視では通らないので、**型を入口で見る。**
+    """
+
     ok: bool
     name: str
     detail: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.ok, bool):
+            raise TypeError(
+                f"判定「{self.name}」の ok が {type(self.ok).__name__} です。"
+                "bool にしてください（--json が出せなくなります）"
+            )
 
 
 def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
@@ -1087,10 +1103,20 @@ def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
             f"棄却できた場合との差: {diffs}"
             f"（調査は両方 {ok.decided_at}分まで同一。どの方針でも 5点以上）",
         ))
+        # **bool にする**（v1.45）。ここは長らく集合をそのまま `ok` に
+        # 入れていた。真偽としては意図どおり動くが `json.dumps` が死ぬので、
+        # `--json` は**一度も走ったことがなかった** — CLAUDE.md と README が
+        # 「まずこれを回せ」と書いている機械可読の口である。
+        # ついでに名前どおりの主張にした。差が空でないだけでは
+        # 「無関係な資産を名指しさせる」とは言えない。誤導に乗ったせいで
+        # 増える名指しが、**本当に innocent の側に出ている**ことを見る
+        extra = set(bad.assessment) - set(ok.assessment)
+        truth_now = set(sc.world.ground_truth.compromised)
         out.append(Check(
-            set(bad.assessment) - set(ok.assessment),
+            bool(extra) and not (extra & truth_now),
             "誤導は実際に無関係な資産を名指しさせる",
-            f"誤導を追う: {bad.assessment} / 棄却できた: {ok.assessment}",
+            f"誤導を追う: {bad.assessment} / 棄却できた: {ok.assessment}"
+            f"（増える名指し {sorted(extra) or 'なし'} — どれも侵害資産ではないこと）",
         ))
 
     # **誤導には向きが2つある**（SPEC 3.4 / v1.42）。

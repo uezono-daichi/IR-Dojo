@@ -109,7 +109,7 @@ critical 論点の数、証拠数からローダが算出する。
 
 ```
 pip install -e ".[dev]"
-pytest                                   # 261本
+pytest                                   # 285本
 ```
 
 - `tests/test_scoring.py` — SPEC 6.8 の計算例をそのまま検証する
@@ -123,6 +123,7 @@ pytest                                   # 261本
 ```
 python tools/balance.py                  # 設計の均衡（SPEC 8.3 のチェックリスト）
 python tools/balance.py <シナリオID>     # 同梱のどれでも
+python tools/balance.py --json           # 機械可読（落ちた項目があれば終了コード 1）
 npm install
 node tools/playtest.mjs --dpr 2 --scenario <シナリオID>   # 実際に遊ぶ＋スクショ
 node tools/playtest.mjs --dpr 2 --assist hard            # hard は画面の作りが一番変わる

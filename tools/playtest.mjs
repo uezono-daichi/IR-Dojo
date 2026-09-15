@@ -92,6 +92,40 @@ async function checkActionsStayVisible(where) {
   }
 }
 
+/** 押した結果の**結論**が、押した直後に視野へ入っているか
+ *
+ *  見出しが載ることと、結果が読めることは別である。周7 で資産盤を足したとき、
+ *  確認したのは「盤と結果の見出しが載る」までで、その下にある結論
+ *  （分かったこと N 件 / 何も出てこなかった）は 1440×800 でも 1440×1000 でも
+ *  画面の外だった。**空振りした手で画面に残るのは端末の数字だけ**になり、
+ *  初見には成果が出たように読める。
+ *
+ *  視点の戻り先は押した瞬間に決まるので、**押す前に**画面の高さを変えて呼ぶ。
+ *  追従している帯の下に潜っているものも読めていないので、そちらも見る。 */
+async function checkResultConclusionVisible(where) {
+  const r = await page.evaluate(() => {
+    const box = document.querySelector('#result-area .outcome');
+    if (!box) return { miss: '結果の箱' };
+    const pt = box.querySelector('.outcome-msg');
+    if (!pt) return { miss: '結果の結論（.outcome-msg）' };
+    const css = getComputedStyle(document.documentElement);
+    const off = (parseInt(css.getPropertyValue('--header-h'), 10) || 0)
+              + (parseInt(css.getPropertyValue('--strip-h'), 10) || 0);
+    const b = pt.getBoundingClientRect();
+    return {
+      text: pt.textContent.replace(/\s+/g, ' ').trim().slice(0, 24),
+      top: Math.round(b.top), bottom: Math.round(b.bottom),
+      off: Math.round(off), vh: window.innerHeight,
+    };
+  });
+  if (r.miss) { note('error', where, `${r.miss}が見つからない`); return; }
+  if (r.bottom > r.vh || r.top < r.off) {
+    note('error', where,
+      `押した結果の結論「${r.text}」が視野に入っていない`
+      + `（上端 ${r.top} / 下端 ${r.bottom} / 帯の下 ${r.off} / 画面 ${r.vh}）`);
+  }
+}
+
 /** 生の markdown 記法が素通りしていないか（SPEC 7.6 / 過去の実バグ）
  *
  *  ログの抜粋は等幅の箱に入っていて、そこの `#` は markdown ではなく
@@ -230,8 +264,17 @@ if (legendBefore.groups.length !== 1
     + `${JSON.stringify(legendBefore.groups)} ⊄ ${JSON.stringify(playNow.groups)}`);
 }
 
+// 押した結果が読めるかは画面の高さで変わる。**狭い側から先に見る** —
+// 1440×1000 で通っていたものが 1440×800 で落ちた（周7 の退行）
+const HEIGHTS = { 2: 800, 3: 1000 };
+
 const log = [];
 for (let i = 0; i < 40; i++) {
+  // 視点の戻り先は押した瞬間に決まるので、高さを変えるのは押す前
+  if (HEIGHTS[i]) {
+    await page.setViewportSize({ width: 1440, height: HEIGHTS[i] });
+    await page.waitForTimeout(150);
+  }
   const b = await page.$('#actions-list button.act:not([disabled])');
   if (!b) break;
   const label = (await b.textContent()).trim().split('\n')[0];
@@ -241,8 +284,15 @@ for (let i = 0; i < 40; i++) {
   const inc = await page.$$eval('#incoming-list .incoming.fresh .incoming-label',
     e => e.map(x => x.textContent)).catch(() => []);
   log.push({ n: i + 1, at: t, action: label, incoming: inc });
-  if (i === 2) { await checkActionsStayVisible('play-after-result'); await screen('05-play-result'); }
+  if (HEIGHTS[i]) {
+    await checkResultConclusionVisible(`play-after-result(1440×${HEIGHTS[i]})`);
+    await checkActionsStayVisible(`play-after-result(1440×${HEIGHTS[i]})`);
+    await shot(`05-play-result-h${HEIGHTS[i]}`);
+    await checkNoHorizontalOverflow(`play-after-result(1440×${HEIGHTS[i]})`);
+  }
 }
+await page.setViewportSize({ width: 1440, height: 1000 });
+await page.waitForTimeout(150);
 await checkCanvasStable('play-late');
 await screen('06-play-late');
 await checkCaretsShared('play-late');

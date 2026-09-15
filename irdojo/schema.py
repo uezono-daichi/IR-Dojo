@@ -72,6 +72,15 @@ class Strict(BaseModel):
 class Asset(Strict):
     id: str
     label: str
+    # **この資産を、盤面の文がそう呼んでいる名前**（v1.45）。
+    # 漏洩検査は id と label からしか名前を作れなかった。日本語の盤面では
+    # 同じものが場所ごとに別の呼ばれ方をする — 「クラウドメール」は
+    # 本文では「受信箱」であり、そこを著者が宣言する場所が無かった。
+    # 結果として、同じ漏れ方が語によって通ったり弾かれたりしていた
+    # （「差出人整理アシスタント」は弾かれ、「森の受信箱」は通った）。
+    # ここに書いた語は `asset_names` に合流し、**すべての漏洩検査**と
+    # 盤の「証」の数え方に同時に効く。
+    aliases: list[str] = []
     criticality: Criticality
     depends_on: list[str] = []
     business_impact_per_hour: float = Field(default=0.0, ge=0.0)
@@ -663,6 +672,10 @@ def asset_names(asset: "Asset") -> set[str]:
     bare = re.sub(r"[（(][^）)]*[）)]", "", asset.label).strip()
     if bare:
         names.add(bare)
+    # 著者が宣言した呼び名。**id と label から機械的に作れる名前だけでは
+    # 足りない。** 日本語の盤面は同じものを場所ごとに別の名前で呼ぶので、
+    # 宣言する場所が無いと、同じ漏れ方が語によって通ったり弾かれたりする
+    names.update(a.strip() for a in asset.aliases if a.strip())
     return names
 
 
@@ -846,10 +859,14 @@ def _validate_scenario(sc: "Scenario") -> None:
     _reject_unreachable_actions(sc)
     _reject_assets_no_action_can_touch(sc)
     _reject_criticality_inversion(sc)
+    _reject_ambiguous_asset_names(sc)
     _reject_uncontainable_compromise(sc)
     _reject_uneradicable_persistence(sc)
+    _reject_eradication_that_maps_persistence(sc)
     _reject_stops_that_erase_without_stopping(sc)
     _reject_toothless_timeline(sc)
+    _reject_timeline_that_names_assets(sc)
+    _reject_timeline_that_hands_over_what_it_takes(sc)
     _reject_questions_that_name_the_truth(sc)
     _reject_actions_that_name_other_assets(sc)
     _reject_commands_that_hand_over_losable_evidence(sc)
@@ -961,6 +978,118 @@ def _validate_clears(sc: "Scenario", e: "Evidence", asset_ids: set[str]) -> None
                 f"{e.id}: clears に書いた {asset} を content が名指ししていません。"
                 "白と読ませる誤導は、読み手がその資産の話だと分かって初めて成立します"
             )
+
+
+def _reject_timeline_that_names_assets(sc: "Scenario") -> None:
+    """出来事の文が、侵害された資産を名指ししていないか（SPEC 5.10）。
+
+    アクションの4フィールドには規則があった（`_reject_actions_that_name_other_assets`）。
+    論点にもあった。**出来事だけが無防備だった。** 実測すると、
+    `timeline.text` に label をそのまま書いても、「森の受信箱に、請求を隠す
+    規則が仕込まれているようです」と書いても、ローダは通した（v1.45）。
+
+    出来事は向こうから来る。押さなくても、待っていれば必ず届く。
+    そこに答えが乗っていたら、**待つのが最良の調査**になる。
+    運ぶのは圧力だけ、という 5.10 の規則は、この検査が無い限り
+    「証拠にしない」という形式的な意味しか持っていなかった。
+
+    アクションと違い、出来事には `targets` が無い — 自分が触る資産という
+    逃げ道が無いので、禁じるのは `compromised ∪ {patient_zero} ∪ persistence`
+    のすべてである。ブリーフィングが既に名指しした資産だけが書ける
+    （他の検査と同じ免除規則）。
+
+    **innocent は禁じない。** 無関係な資産の名前が出来事に出るのは誤導で
+    あって漏洩ではない。むしろ出来事に誤導を載せるのは正当な設計である。
+    """
+    gt = sc.world.ground_truth
+    secret = set(gt.compromised) | {gt.patient_zero} | set(gt.persistence)
+    secret -= briefing_assets(sc)
+    by_id = sc.asset_by_id
+
+    for ev in sc.timeline:
+        for field in ("label", "text", "averted_label", "averted_text"):
+            text = getattr(ev, field) or ""
+            for asset_id in sorted(secret):
+                name = names_asset(text, by_id[asset_id])
+                if name:
+                    raise ValueError(
+                        f"{ev.id}.{field}: 侵害された資産「{name}」を名指ししています。"
+                        "出来事は押さなくても届くので、待つのが最良の調査に"
+                        "なってしまいます（5.10 が運ばせるのは圧力だけです）"
+                    )
+
+
+def _reject_timeline_that_hands_over_what_it_takes(sc: "Scenario") -> None:
+    """奪う出来事が、奪う証拠の中身をその場で渡していないか（SPEC 5.10 / 原則5）。
+
+    失ったものは**講評で初めて**開示する。プレイ中に「何を失ったか」を
+    告げるのは原則5の違反であり、しかも中身まで言えば、
+    **買っていない証拠を無料で配ったことになる。**
+
+    実際にそうなっていた（v1.45）。350分の出来事が ev_006 を奪いながら、
+    その ev_006 の要約とほぼ同じことを本文で述べていた。さらに悪いことに、
+    先手を打った側（`averted_text`）の方が情報が少なかった — 周知を
+    出さなかった学習者だけが、証拠を失う代わりにヒントを受け取っていた。
+
+    機械で見られるのは2つ。
+
+      1. その証拠にしか無い数（4文字以上の数字列・16進列）が出ていないか。
+         `_reject_commands_that_hand_over_losable_evidence` と同じ道具。
+      2. 要約・本文からの**書き写し**が無いか（10文字以上の一致）。
+
+    **これは網羅検査ではない。** 言い換えれば通る。網羅を担保するのは
+    「出来事は手段だけを言う」という書き方の規則（5.10）で、これはその
+    止め具である。1本目の水準 —「再起動をかけました」「日次のパージが
+    走りました」— を写経すること。
+    """
+    by_id = sc.evidence_by_id
+
+    for ev in sc.timeline:
+        texts = [(f, getattr(ev, f) or "") for f in ("text", "averted_text", "label")]
+        for eid in ev.destroys:
+            target = by_id[eid]
+            body = (target.content or "").replace(",", "")
+            tokens = _id_tokens(body) | _id_tokens(target.summary or "")
+            for field, text in texts:
+                flat = text.replace(",", "")
+                shared = sorted(t for t in tokens if t in flat)
+                if shared:
+                    raise ValueError(
+                        f"{ev.id}.{field}: 奪う証拠 {eid} にしか無い値 {shared} が"
+                        "出ています。買っていない証拠の中身を、失った瞬間に"
+                        "渡しています（何を失ったかは講評で開きます）"
+                    )
+                for source in (target.summary or "", target.content or ""):
+                    quoted = _longest_shared_run(text, source)
+                    if len(quoted) >= 10:
+                        raise ValueError(
+                            f"{ev.id}.{field}: 奪う証拠 {eid} からの書き写しが"
+                            f"あります（「{quoted}」）。出来事が言えるのは"
+                            "手段までで、中身は講評まで開きません"
+                        )
+
+
+def _longest_shared_run(a: str, b: str) -> str:
+    """2つの文に共通する、最も長い連続部分。
+
+    書き写しを見つけるためだけの素朴な照合で、言い換えには効かない。
+    出来事も証拠も数百文字なので、この計算量で足りる。
+    """
+    a = re.sub(r"\s+", "", a or "")
+    b = re.sub(r"\s+", "", b or "")
+    if not a or not b:
+        return ""
+    best = ""
+    prev = [0] * (len(b) + 1)
+    for i in range(1, len(a) + 1):
+        cur = [0] * (len(b) + 1)
+        for j in range(1, len(b) + 1):
+            if a[i - 1] == b[j - 1]:
+                cur[j] = prev[j - 1] + 1
+                if cur[j] > len(best):
+                    best = a[i - cur[j]:i]
+        prev = cur
+    return best
 
 
 def _reject_questions_that_name_the_truth(sc: "Scenario") -> None:
@@ -1214,6 +1343,32 @@ def _reject_conclusion_vocabulary(sc: "Scenario") -> None:
                 )
 
 
+def _reject_ambiguous_asset_names(sc: "Scenario") -> None:
+    """同じ呼び名が2つの資産を指していないか（SPEC 7.1 / 5.6）。
+
+    漏洩検査は名前で照合する。同じ語が2つの資産の名前になっていると、
+    どちらを名指ししたのかが決まらない — 片方に許された名指しが、
+    もう片方の漏洩を素通りさせる。`aliases` は著者が自由に書けるので、
+    ここを見ないと衝突が黙って入る。
+
+    **空白だけの別名も拒否する。** 空文字は `casefold` の比較で
+    どんな文にも一致し、全資産の漏洩検査を無効にする。
+    """
+    seen: dict[str, str] = {}
+    for a in sc.world.assets:
+        for alias in a.aliases:
+            if not alias.strip():
+                raise ValueError(f"{a.id}: 空の aliases は書けません")
+        for name in sorted(asset_names(a)):
+            key = name.casefold()
+            if key in seen and seen[key] != a.id:
+                raise ValueError(
+                    f"呼び名「{name}」が {seen[key]} と {a.id} の両方を指しています。"
+                    "漏洩検査はどちらを名指ししたのか決められません"
+                )
+            seen[key] = a.id
+
+
 def _reject_criticality_inversion(sc: "Scenario") -> None:
     """重要度の順序が business_impact_per_hour の順序と逆転していないか。
 
@@ -1442,6 +1597,64 @@ def _reject_uneradicable_persistence(sc: "Scenario") -> None:
             "eradicates を持つ contain アクションが無いと、"
             "5.8 の on_correct_containment には誰も到達できない"
         )
+
+
+def _reject_eradication_that_maps_persistence(sc: "Scenario") -> None:
+    """取り除く手の当たり先が、`ground_truth.persistence` の写しになっていないか。
+
+    封じ込めの手は `requires_evidence` を持てない（SPEC 5.6）ので、
+    **開始0分・0アクションで全部読める。** そこに「元の状態に戻す」という束が
+    あり、その束の手だけが `eradicates` を持ち、当たり先が persistence と
+    完全に一致していると、**束の名前がそのまま答えの一部になる。**
+
+    実測してある（v1.45）。2本目の盤面では、被疑判定が応答フェーズ中も
+    再宣言できること（3.6）と合わせて、0分・0手・証拠0件のまま
+    空宣言 → 束を読む → 宣言し直すだけで適合率 1.00・再現率 1.00 が出た。
+    256通りの総当たりで、0手時点の最高得点がこれだった。
+
+    隔離の束には無実の資産の手が混ざっていた（ws-107 / app-scan /
+    acct-admin）のに、**囮があるのは止める側だけだった。**
+
+    だから要求は2つある。
+
+      1. 取り除く手の当たり先が、侵害資産の中に収まっていないこと。
+         少なくとも1つは無実の資産へ届いていること（＝囮）。
+         等しくないだけでは足りない — compromised の部分集合に収まる限り、
+         その束は「どれが侵害されているか」を配り続ける。
+      2. どの束についても、その束が取り除く先が persistence と
+         一致しないこと。囮を別の束に置いて逃げられるため。
+
+    **盤面の資産が全部 compromised なら、この検査は何もしない。**
+    選り分けるものが無いところに選り分けは無い
+    （`_reject_actions_that_name_other_assets` の「全員を名指し」と同じ理屈）。
+    """
+    gt = sc.world.ground_truth
+    secret = set(gt.compromised) | {gt.patient_zero}
+    outsiders = {a.id for a in sc.world.assets} - secret
+    if not outsiders:
+        return
+
+    purgers = [a for a in sc.actions if a.eradicates]
+    reach = {t for a in purgers for t in a.eradicates}
+    if reach and reach <= secret:
+        raise ValueError(
+            f"取り除く手の当たり先が侵害資産の中に収まっています: {sorted(reach)}。"
+            "封じ込めの手は開始0分で全部読めるので、そのままでは"
+            "「取り除くものが残っているのはどれか」を配ります。"
+            f"無実の資産（{sorted(outsiders)}）にも取り除く手を置いて、"
+            "囮を作ってください"
+        )
+
+    persistence = set(gt.persistence)
+    by_group: dict[str, set[str]] = {}
+    for a in purgers:
+        by_group.setdefault(a.group, set()).update(a.eradicates)
+    for group, reached in by_group.items():
+        if persistence and reached == persistence:
+            raise ValueError(
+                f"束「{group}」が取り除く先が persistence と一致しています: "
+                f"{sorted(reached)}。束の名前がそのまま答えの一部になります"
+            )
 
 
 def _reject_stops_that_erase_without_stopping(sc: "Scenario") -> None:

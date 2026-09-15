@@ -33,6 +33,12 @@ world:
 
     - id: mailbox
       label: "クラウドメール"
+      # 本文はこれを「受信箱」「メールボックス」「受信トレイ」と呼ぶ。
+      # **呼び名は宣言する**（SPEC 7.1 / v1.45）。宣言が無かった頃、
+      # 同じ漏れ方が語によって通ったり弾かれたりしていた —
+      # 「差出人整理アシスタント」は弾かれ、「森の受信箱」は通った。
+      # 宣言を足した結果、出来事が1件この規則に触れた（tl_deleted_items）
+      aliases: ["受信箱", "メールボックス", "受信トレイ"]
       criticality: high
       depends_on: [tenant]
       business_impact_per_hour: 60
@@ -45,12 +51,15 @@ world:
 
     - id: acct-admin
       label: "テナント管理者アカウント (岸)"
+      # 記録の中では宛先アドレスがそのまま呼び名になる
+      aliases: ["kishi-adm@example.com"]
       criticality: medium
       depends_on: [tenant]
       business_impact_per_hour: 12
 
     - id: acct-mori
       label: "営業部アカウント (森)"
+      aliases: ["mori@example.com"]
       criticality: low
       depends_on: [tenant]
       business_impact_per_hour: 4
@@ -59,18 +68,22 @@ world:
     # またがるので、構成図は DAG になる（SPEC 7.6.7）
     - id: app-scan
       label: "契約書点検サービス"
+      # 連携アプリは登録 id でも呼ばれる。端末の記録に出るのはこちら
+      aliases: ["2b90-scan"]
       criticality: low
       depends_on: [tenant, mailbox, filehub]
       business_impact_per_hour: 3
 
     - id: app-relay
       label: "差出人整理アシスタント"
+      aliases: ["7f3c-relay"]
       criticality: low
       depends_on: [tenant, mailbox]
       business_impact_per_hour: 2
 
     - id: app-board
       label: "会議室予約コネクタ"
+      aliases: ["51ad-board"]
       criticality: low
       depends_on: [tenant]
       business_impact_per_hour: 2
@@ -1447,8 +1460,9 @@ actions:
       $ mailctl appaccess policy create --name deny-apps --user mori@example.com \
           --apps all --action deny
         policy created
-      $ mailctl appaccess test --user mori@example.com --app 7f3c-relay
-        access : denied
+      $ mailctl appaccess policy show --user mori@example.com
+        apps   : all
+        action : deny
         利用者本人の送受信はそのまま続く。
     group: "連携だけを止める"
     phase: response
@@ -1624,6 +1638,35 @@ actions:
     side_effects:
       business_impact: true
 
+  # **囮**（v1.45）。`eradicates` を持つ手が上の3つだけだったとき、
+  # この束を読むだけで「取り除くものが残っているのは受信箱と差出人整理
+  # アシスタント」が分かった — ground_truth.persistence の写しである。
+  # 隔離の束には無実の資産の手が混ざっているのに、取り除く束だけが
+  # 答えを配っていた。広い権限を持つ正規の連携は、誤導（ev_008）に
+  # 乗れば同じ扱いをしたくなる先であり、30分と法務の業務が返ってこない。
+  - id: act_reconsent_app_scan
+    label: "契約書点検サービスの委任同意を取り消し、申請から通し直す"
+    command: |
+      $ tnctl grant revoke --app 2b90-scan --all-principals
+        revoked : 7 grants
+      $ tnctl app consent-request create --app 2b90-scan --to legal-owner
+        request sent
+        承認が下りるまで、このサービスからの参照は止まる。
+    group: "元の状態に戻す"
+    phase: response
+    type: contain
+    description: |
+      そのサービスに与えられている委任同意を全利用者ぶん取り消し、
+      申請と承認をやり直してもらう。承認が下りるまでの間、
+      このサービスを使っている業務は手作業に戻る。
+    cost_minutes: 30
+    targets: [app-scan]
+    eradicates: [app-scan]
+    investigates: []
+    destroys: []
+    side_effects:
+      business_impact: true
+
 phases:
   - id: investigation
     label: "調査"
@@ -1660,11 +1703,17 @@ timeline:
       「日次のパージが走りましたが、保全の指定が入っていたので
         対象から外れました。範囲はそのまま残っています。」
 
+  # 資産を名指ししない（SPEC 5.10 / v1.45）。v1.44 のこの文は
+  # 「メールボックスの容量が…」で始まっていた。「メールボックス」を
+  # mailbox の呼び名として宣言した途端、出来事の検査がここを拒否した —
+  # **出来事は押さなくても 300分に必ず届く**ので、そこに名前が乗っていれば、
+  # 待つだけで侵害資産が1つ絞れてしまう。ほかの4件は既に主語を
+  # 書いていない（「日次のパージが走りました」）。ここだけ揃っていなかった
   - id: tl_deleted_items
     at_minutes: 300
     label: "メール運用チームから連絡"
     text: |
-      「メールボックスの容量が上限に近づいていたので、
+      「保存容量が上限に近づいていたので、
         自動整理が動きました。設定どおりの定期処理です。」
     destroys: [ev_017]
     averted_label: "メール運用チームから連絡"
@@ -1684,29 +1733,35 @@ timeline:
       「自動整理が走るところでしたが、保全の指定が入っていたので
         処理から外しました。登録はそのまま残しています。」
 
+  # **言うのは手段まで**（SPEC 5.10 / 原則5）。v1.44 のこの文は、
+  # 奪う証拠の要約とほぼ同じことを述べていた — 買っていない証拠の中身を、
+  # 失った瞬間に無料で配っていた。しかも先手を打った側のほうが情報が
+  # 少なく、周知を出さなかった学習者だけがヒントを受け取っていた。
+  # 1本目の水準（「日次のパージが走りました」）に合わせ、
+  # 起きた／起きなかったの差だけが残るように書き直した（v1.45）
   - id: tl_helpdesk_rule
     at_minutes: 350
     label: "ヘルプデスクから連絡"
     text: |
-      「営業部から『請求のメールが届かない』という申告が来ていて、
-        担当者が受信箱の設定を見て、その場で直したそうです。」
+      「営業部から『届くはずのものが手元に無い』という申告が来ていて、
+        担当者が手順どおり、本人の設定を既定に戻したそうです。」
     destroys: [ev_006]
     averted_label: "ヘルプデスクから連絡"
     averted_text: |
-      「営業部から『請求のメールが届かない』という申告が来ていますが、
-        先の周知どおり、設定には触らずに預かっています。」
+      「営業部から『届くはずのものが手元に無い』という申告が来ていますが、
+        先の周知どおり、担当者は設定に触らずに預かっています。」
 
   - id: tl_user_unlink
     at_minutes: 400
     label: "営業部から連絡"
     text: |
       「本人が心配して、自分の画面から連携アプリの一覧を開いて、
-        見覚えのないものを片付けたと言っています。」
+        外せるものを自分で外したと言っています。」
     destroys: [ev_004]
     averted_label: "営業部から連絡"
     averted_text: |
       「本人が心配して連携アプリの一覧を開いたそうですが、
-        周知を見て、そのままにしておいたとのことです。」
+        先の周知どおり、何も外さずにそのままにしてあります。」
 
 damage:
   model: exponential

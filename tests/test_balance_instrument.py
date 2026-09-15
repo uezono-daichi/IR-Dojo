@@ -905,3 +905,45 @@ def test_the_free_form_of_the_preservation_constraint_makes_that_hint_hollow(bal
     assert ep_dmg <= bc_dmg * 1.05, (
         "自由な形の制約でも伸びが測れてしまう。制約型の選び直しは効いていない"
     )
+
+
+# ── 機械可読の口（--json / v1.45） ────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "sid", ["ransomware-initial-response-01", "oauth-consent-abuse-01"]
+)
+def test_the_machine_readable_mouth_actually_opens(balance, sid):
+    """`tools/balance.py --json` が、同梱のどのシナリオでも出せること。
+
+    CLAUDE.md も README も「まず回せ」と書いている口が、**一度も
+    走ったことがなかった。** `Check.ok` に集合がそのまま入っている箇所が
+    1つあり、`json.dumps` が `TypeError: Object of type set is not JSON
+    serializable` で落ちていた。真偽としては `if c.ok` が意図どおり
+    動くので、目で見る表のほうは何年でも正しく出る。
+
+    人が読む口だけを毎回叩いていると、こういう壊れ方は見えない。
+    だから**機械可読の口そのものを叩く**。
+    """
+    import json
+
+    from irdojo.loader import load_scenario
+
+    data = balance.report(load_scenario(sid))
+    text = json.dumps(data, ensure_ascii=False)     # ここが落ちていた
+    assert json.loads(text)["scenario"] == sid
+    assert data["checks"], "判定が1つも出ていない"
+    for c in data["checks"]:
+        assert isinstance(c["ok"], bool), f"{c['name']} の ok が bool でない"
+
+
+def test_a_check_that_is_not_a_boolean_is_refused_at_the_door(balance):
+    """`Check.ok` に bool 以外を入れたら、その場で落ちること。
+
+    表示側は `if c.ok` としか読まないので、集合でも整数でも「動いて
+    しまう」。動いてしまうから気づかれず、`--json` だけが死んでいた。
+    次に同じ書き方をしたら、`--json` を叩くまでもなく落ちてほしい。
+    """
+    balance.Check(True, "見本", "詳細")            # 通ること
+    with pytest.raises(TypeError):
+        balance.Check({"ws-042"}, "見本", "詳細")
