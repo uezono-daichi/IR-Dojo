@@ -151,12 +151,43 @@ class Evidence(Strict):
     # ログの読み方。フィールドの意味、書式、一般的な相場観まで。
     # 「だからこの資産は侵害されている」という推論は書かない（それは答え）。
     reading: str = ""
+    # **この所見は何を意味しうるか**（v1.46）。`reading` を読めても、
+    # 初学者は「で、これは何なのか」のところで止まる。読み方だけを渡すのは、
+    # 辞書を渡して文章を読めと言うのに近い。
+    #
+    # **`reading` を拡張せず別の欄にしてある。** 「読み方が漏らしているか」と
+    # 「可能性の列挙が漏らしているか」は別の検査で見たい — 混ぜると、
+    # どちらが漏らしたのか分からないまま1本の長さの帯で測ることになる。
+    #
+    # 守る線は4つ。①必ず2つ以上（1つならそれは結論）②順序・厚み・語気で
+    # 本命を示唆しない ③そのシナリオの固有名を出さない（資産名・証拠ID・
+    # アクション名・**棄却の材料にしか無い語**）④誤導と本物で数と長さが揃う。
+    # ①③はローダが、②はローダ（語彙と厚み）が、④は tools/balance.py が見る。
+    #
+    # 1項目は「ありうる読み＋それを決着させるには何を見るか」で書く。
+    # **決着はさせない。** 「毎日 02:15 のバックアップジョブかもしれません」は、
+    # 台帳を引く手を 25分ぶん無料で配っているのと同じである。
+    possibilities: list[str] = []
     refuted_by: list[str] = []
     # 棄却の条件。`open_questions.resolution_mode` と同じ形で読む。
     #   any … どれか1つ持っていれば棄却できる（既定）
     #   all … すべて揃って初めて棄却できる
     # `misleading: true` の証拠にだけ意味がある（ローダが他での指定を拒否する）。
     refutation_mode: Literal["any", "all"] = "any"
+
+    @model_validator(mode="after")
+    def fold_possibilities(self) -> "Evidence":
+        """列挙の各項目を1行に畳む。
+
+        YAML 側は読める幅で折り返して書く（1項目で 60字を超える）。
+        **畳むのを画面側の仕事にしない。** 折り返しが残ったままだと、
+        ローダの漏洩検査が「行をまたいだ語」を取り逃がす — 資産名を
+        改行で割って書けば、検査は素通りする。日本語なので空白は挟まない。
+        """
+        self.possibilities = [
+            re.sub(r"\s*\n\s*", "", t).strip() for t in self.possibilities
+        ]
+        return self
 
     def is_refuted(self, held: Collection[str]) -> bool:
         """手元の証拠 `held` で、この誤導を棄却できるか。
@@ -506,6 +537,9 @@ class AssistProfile(Strict):
     show_evidence_summary: bool = True
     show_action_description: bool = True   # 何をする作業か
     show_evidence_reading: bool = True     # ログの読み方
+    # 考えられること（この所見は何を意味しうるか）。`reading` と同じ扱いにする —
+    # 読み方を渡さない相手に可能性だけ渡しても、生ログとの対応が付かない
+    show_evidence_possibilities: bool = True
     show_primer: bool = True               # 考え方の枠組み（はじめての人へ）
     show_topology: bool = True             # 環境の構成図
     #
@@ -520,6 +554,7 @@ DEFAULT_PROFILES: dict[AssistLevel, AssistProfile] = {
     AssistLevel.STANDARD: AssistProfile(
         show_question_resolution=False,
         show_evidence_reading=False,
+        show_evidence_possibilities=False,
     ),
     AssistLevel.HARD: AssistProfile(
         show_open_questions=False,
@@ -529,6 +564,7 @@ DEFAULT_PROFILES: dict[AssistLevel, AssistProfile] = {
         show_evidence_summary=False,
         show_action_description=False,
         show_evidence_reading=False,
+        show_evidence_possibilities=False,
         show_primer=False,
         show_topology=False,
     ),
@@ -872,6 +908,8 @@ def _validate_scenario(sc: "Scenario") -> None:
     _reject_commands_that_hand_over_losable_evidence(sc)
     _reject_notes_that_mark_the_trap(sc)
     _reject_conclusion_vocabulary(sc)
+    _reject_possibilities_that_settle(sc)
+    _reject_possibilities_that_leak(sc)
 
     # 被害モデルの params
     _validate_damage_params(sc.damage)
@@ -1319,6 +1357,10 @@ def _reject_conclusion_vocabulary(sc: "Scenario") -> None:
     for e in sc.evidence:
         targets.append((e.id, "content", e.content))
         targets.append((e.id, "reading", e.reading))
+        # 可能性の列挙も同じ線で縛る。「だからこの端末は正常である」は、
+        # 可能性ではなく結論であり、書ける場所がここに増えてはいけない
+        for i, t in enumerate(e.possibilities):
+            targets.append((e.id, f"possibilities[{i}]", t))
     for a in sc.actions:
         targets.append((a.id, "command", a.command))
         targets.append((a.id, "label", a.label))
@@ -1341,6 +1383,177 @@ def _reject_conclusion_vocabulary(sc: "Scenario") -> None:
                     f"{oid}.{field}: 結論の言い回し「{word}」が入っています。"
                     "資料・手段・規則は書けますが、結論は書けません（原則1）"
                 )
+
+
+# ─────────── 可能性の列挙の検査（SPEC 5.4 / 3.10 / v1.46） ───────────
+
+# **本命を指す語気。** 列挙は順序でも厚みでも語気でも、どれが本当かを
+# 言ってはいけない。厚みは下で数えられるが、語気は語彙でしか止まらない。
+# CONCLUSION_WORDS と同じで、**これは網羅検査ではない** — 見つけた実例を
+# 足していく止め具であって、別の言い回しで書けば通る。
+LEANING_WORDS = (
+    "可能性が高い", "可能性は低い", "可能性が低い",
+    "最も", "もっとも",
+    "おそらく", "たいてい", "ほとんど", "だいたい",
+    "本命", "有力", "考えにくい", "まずない",
+    "多くの場合", "ふつうは", "通常は", "一般的には",
+    "実際には", "本当は", "とはいえ", "ただし",
+    "典型", "常套", "まれに",
+)
+# 「まれ」だけにしていたら受身の「持ち込まれた」に当たった。**止め具は、
+# 止めたい語気より広く書くと日本語の活用に当たる。** 助詞まで含めて書く。
+
+
+def _reject_possibilities_that_settle(sc: "Scenario") -> None:
+    """可能性の列挙が、そこで決着していないか（SPEC 3.10）。
+
+    見るのは3つ。
+
+    ①**1つしか挙がっていない列挙を拒否する。** 1つならそれは可能性ではなく
+      結論である。「これはバックアップジョブかもしれません」は、
+      台帳を引く 25分の手を無料で配ったのと同じになる。
+
+    ②**厚みで本命を示唆していないか。** 3行書いたものと半行のものを
+      並べれば、読む側は長いほうを本命と読む。列挙の中で
+      最長と最短の比を 2.0 までに抑える（帯の根拠は
+      test_misleading_readings_are_not_thinner と同じ — 読む前に
+      長さで振り分けられるなら、読ませていることにならない）。
+
+    ③**語気で本命を示唆していないか。** 「おそらく運用の処理でしょう」は
+      順序も厚みも揃えたまま答えを渡す。LEANING_WORDS の止め具で拾う。
+
+    順序そのものは機械では見えない。ここで保証できるのは
+    「厚みと語気では傾いていない」までで、そこから先は書き手の仕事である。
+    """
+    for e in sc.evidence:
+        items = [t.strip() for t in e.possibilities]
+        if not items:
+            continue
+        if any(not t for t in items):
+            raise ValueError(f"{e.id}.possibilities: 空の項目は書けません")
+        if len(items) < 2:
+            raise ValueError(
+                f"{e.id}.possibilities: 可能性が1つしかありません。"
+                "1つならそれは可能性ではなく結論です（2つ以上挙げてください）"
+            )
+        if len(set(items)) != len(items):
+            raise ValueError(
+                f"{e.id}.possibilities: 同じ項目が2回書かれています。"
+                "数だけ揃えても、読む側には1つしか挙がっていません"
+            )
+        lengths = [len(t) for t in items]
+        if max(lengths) > 2.0 * min(lengths):
+            raise ValueError(
+                f"{e.id}.possibilities: 項目の厚みが偏っています"
+                f"（{min(lengths)}字 〜 {max(lengths)}字）。"
+                "長いほうが本命に読めます（最長は最短の 2.0倍まで）"
+            )
+        for text in items:
+            for word in LEANING_WORDS:
+                if word in text:
+                    raise ValueError(
+                        f"{e.id}.possibilities: 本命を示唆する語「{word}」が"
+                        "入っています。どれがありうるかは書けますが、"
+                        "どれが本当かは書けません（原則1）"
+                    )
+
+
+# 資料から「その資料にしか無い語」を切り出すための刻み。
+#   ・英数字まじりの字面（`02:15` `nightly-cloud-sync` `CHG-2026-0271`）
+#   ・カタカナの連なり4字以上（「バックアップ」「スケジュールタスク」）
+#   ・漢字の連なり3字以上（「起動時刻」「実行履歴」「平均転送量」）
+# 下限を置いているのは、「毎日」「記録」「時刻」のような、どの資料にも出る
+# 2字の熟語まで拾うと、可能性の列挙が日本語で書けなくなるため。
+_MATERIAL_TOKEN = re.compile(
+    r"[0-9A-Za-z][0-9A-Za-z:._\-/]{3,}"
+    r"|[ァ-ヶー]{4,}"
+    r"|[一-龥]{3,}"
+)
+
+
+def material_tokens(text: str) -> set[str]:
+    """その文にしか無いかを比べるための、資料の刻み。"""
+    return {m.group(0) for m in _MATERIAL_TOKEN.finditer(text or "")}
+
+
+def possibility_leaks(sc: "Scenario") -> list[tuple[str, str]]:
+    """可能性の列挙が渡してしまっているものを、全部並べる（原則1 / SPEC 3.4）。
+
+    **ローダと測定器で判定を2つ書かない。** ローダは最初の1件で止まり、
+    `tools/balance.py` は全部を並べる — 同じことを別々に実装すると、
+    片方だけが更新されたまま何年も通る（過去に2度やっている）。
+
+    見るのは2種類。
+
+    ①**この盤面の固有名**。資産の呼び名（`names_asset` — id・label・
+      括弧内・`aliases`）、証拠の id、アクションの id とラベル。
+      列挙は「読みの種類」を並べる欄であって、誰かを名指しする欄ではない。
+      **ブリーフィングの免除は置かない** — 問い文（5.5）と違い、
+      列挙は盤面のどの名前が無くても書ける。
+
+    ②**まだ買っていない棄却材料の中身**。これが列挙を足すときの一番大きい
+      危険である。「毎日 02:15 に起動するバックアップジョブかもしれません」と
+      書けば、誤導は誤導でなくなる。台帳を引く手は 25分の値札が付いたまま、
+      誰も押す理由が無くなる — 盤面から手が1本死ぬ。
+      比べる相手は棄却材料の `summary` と `content`（買って初めて手に入る
+      資料そのもの）だけにする。`reading` は比べない — あれは資料ではなく
+      assisted の注釈で、「平常時の姿と比べる」のような一般論まで
+      禁止語に変えてしまう。その証拠自身に既に出ている語も除く
+      （もう渡してあるものを繰り返しても、新しいことは渡していない）。
+
+    **どちらも完全な判定ではない。** 刻みに引っかからない言い換えをすれば
+    通る。構造側の保証は `tools/balance.py` の「列挙だけで棄却するプレイが、
+    材料を買うプレイに勝たない」が担う。
+    """
+    out: list[tuple[str, str]] = []
+    ev_ids = sorted(e.id for e in sc.evidence)
+    by_id = sc.evidence_by_id
+
+    for e in sc.evidence:
+        own = material_tokens(" ".join((e.summary, e.content, e.reading)))
+        secrets: list[tuple[str, set[str]]] = []
+        if e.misleading:
+            for rid in e.refuted_by:
+                other = by_id.get(rid)
+                if other is not None:
+                    secrets.append(
+                        (rid, material_tokens(other.summary + " " + other.content) - own)
+                    )
+
+        for text in e.possibilities:
+            low = text.casefold()
+            for asset in sc.world.assets:
+                name = names_asset(text, asset)
+                if name:
+                    out.append((e.id, f"資産の呼び名「{name}」"))
+            for other_id in ev_ids:
+                if other_id.casefold() in low:
+                    out.append((e.id, f"証拠の id「{other_id}」"))
+            for act in sc.actions:
+                if act.id.casefold() in low or (act.label and act.label in text):
+                    out.append((e.id, f"アクション「{act.id}」の名指し"))
+            for rid, secret in secrets:
+                hit = sorted((t for t in secret if t in text), key=len, reverse=True)
+                if hit:
+                    out.append((e.id, f"棄却材料 {rid} にしか無い語「{hit[0]}」"))
+    return out
+
+
+def _reject_possibilities_that_leak(sc: "Scenario") -> None:
+    """列挙が固有名や棄却材料を渡していたら拒否する（判定は possibility_leaks）。"""
+    leaks = possibility_leaks(sc)
+    if leaks:
+        eid, what = leaks[0]
+        raise ValueError(
+            f"{eid}.possibilities: {what}が入っています。"
+            "列挙が書けるのは可能性の空間と、それを決める方向までです。"
+            "どれなのかを決める資料は、手で買わせてください"
+            f"（ほかに {len(leaks) - 1} 件）"
+            if len(leaks) > 1 else
+            f"{eid}.possibilities: {what}が入っています。"
+            "列挙が書けるのは可能性の空間と、それを決める方向までです。"
+            "どれなのかを決める資料は、手で買わせてください"
+        )
 
 
 def _reject_ambiguous_asset_names(sc: "Scenario") -> None:

@@ -1275,6 +1275,19 @@ function evidenceCard(ev, isNew, forceOpen) {
     prose(r.appendChild(el('div', 'ev-reading-body')), ev.reading);
     body.appendChild(r);
   }
+  // 考えられること。読み方の**後ろ**に置く。生ログ → 読み方 → 意味しうること
+  // の順でないと、まだ読めていないものの意味を先に渡すことになる。
+  // 箇条書きにするのは、散文にすると順番と接続詞が本命を作るため
+  if (ev.possibilities && ev.possibilities.length) {
+    var m = el('div', 'ev-reading ev-maybe');
+    m.appendChild(el('div', 'ev-reading-head', '考えられること'));
+    var ul = el('ul', 'ev-maybe-list');
+    ev.possibilities.forEach(function (t) {
+      ul.appendChild(el('li', null, String(t).trim().replace(/\s*\n\s*/g, '')));
+    });
+    m.appendChild(ul);
+    body.appendChild(m);
+  }
   box.appendChild(body);
   return box;
 }

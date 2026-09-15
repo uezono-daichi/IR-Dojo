@@ -1333,6 +1333,109 @@ def test_the_loader_rejects_a_clears_that_never_names_its_asset(raw):
     assert "content が名指ししていません" in str(exc.value)
 
 
+# ─────────── 可能性の列挙（SPEC 5.4 / v1.46） ───────────
+
+
+def test_the_loader_rejects_a_single_possibility(raw):
+    """可能性が1つしかない列挙は、可能性ではなく結論である。
+
+    「これは定時の処理かもしれません」と1行だけ書けば、読む側は
+    そう読む。**数が2に満たない時点で、列挙は本命を1つ立てている。**
+    """
+    data = copy.deepcopy(raw)
+    ev = _set_ev(data, "ev_007")
+    ev["possibilities"] = [ev["possibilities"][0]]
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "可能性が1つしかありません" in str(exc.value)
+
+
+def test_the_loader_rejects_an_enumeration_that_leans_by_thickness(raw):
+    """1項目だけ厚い列挙は、厚みで本命を指している。
+
+    順序は機械には見えないが、厚みは数えられる。3行のものと半行のものを
+    並べれば、読む側は長いほうを本命と読む — `reading` の厚みが誤導の
+    目印になるのと同じ理屈（test_misleading_readings_are_not_thinner）。
+    """
+    data = copy.deepcopy(raw)
+    ev = _set_ev(data, "ev_005")
+    ev["possibilities"] = [ev["possibilities"][0] * 3] + ev["possibilities"][1:]
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "厚みが偏っています" in str(exc.value)
+
+
+def test_the_loader_rejects_an_enumeration_that_leans_by_wording(raw):
+    """語気で本命を指す列挙を拒否する。
+
+    数も厚みも揃えたまま、「おそらく」の4文字で答えは渡せる。
+    """
+    data = copy.deepcopy(raw)
+    ev = _set_ev(data, "ev_007")
+    ev["possibilities"][0] = "おそらく" + ev["possibilities"][0]
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "本命を示唆する語" in str(exc.value)
+
+
+def test_the_loader_rejects_an_enumeration_that_names_an_asset(raw):
+    """列挙は読みの種類を並べる欄で、誰かを名指しする欄ではない。
+
+    **ブリーフィングの免除は置いていない。** 問い文（5.5）と違って、
+    列挙は盤面のどの名前が無くても書ける。
+    """
+    data = copy.deepcopy(raw)
+    ev = _set_ev(data, "ev_005")
+    # 厚みの検査に先に当たらないよう、元の項目の中の語だけを差し替える
+    ev["possibilities"][0] = ev["possibilities"][0].replace(
+        "その端末の前", "ws-113 の前"
+    )
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "資産の呼び名" in str(exc.value)
+
+
+def test_the_loader_rejects_an_enumeration_that_pays_for_the_ledger(raw):
+    """**列挙が棄却材料の中身を先に渡すと、その材料を買う手が死ぬ。**
+
+    これが可能性の列挙を足すときの一番大きい危険である。
+    「毎日 02:15 に起動するバックアップジョブかもしれません」と書いた瞬間、
+    誤導は誤導でなくなる。台帳を引く手は 25分の値札が付いたまま、
+    誰も押す理由が無くなる — 盤面から手が1本、値札だけ残して消える。
+
+    刻みは資料の側にしか無い語（英数字まじりの字面・カタカナ4字以上・
+    漢字3字以上）で、**その証拠に既に出ている語は除く**。
+    完全な判定ではない（言い換えれば通る）ので、構造側の保証は
+    `tools/balance.py` の「列挙だけで畳むプレイが、材料を買うプレイに
+    勝たない」が受け持つ。
+    """
+    data = copy.deepcopy(raw)
+    ev = _set_ev(data, "ev_007")
+    ev["possibilities"][0] = (
+        "毎日 02:15 に起動するバックアップジョブの可能性。その端末の登録で分かれる"
+    )
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    msg = str(exc.value)
+    assert "棄却材料 ev_003 にしか無い語" in msg
+
+
+def test_an_enumeration_may_point_at_the_direction_that_settles_it(raw):
+    """**方向は書ける。決着だけが書けない。**
+
+    上の検査が「確かめる先を書くな」になっていたら、列挙は
+    「いろいろありえます」で終わる役立たずの欄になる。
+    ここは逆側 — どこを見れば分かれるかまでは書けることを見張る。
+    """
+    data = copy.deepcopy(raw)
+    ev = _set_ev(data, "ev_007")
+    ev["possibilities"][0] = (
+        "予定された自動の処理が、決まった時刻に外へ出した。"
+        "その端末に何が仕込まれていたかを見れば分かれる"
+    )
+    build(data)   # 例外が出ないこと
+
+
 def test_the_board_counts_only_the_hands_the_learner_pressed(scenario):
     """盤の数は、押した手の写像でしかない。
 

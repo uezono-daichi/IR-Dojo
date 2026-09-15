@@ -273,12 +273,115 @@ def test_reading_never_states_the_conclusion(client, any_scenario):
 
 
 def test_misleading_readings_are_not_thinner(client, any_scenario):
-    """誤導の注釈だけ薄いと、厚みがそのまま誤導の目印になる（SPEC 3.10）。"""
+    """誤導の注釈が、本物より薄くも厚くもないこと（SPEC 3.10）。
+
+    薄いほうは最初から見ていた。厚みがそのまま誤導の目印になるからである。
+    **厚いほうを見ていなかった。** 「注釈がやたら長いものを疑う」は
+    assisted で実際に効く読みで、1本目は誤導の reading が本物の 1.43倍、
+    長さ上位5件のうち2件が誤導だった（誤導は21件中3件）。
+    片側の帯は、誤導を薄く書く作者だけを止めて、
+    誤導に力を入れる作者を素通りさせる。後者のほうが起きやすい。
+    """
     sc = any_scenario
     mis = [len(e.reading) for e in sc.evidence if e.misleading]
     real = [len(e.reading) for e in sc.evidence if not e.misleading]
     assert all(mis) and all(real)
-    assert sum(mis) / len(mis) >= 0.7 * (sum(real) / len(real))
+    ratio = (sum(mis) / len(mis)) / (sum(real) / len(real))
+    assert 0.7 <= ratio <= 1.3, (
+        f"誤導の reading が本物の {ratio:.2f} 倍（帯は 0.7〜1.3）。"
+        "薄くても厚くても、読む前に長さで振り分けられる"
+    )
+
+
+def test_possibilities_are_not_a_marker_for_misleading_evidence(any_scenario):
+    """可能性の列挙の数と厚みが、誤導の目印になっていないこと（SPEC 3.10）。
+
+    `reading` と同じ論法を、新しい欄にも最初から**両側**で当てる。
+    誤導ほど丁寧に可能性を並べたくなるのは書き手の自然な衝動だが、
+    それをやると「列挙が厚いものを疑え」が読みとして成立してしまう。
+
+    **書かれていない盤面は対象外にする。** 欄は任意で、書くかどうかは
+    盤面ごとの判断である（書かれているのに片側だけ薄い、が禁じたいこと）。
+    「そもそも書いていない」のほうは tools/balance.py が別に見張る。
+    """
+    sc = any_scenario
+    mis = [e for e in sc.evidence if e.misleading and e.possibilities]
+    real = [e for e in sc.evidence if not e.misleading and e.possibilities]
+    if not (mis and real):
+        pytest.skip(f"{sc.meta.id}: 可能性の列挙がまだ無い")
+
+    def shape(group):
+        n = sum(len(e.possibilities) for e in group) / len(group)
+        c = sum(sum(len(t) for t in e.possibilities) for e in group) / len(group)
+        return n, c
+
+    (mn, mc), (pn, pc) = shape(mis), shape(real)
+    assert 0.7 <= mn / pn <= 1.3, f"列挙の数が偏っている（{mn / pn:.2f} 倍）"
+    assert 0.7 <= mc / pc <= 1.3, f"列挙の長さが偏っている（{mc / pc:.2f} 倍）"
+
+
+def test_possibilities_do_not_repeat_the_reading(any_scenario):
+    """読み方と可能性で、同じ文を2度読ませないこと。
+
+    どちらも assisted にだけ出る。同じことが2度並ぶと、カードが伸びた
+    ぶんだけ結果が画面の外へ落ちるだけで、渡した情報は増えていない。
+
+    **見るのは、そのまま重なっている文だけである。** 言い換えは拾えない —
+    実際 v1.46 では 3件（ev_012 / ev_017 / ev_019）が言い換えで重複しており、
+    見つけたのはこの検査ではなく**スクリーンショットを読んだとき**だった。
+    ここは「一度見つけた重なりは二度と戻らない」ための止め具で、
+    言い換えの側は 8.3 のチェックリストと目視が受け持つ
+    （CONCLUSION_WORDS と同じ役割分担）。
+    """
+    sc = any_scenario
+    for e in sc.evidence:
+        for t in e.possibilities:
+            for part in (x.strip() for x in t.split("。") if len(x.strip()) >= 12):
+                assert part not in e.reading, (
+                    f"{e.id}: 「{part}」が reading と列挙の両方にある"
+                )
+
+
+def test_possibilities_never_leak_what_the_board_holds_back(any_scenario):
+    """列挙の漏洩検査を、盤面の側からも回す（判定は possibility_leaks）。
+
+    ローダは最初の1件で止まるので、**読み込めた＝漏れが無い**ではある。
+    それでも同梱シナリオに対して名前で回しておく — 検査を緩めたときに
+    落ちるのは、ローダではなくこちらになる（緩めた本人はローダしか見ない）。
+    """
+    from irdojo.schema import possibility_leaks
+
+    leaks = possibility_leaks(any_scenario)
+    assert not leaks, f"{any_scenario.meta.id}: 列挙が渡している: {leaks[:3]}"
+
+
+def test_possibilities_follow_the_assist_level(client):
+    """考えられることもアシストで切り替わる。`reading` と同じ扱い（SPEC 3.10）。
+
+    読み方を渡さない相手に可能性だけ渡しても、生ログとの対応が付かない。
+    `hard` は生ログだけを読ませる設計なので、ここが出たら軸が死ぬ。
+    """
+    sc = load_scenario("ransomware-initial-response-01")
+    act = next(a.id for a in sc.actions if not a.requires_evidence)
+    for level, want in (("assisted", True), ("standard", False), ("hard", False)):
+        res = client.post(
+            "/api/session",
+            json={"scenario_id": sc.meta.id, "assist_level": level},
+        ).json()
+        sid = res["session_id"]
+        out = client.post(
+            f"/api/session/{sid}/decide",
+            json={"kind": "action", "action_id": act},
+        ).json()
+        got = [e["possibilities"] for e in out["revealed_evidence"]]
+        assert got, level
+        for value in got:
+            if want:
+                assert value and len(value) >= 2, level
+            else:
+                # **空リストではなく None。** 「このレベルでは出さない」と
+                # 「この証拠には書かれていない」を混ぜると、計器が分けられない
+                assert value is None, level
 
 
 # 資料が自分の守備範囲を書くときの見出し。

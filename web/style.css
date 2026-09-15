@@ -516,6 +516,15 @@ ul.lessons li { margin-bottom: 8px; }
 .ev-reading-body p { margin: 0 0 .9em; }
 .ev-reading-body p:last-child { margin-bottom: 0; }
 
+/* 考えられること。読み方と同じ地色にして、**どれかを目立たせない**。
+   色や記号で1項目だけ引き立てると、それが本命の印になる */
+.ev-maybe-list {
+  margin: 0; padding-left: 1.15em;
+  font-size: 13px; line-height: 1.85; color: var(--fg-dim);
+}
+.ev-maybe-list li { margin-bottom: .55em; }
+.ev-maybe-list li:last-child { margin-bottom: 0; }
+
 /* ── 画面の見方 ── */
 .legend-table { border-collapse: collapse; width: 100%; }
 .legend-table td { padding: 9px 14px 9px 0; border-bottom: 1px solid var(--line); vertical-align: top; }

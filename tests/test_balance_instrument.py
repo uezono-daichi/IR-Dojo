@@ -693,6 +693,49 @@ def test_the_price_of_an_innocent_stop_is_not_the_price_of_ten_more_minutes(bala
         for pid, delta in deltas.items():
             assert abs(delta) < 0.01, f"{pid}: 停止の値段が 0 でないのに per_hour は 0"
 
+def test_the_hunch_pair_differs_only_by_the_refutation_hands(balance, scenario):
+    """「列挙だけで畳む」と「材料を買う」は、棄却の材料を出す手しか違わない。
+
+    **対照が対照でなくなると、差の意味が変わる。** 一度この対で
+    予算（patience）を掛けたら、飛ばした手のぶんだけ別の手が入り、
+    測っているものが「材料を買ったか」から「どの手に時間を使ったか」へ
+    ずれた（差が 10分しか出ず、逆転していた）。
+    ここが崩れたら、判定の名前が言っていることを実測していない。
+    """
+    full = balance._exhaustive(scenario)
+    thin = balance._hunch(scenario)
+    dropped = [a for a in full if a not in thin]
+    assert thin == [a for a in full if a not in set(dropped)], "押し順が入れ替わっている"
+
+    refuting = {r for e in scenario.evidence if e.misleading for r in e.refuted_by}
+    by_id = scenario.action_by_id
+    assert dropped, "棄却の材料を出す手が盤面から消えている"
+    for aid in dropped:
+        assert set(by_id[aid].yields) & refuting, f"{aid} は棄却の材料を出さない"
+
+
+def test_the_hunch_image_folds_the_traps_without_holding_the_material(balance, scenario):
+    """「列挙だけで畳む」像は、材料を持たないまま誤導を落としていること。
+
+    **この像は実在の学習者ではなく、上限である**（`_hunch` の docstring）。
+    列挙がどれだけ饒舌でも、それを読んでできるのは
+    「誤導を全部畳む」までで、この像はその上限を取る。
+    上限が材料を買った像に勝たないなら、**どんな列挙を書いても
+    台帳を引く手は死なない** — 判定を列挙の本文に依存させると、
+    ローダの刻みをすり抜けた言い換えをそのまま見逃す。
+
+    ここで見るのは、像が本当にその上限になっていること。
+    誤導が指す資産が判定に残っていたら、上限を取れていない。
+    """
+    prof = next(p for p in balance.PROFILES if p.key == "hunch")
+    run = balance.run_profile(scenario, prof, [])
+    misled = {a for e in scenario.evidence if e.misleading for a in e.points_to}
+    innocent = set(scenario.world.ground_truth.innocent)
+    assert not (set(run.assessment) & misled & innocent), (
+        f"誤導を畳めていない: {run.assessment}"
+    )
+
+
 # ─────────── 同梱シナリオ全体にかかる検査 ───────────
 
 # **まだ満たしていないことを、名前で書いて持ち歩く。**
@@ -715,6 +758,20 @@ KNOWN_GAPS: dict[str, set[str]] = {
         # 「まず台帳を引け」の1手であって、棄却の型ではない。
         # 直すには誤導を1つ別の型に置き換える必要があり、2本目の周に回す
         "誤導の棄却手段が1種類に寄っていない",
+        # v1.46 で足した可能性の列挙。**2本目には書いていない。**
+        # 18件を書くこと自体は量の問題にすぎないが、書いても下の
+        # 「列挙だけで畳む」は通らない — そちらは文面ではなく盤面の性質を
+        # 見ており、落ちている理由が上の3件と同じ根だからである（下）
+        "可能性の列挙が、どの証拠にも2つ以上ある",
+        # **文面とは無関係に落ちている。** 2本目の棄却材料（利用実績の比較・
+        # 条件付きアクセスの構成）は、棄却以外の仕事を1つも持っていない。
+        # 誤導を畳む以外に使い道が無い資料は、畳み方をどこかで先に渡された
+        # 瞬間に、その手が盤面から死ぬ。1本目が耐えているのは、棄却材料の
+        # ev_021 が**同時に3台目の侵害資産を指す唯一の証拠**だからで
+        # （周4 が置いた形）、2本目にはその重ね方が無い。
+        # これは 9.4 #9（再現率を下げる誤導が無い）と同じ根で、
+        # 直すのは 2本目の盤面を作り直す周である
+        "列挙だけで畳むプレイが、材料を買うプレイに勝たない",
     },
 }
 

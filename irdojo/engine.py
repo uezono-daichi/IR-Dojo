@@ -199,6 +199,11 @@ class EvidenceView(BaseModel):
     summary: str | None  # hard では None
     content: str
     reading: str | None  # ログの読み方。assisted のみ
+    # 考えられること。assisted のみ。**空のリストと None を区別する** —
+    # None は「このレベルでは出さない」、[] は「この証拠には書かれていない」。
+    # 画面はどちらでも欄を出さないが、混ぜると
+    # 「hard なのに欄が出ない」のか「欄が空なのか」を計器が分けられない
+    possibilities: list[str] | None
     at_minute: int       # 取得した時刻。並びに意味を持たせる
 
 
@@ -786,6 +791,9 @@ def build_view(
             content=by_id[eid].content,
             reading=(by_id[eid].reading or None)
             if profile.show_evidence_reading
+            else None,
+            possibilities=list(by_id[eid].possibilities)
+            if profile.show_evidence_possibilities
             else None,
             at_minute=state.obtained_at.get(eid, 0),
         )

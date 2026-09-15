@@ -28,7 +28,12 @@ from typing import Callable
 
 from irdojo import loader, retrospective, scoring
 from irdojo.engine import Decision, Engine, InvalidDecision
-from irdojo.schema import ActionType, Scenario, briefing_assets
+from irdojo.schema import (
+    ActionType,
+    Scenario,
+    briefing_assets,
+    possibility_leaks,
+)
 
 DEFAULT_SCENARIO = "ransomware-initial-response-01"
 
@@ -94,6 +99,11 @@ class Profile:
     # 30分の1手でも調べたことは調べたことであり、
     # その最も薄い像にすら勝てないことを要求する方が検査は強い
     skips_investigation: bool = False
+    # 棄却の材料を手に持たないまま、誤導を畳めてしまうか。
+    # **これは学習者の性質ではなく、可能性の列挙の上限を置くための印である**
+    # （v1.46 / `_hunch` の docstring）。列挙がどれだけ饒舌でも、
+    # 読んでできるのはここまで、という線を引く
+    refutes_without_material: bool = False
 
 
 def _skilled(sc: Scenario) -> list[str]:
@@ -123,6 +133,21 @@ def _wanderer(sc: Scenario) -> list[str]:
 
     acts = [a for a in sc.actions if a.type == ActionType.INVESTIGATE]
     return [a.id for a in sorted(acts, key=rank)]
+
+
+def _hunch(sc: Scenario) -> list[str]:
+    """棄却の材料を出す手を飛ばす。ほかは「誤導を追う」像と同じ順で押す。
+
+    **これは実在の学習者ではなく、上限である。**
+    可能性の列挙（`Evidence.possibilities`）がどれだけ饒舌でも、それを読んで
+    できることはせいぜい「誤導を全部畳む」までで、この像はその上限を取る。
+    上限が材料を買った像に勝たないなら、**どんな列挙を書いても台帳を引く手は
+    死なない** — 判定を列挙の本文に依存させると、刻みをすり抜けた言い換えを
+    そのまま見逃す（同じ穴がローダの語彙検査にもある）。
+    """
+    refuting = {r for e in sc.evidence if e.misleading for r in e.refuted_by}
+    skip = {a.id for a in sc.actions if set(a.yields) & refuting}
+    return [aid for aid in _exhaustive(sc) if aid not in skip]
 
 
 def _nothing(sc: Scenario) -> list[str]:
@@ -188,6 +213,22 @@ PROFILES = [
     # これが無いと「誤導は損か」を調査量の差と切り分けられない
     Profile("wanderer_clear", "誤導を棄却する", "同じ調査量で、棄却を判定に反映した場合",
             _wanderer, patience_minutes=300),
+    # **可能性の列挙を足したときに死ぬかもしれない手を見張る像**（v1.46）。
+    # wanderer_clear と同じ順で押すが、棄却の材料を出す手だけを飛ばし、
+    # それでも誤導を全部畳む。列挙を読んで「台帳を引くまでもない」と
+    # 決めたプレイの上限にあたる。これが wanderer_clear に勝つなら、
+    # 盤面は列挙の書き方ひとつで調査の手を1本失う
+    Profile("hunch", "列挙だけで畳む",
+            "棄却の材料を出す手だけを飛ばし、それでも誤導を落とした場合",
+            _hunch, stop_when_confident=False, refutes_without_material=True,
+            eradicates_named=True),
+    # hunch と**押す手が3つしか違わない**対照。違うのは、棄却の材料を
+    # 出す手を買ったかどうかだけ。予算（patience）で切らないのは、
+    # 切ると「飛ばした手のぶんだけ別の手が入る」入れ替えになり、
+    # 測っているものが「材料を買ったか」から「どの手に時間を使ったか」へ
+    # ずれるため（一度そう組んで、差が 10分しか出なかった）
+    Profile("hunch_checked", "材料を買う", "同じ順で、棄却の材料も買った場合",
+            _exhaustive, stop_when_confident=False, eradicates_named=True),
     # 「調べずに動く」には形が2つある。0手・1資産だけを代表にしていた頃は、
     # **その中の最弱の1つ**を相手に「調べない像は最下位」と言っていた。
     # 「疑わしきは全部隔離」は同じ 0手でも遥かに強い（適合率は落ちるが
@@ -255,6 +296,7 @@ def _play(
     sc: Scenario, order: list[str], notices: list[str],
     *, stop: bool, patience: int | None,
     weighs_refutations: bool, contains_everything: bool,
+    refutes_without_material: bool = False,
     writes_off_empty_handed: bool = False,
     contains_root: bool = False,
     eradicates_named: bool = False,
@@ -317,7 +359,11 @@ def _play(
             # 資産をそのまま名指しする。構成図は開始時から出ている（7.6.7）
             assessment = [a.id for a in sc.world.assets]
         else:
-            assessment = _assess(sc, e.state, weighs_refutations=weighs_refutations)
+            assessment = _assess(
+                sc, e.state,
+                weighs_refutations=weighs_refutations,
+                refutes_without_material=refutes_without_material,
+            )
     e.decide(Decision(kind="declare_assessment", assessment=assessment))
 
     # 宣言を要求するフェーズへはエンジンがそのまま進める（engine._declare）。
@@ -364,7 +410,10 @@ def _write_off(sc: Scenario, state, act, written_off: set[str]) -> None:
     written_off |= set(act.investigates) - supported
 
 
-def _assess(sc: Scenario, state, *, weighs_refutations: bool) -> list[str]:
+def _assess(
+    sc: Scenario, state, *,
+    weighs_refutations: bool, refutes_without_material: bool = False,
+) -> list[str]:
     """学習者が画面から組み立てる被疑判定。
 
     使ってよいのは画面に出ているものだけ:
@@ -388,6 +437,13 @@ def _assess(sc: Scenario, state, *, weighs_refutations: bool) -> list[str]:
     for eid in state.obtained_evidence:
         ev = by_id.get(eid)
         if ev is None:
+            continue
+        # 材料を手に持たないまま畳む像（`refutes_without_material`）。
+        # **ここだけは `misleading` を読む。** 実在の学習者の模型ではなく、
+        # 「列挙を読んでできることの上限」を置くための線だからである
+        # （v1.46 / `_hunch`）。像の性質としてここに閉じ込めておかないと、
+        # 上限がどこにあるのかがコードの各所に散る
+        if refutes_without_material and ev.misleading:
             continue
         if weighs_refutations and ev.is_refuted(got):
             continue
@@ -472,6 +528,7 @@ def run_profile(sc: Scenario, prof: Profile, notices: list[str]) -> Run:
     e = _play(sc, prof.order(sc), notices,
               stop=prof.stop_when_confident, patience=prof.patience_minutes,
               weighs_refutations=prof.weighs_refutations,
+              refutes_without_material=prof.refutes_without_material,
               contains_everything=prof.contains_everything,
               writes_off_empty_handed=prof.writes_off_empty_handed,
               contains_root=prof.contains_root,
@@ -1117,6 +1174,73 @@ def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
             "誤導は実際に無関係な資産を名指しさせる",
             f"誤導を追う: {bad.assessment} / 棄却できた: {ok.assessment}"
             f"（増える名指し {sorted(extra) or 'なし'} — どれも侵害資産ではないこと）",
+        ))
+
+    # ─── 可能性の列挙（SPEC 3.10 / v1.46） ───
+    # 生ログと読み方だけでは、初学者は「で、これは何なのか」で止まる。
+    # 列挙はそこを埋めるが、**埋めすぎると誤導が誤導でなくなる。**
+    # 見るのは4本で、最後の1本が本体である。
+    with_list = [e for e in sc.evidence if e.possibilities]
+    thin = [e.id for e in sc.evidence if len(e.possibilities) < 2]
+    out.append(Check(
+        not thin,
+        "可能性の列挙が、どの証拠にも2つ以上ある",
+        f"{len(with_list)}/{len(sc.evidence)}件に列挙あり。"
+        f"2つに満たない証拠: {thin or 'なし'}"
+        "（1つならそれは可能性ではなく結論）",
+    ))
+
+    if with_list:
+        traps_l = [e for e in with_list if e.misleading]
+        plain_l = [e for e in with_list if not e.misleading]
+        if traps_l and plain_l:
+            def _shape(group):
+                n = sum(len(e.possibilities) for e in group) / len(group)
+                c = sum(sum(len(t) for t in e.possibilities) for e in group) / len(group)
+                return n, c
+
+            (mn, mc), (pn, pc) = _shape(traps_l), _shape(plain_l)
+            r_n, r_c = mn / pn, mc / pc
+            out.append(Check(
+                0.7 <= r_n <= 1.3 and 0.7 <= r_c <= 1.3,
+                "誤導と非誤導で、列挙の数と長さが揃っている",
+                f"誤導 {mn:.2f}項目・{mc:.0f}字 / 非誤導 {pn:.2f}項目・{pc:.0f}字"
+                f" → 数 {r_n:.2f}倍・長さ {r_c:.2f}倍（両側の帯 0.7〜1.3）。"
+                "片側だけ見ていると、誤導に力を入れる作者を素通りさせる",
+            ))
+
+        # ローダと同じ判定を使う（`possibility_leaks`）。**2つ書かない** —
+        # 片方だけ更新されたまま何年も通る形を、この盤面は2度出している
+        leaks = possibility_leaks(sc)
+        out.append(Check(
+            not leaks,
+            "列挙が盤面の固有名を渡していない",
+            (" / ".join(f"{e}: {w}" for e, w in leaks[:4]) + f"（計 {len(leaks)}件）")
+            if leaks else
+            f"{len(with_list)}件の列挙に、資産の呼び名・証拠 id・アクション名・"
+            "棄却材料にしか無い語のいずれも無い",
+        ))
+
+    # **本体。** 列挙を読んで「台帳を引くまでもない」と決めたプレイが、
+    # 材料を買ったプレイに勝たないこと。勝つなら、その手は盤面から死ぬ。
+    # 比べる2つは**押す手が棄却材料の分しか違わない**（`_hunch`）。
+    # 判定を列挙の本文に依存させていない — 依存させると、ローダの刻みを
+    # すり抜けた言い換えをそのまま見逃す。ここが見ているのは
+    # 「どんな列挙を書いても大丈夫な盤面か」という、より強い性質である
+    if ("hunch", False) in runs and ("hunch_checked", False) in runs:
+        free, paid = runs[("hunch", False)], runs[("hunch_checked", False)]
+        gaps = {p.id: paid.by_policy[p.id]["composite"] - free.by_policy[p.id]["composite"]
+                for p in sc.policies}
+        skipped = sorted(set(_exhaustive(sc)) - set(_hunch(sc)))
+        missed = sorted(set(sc.world.ground_truth.compromised) - set(free.assessment))
+        out.append(Check(
+            min(gaps.values()) >= 5,
+            "列挙だけで畳むプレイが、材料を買うプレイに勝たない",
+            f"飛ばした手 {[a.replace('act_', '') for a in skipped]}"
+            f"（{free.minutes}分 vs 買った側 {paid.minutes}分）→ 差 {gaps}"
+            f"。飛ばした側が落とした侵害資産 {missed or 'なし'}"
+            "（どの方針でも 5点以上。ここが割れると、棄却の材料を出す手は"
+            "値札が付いたまま誰も押さなくなる）",
         ))
 
     # **誤導には向きが2つある**（SPEC 3.4 / v1.42）。

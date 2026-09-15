@@ -160,6 +160,9 @@ def decide(sid: str, body: Decision) -> dict[str, Any]:
                 "reading": (by_id[eid].reading or None)
                 if profile.show_evidence_reading
                 else None,
+                "possibilities": list(by_id[eid].possibilities)
+                if profile.show_evidence_possibilities
+                else None,
                 "at_minute": engine.state.obtained_at.get(eid, 0),
             }
             for eid in outcome.revealed
