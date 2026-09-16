@@ -168,6 +168,7 @@ async function checkCaretsShared(where) {
       ['畳んだ連絡', '#incoming-list details.incoming-old > summary'],
       ['証拠カード', '#evidence-list .ev-head, #result-area .ev-head'],
       ['アクションの束', '#actions-list .act-group-head'],
+      ['考えられること', '#result-area .ev-maybe > summary, #evidence-list .ev-maybe > summary'],
     ];
     const out = [];
     for (const [name, sel] of openers) {
@@ -188,6 +189,77 @@ async function checkCaretsShared(where) {
   }
   if (seen.size > 1) {
     note('error', where, `押せるものの記号が場所ごとに違う: ${[...seen].join(' ')}`);
+  }
+}
+
+/** 事件の時計（SPEC 7.6.17）
+ *
+ *  見るのは4つ。**どれも真実を使わない** — 時間軸は学習者が取った証拠の
+ *  並べ直しであって、盤面の答えには触れない。
+ *
+ *  ①取った証拠のうち時刻を持つものが、実際に描かれているか
+ *  ②並びが時刻順か（DOM の順序で見る。目が追う順序がこれである）
+ *  ③**取っていない証拠が出ていないか**（出たらその場で答えを配っている）
+ *  ④札が入れ物からはみ出していないか・同じ段で重なっていないか
+ */
+async function checkTimeline(where) {
+  const t = await page.evaluate(() => {
+    const tl = document.querySelector('#play-timeline');
+    if (!tl) return { miss: '事件の時計' };
+    const band = tl.querySelector('.tl-band');
+    const items = [...tl.querySelectorAll('.tl-item')].map(e => ({
+      ev: e.getAttribute('data-ev'),
+      at: e.querySelector('b').textContent.trim(),
+      left: Math.round(parseFloat(e.style.left) || 0),
+      top: Math.round(parseFloat(e.style.top) || 0),
+      w: Math.round(e.getBoundingClientRect().width),
+    }));
+    // 画面のどこかに出ている証拠カード＝学習者が取ったもの
+    const held = [...document.querySelectorAll('#result-area .ev[data-ev], #evidence-list .ev[data-ev]')]
+      .map(e => e.getAttribute('data-ev'));
+    return {
+      items, held, bandW: band ? Math.round(band.clientWidth) : 0,
+      empty: !!tl.querySelector('.tl-empty'),
+      note: (tl.querySelector('.tl-note') || {}).textContent || '',
+    };
+  });
+  if (t.miss) { note('error', where, `${t.miss}が無い`); return; }
+  if (!t.items.length) {
+    if (!t.empty) note('error', where, '事件の時計が空でも、空だと言っていない');
+    return;
+  }
+  const times = t.items.map(i => i.at);
+  const sorted = [...times].sort();
+  if (JSON.stringify(times) !== JSON.stringify(sorted)) {
+    note('error', where, `事件の時計が時刻順に並んでいない: ${times.join(' ')}`);
+  }
+  const held = new Set(t.held);
+  const ghost = t.items.filter(i => !held.has(i.ev)).map(i => i.ev);
+  if (ghost.length) {
+    note('error', where, `取っていない証拠が事件の時計に出ている: ${ghost.join(',')}`);
+  }
+  // 2つの時計を混ぜない。何の時刻かをその場で言っているか
+  if (!t.note.includes('経過時間')) {
+    note('error', where, '事件の時計が、帯の経過時間と別ものだと言っていない');
+  }
+  for (const i of t.items) {
+    if (i.left < 0 || i.left + i.w > t.bandW + 1) {
+      note('error', where,
+        `事件の時計の札が枠からはみ出している（${i.at} left=${i.left} w=${i.w} / 枠 ${t.bandW}）`);
+    }
+  }
+  const lanes = {};
+  for (const i of t.items) {
+    (lanes[i.top] = lanes[i.top] || []).push(i);
+  }
+  for (const [top, row] of Object.entries(lanes)) {
+    row.sort((a, b) => a.left - b.left);
+    for (let k = 1; k < row.length; k++) {
+      if (row[k].left < row[k - 1].left + row[k - 1].w) {
+        note('error', where,
+          `事件の時計の札が同じ段で重なっている（${top}px: ${row[k - 1].at} と ${row[k].at}）`);
+      }
+    }
   }
 }
 
@@ -243,6 +315,7 @@ const legendBefore = await legendSample('#brief-mini');
 await page.click('#btn-begin');
 await page.waitForSelector('#screen-play.active');
 await checkCanvasStable('play');
+await checkTimeline('play-start');
 await screen('04-play-start');
 
 // 凡例で見たものが、そのままここにあるか
@@ -285,6 +358,7 @@ for (let i = 0; i < 40; i++) {
     e => e.map(x => x.textContent)).catch(() => []);
   log.push({ n: i + 1, at: t, action: label, incoming: inc });
   if (HEIGHTS[i]) {
+    await checkTimeline(`play-after-result(1440×${HEIGHTS[i]})`);
     await checkResultConclusionVisible(`play-after-result(1440×${HEIGHTS[i]})`);
     await checkActionsStayVisible(`play-after-result(1440×${HEIGHTS[i]})`);
     await shot(`05-play-result-h${HEIGHTS[i]}`);
@@ -294,6 +368,7 @@ for (let i = 0; i < 40; i++) {
 await page.setViewportSize({ width: 1440, height: 1000 });
 await page.waitForTimeout(150);
 await checkCanvasStable('play-late');
+await checkTimeline('play-late');
 await screen('06-play-late');
 await checkCaretsShared('play-late');
 

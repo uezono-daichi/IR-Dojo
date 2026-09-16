@@ -1004,3 +1004,38 @@ def test_a_check_that_is_not_a_boolean_is_refused_at_the_door(balance):
     balance.Check(True, "見本", "詳細")            # 通ること
     with pytest.raises(TypeError):
         balance.Check({"ws-042"}, "見本", "詳細")
+
+
+def test_the_axis_bias_check_has_teeth(balance):
+    """「時刻の有無が、誤導の印になっていない」が、偏った盤面で落ちること。
+
+    ローダが拒むのは 2×2 の**空き**だけである（誤導が全部持つ／
+    1つも持たない）。その手前の偏り — 誤導3件のうち1件だけが時刻を持ち、
+    本物は3件に2件が持つ — は空きが無いのでローダを通る。
+    そこを見るのがこの検査で、通ってしまうなら書いていないのと同じ。
+
+    **落ちる作り方が、ローダに拒まれないことまで確かめる。**
+    拒まれてしまうなら、この検査は永遠に発火しない飾りである。
+    """
+    import copy
+
+    import yaml
+
+    from irdojo.loader import SCENARIO_DIR, load_scenario_text
+
+    raw = yaml.safe_load(
+        (SCENARIO_DIR / "ransomware-initial-response-01.yaml").read_text(encoding="utf-8")
+    )
+    data = copy.deepcopy(raw)
+    for e in data["evidence"]:
+        if e["id"] == "ev_005":
+            e.pop("occurred_at", None)
+
+    skewed = load_scenario_text(yaml.safe_dump(data, allow_unicode=True))
+    report = balance.report(skewed)
+    assert not _named(report, "時刻の有無が、誤導の印になっていない")["ok"]
+    # 空きは無いまま偏っている（ローダの守備範囲の外であること）
+    from irdojo.schema import occurrence_split
+
+    n = occurrence_split(skewed)
+    assert n["mis_with"] and n["mis_without"], "2×2 に空きができている（ローダが拒む形）"

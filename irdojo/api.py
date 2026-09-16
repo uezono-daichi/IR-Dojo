@@ -163,6 +163,8 @@ def decide(sid: str, body: Decision) -> dict[str, Any]:
                 "possibilities": list(by_id[eid].possibilities)
                 if profile.show_evidence_possibilities
                 else None,
+                # 事件の時計。content の再掲なのでレベルで伏せない（7.6.17）
+                "occurred_at": by_id[eid].occurred_at,
                 "at_minute": engine.state.obtained_at.get(eid, 0),
             }
             for eid in outcome.revealed

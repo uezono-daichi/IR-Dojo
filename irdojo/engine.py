@@ -204,6 +204,11 @@ class EvidenceView(BaseModel):
     # 画面はどちらでも欄を出さないが、混ぜると
     # 「hard なのに欄が出ない」のか「欄が空なのか」を計器が分けられない
     possibilities: list[str] | None
+    # **事件の時計**（SPEC 7.6.17）。この資料が記録している出来事の時刻。
+    # `content` に書かれている時刻の再掲なので、**どのレベルでも出す** —
+    # hard で伏せるのは要約であって、生ログの中身ではない。
+    # 持たない資料（台帳・期間の集計・聞き取り）では空文字になる。
+    occurred_at: str
     at_minute: int       # 取得した時刻。並びに意味を持たせる
 
 
@@ -795,6 +800,7 @@ def build_view(
             possibilities=list(by_id[eid].possibilities)
             if profile.show_evidence_possibilities
             else None,
+            occurred_at=by_id[eid].occurred_at,
             at_minute=state.obtained_at.get(eid, 0),
         )
         for eid in state.obtained_evidence

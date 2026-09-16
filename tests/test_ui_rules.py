@@ -458,3 +458,115 @@ def test_the_playtest_watches_the_conclusion_at_more_than_one_height(playtest_mj
     assert len(re.findall(r":\s*(\d{3,4})", heights[0])) >= 2, (
         "画面の高さが1つしか無い（高さで出方が変わる不具合を素通りする）"
     )
+
+
+# ── 事件の時計（SPEC 7.6.17） ─────────────────────────
+
+
+def test_the_axis_is_built_only_from_what_the_learner_holds(app_js):
+    """時間軸に並ぶのは、**学習者が取った証拠だけ**である。
+
+    ここは真実に触れられる場所にしない。誤導かどうかで色・順序・
+    大きさを変えれば、図がそのまま答えになる。組み立ての入口を
+    `obtained_evidence` の1本に閉じておけば、そもそも触れない。
+    """
+    body = strip_comments(app_js)
+    fn = body[body.index("function timelineEntries"):]
+    fn = fn[: fn.index("\n}")]
+    assert "obtained_evidence" in fn, "時間軸が手元の証拠から作られていない"
+    for forbidden in ("misleading", "points_to", "clears", "ground_truth"):
+        assert forbidden not in fn, f"時間軸が {forbidden} を見ている"
+
+
+def test_the_two_clocks_are_not_mixed_on_the_axis(app_js):
+    """**画面には2種類の hh:mm が混ざる。** 何の時計かをその場で言う。
+
+    被害グラフと帯の数字は経過時間（+03:20）、時間軸は事件の壁時計
+    （02:34）である。印が無いと「02:34」は開始から2時間34分に読める
+    （周4 が同じ取り違えを一度直している）。
+    """
+    body = strip_comments(app_js)
+    fn = body[body.index("function renderTimeline"):]
+    fn = fn[: fn.index("\nfunction ")]
+    assert "tl-note" in fn, "時間軸に、何の時刻かを言う行が無い"
+    note = [t for t in literals(fn) if "経過時間" in t]
+    assert note, "時間軸が、帯の経過時間と別ものだと言っていない"
+    # 経過時間の表記（+）は elapsed() の仕事。時間軸の側で作らない
+    assert "elapsed(" not in fn, "時間軸が経過時間の表記を混ぜている"
+
+
+def test_the_axis_and_its_sample_come_from_the_same_function(app_js):
+    """凡例の時間軸も、本物と同じ関数から出る（SPEC 7.6.7）。
+
+    手で書いた見本は必ず腐る。ここは既にフェーズ帯で一度腐らせている。
+    """
+    body = strip_comments(app_js)
+    assert body.count("function renderTimeline") == 1
+    legend = body[body.index("function renderLegend"):body.index("function renderFlow")]
+    assert "renderTimeline(" in legend, "凡例が本物の時間軸を描いていない"
+
+
+def test_the_legend_sample_is_drawn_after_the_screen_is_shown(app_js):
+    """見本の描画は、画面に入れてから。**条件を付けない。**
+
+    `clientWidth` が 0 のまま段を割ると全部が1段に重なる（被害グラフと
+    構成図で2度やっている）。さらに hard はグラフも盤も出ないので、
+    「グラフか盤があれば描く」にすると hard だけ時間軸が描かれない。
+    """
+    body = strip_comments(app_js)
+    legend = body[body.index("function renderLegend"):body.index("function renderFlow")]
+    assert "if (cv || board) {" not in legend, (
+        "見本の描画が、グラフか盤があるときだけになっている（hard で落ちる）"
+    )
+    assert "renderTimeline(tl, view, { sample: true });" in legend
+
+
+def test_the_axis_says_how_many_it_could_not_place(app_js):
+    """軸に並ばなかった資料の**件数は出す。ただし促さない**（SPEC 6.6）。
+
+    台帳・期間の集計は出来事の時刻を持たないので軸には並ばない。
+    そこを黙ると「軸に出ないものは無価値」と読める — 台帳は
+    この盤面で最も安い棄却の手段である。件数だけ置いて、
+    「取れ」とも「取るな」とも言わない。
+    """
+    body = strip_comments(app_js)
+    fn = body[body.index("function renderTimeline"):]
+    fn = fn[: fn.index("\nfunction ")]
+    rest = [t for t in literals(fn) if "時刻を持たない" in t]
+    assert rest, "軸に並ばなかった資料の件数を言っていない"
+    for urge in ("取りましょう", "押して", "べき", "無駄"):
+        assert all(urge not in t for t in rest), f"軸が促している: {urge}"
+
+
+def test_thinking_aloud_is_folded_by_default(app_js):
+    """「考えられること」は既定で畳む（SPEC 5.4 / 7.6.8）。
+
+    毎回読むものではなく「詰まったときに考えを広げる道具」である。
+    開いたままだと、押した直後の視野から結果が落ちる — 実測で
+    押した瞬間の画面から 674px 下、**一度も目に入っていなかった。**
+    畳むのをやめるなら、その場所を別の何かから奪う必要がある。
+    """
+    body = strip_comments(app_js)
+    fn = body[body.index("function evidenceCard"):]
+    fn = fn[: fn.index("\nfunction ")]
+    assert "el('details', 'ev-reading ev-maybe')" in fn, (
+        "考えられることが畳める形になっていない"
+    )
+    assert ".open = true" not in fn, "考えられることが既定で開いている"
+    assert "caret(" in fn, "畳んだ印が、他の畳めるものと違う"
+
+
+def test_the_playtest_watches_the_axis(playtest_mjs):
+    """遊んで確かめる側も、時間軸を見張ること。
+
+    見るのは「描かれているか」だけでは足りない。**取っていない証拠が
+    出ていないか**と**時刻順か**まで見る — 前者は答えの漏洩、
+    後者は図が図でなくなる壊れ方である。
+    """
+    body = playtest_mjs
+    assert "checkTimeline" in body, "時間軸を見ていない"
+    fn = body[body.index("async function checkTimeline"):]
+    fn = fn[: fn.index("\nasync function ")]
+    assert "時刻順" in fn, "並びが時刻順かを見ていない"
+    assert "取っていない証拠" in fn, "取っていない証拠が出ていないかを見ていない"
+    assert "重なっている" in fn, "札が重なっていないかを見ていない"
