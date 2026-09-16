@@ -32,6 +32,7 @@ from irdojo.schema import (
     ActionType,
     Scenario,
     briefing_assets,
+    occurrence_split,
     possibility_leaks,
 )
 
@@ -1174,6 +1175,36 @@ def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
             "誤導は実際に無関係な資産を名指しさせる",
             f"誤導を追う: {bad.assessment} / 棄却できた: {ok.assessment}"
             f"（増える名指し {sorted(extra) or 'なし'} — どれも侵害資産ではないこと）",
+        ))
+
+    # ─── 事件の時計（SPEC 7.6.17 / v1.47） ───
+    # 時間軸は学習者が取った証拠だけを並べる。**欄の有無は、それ自体が
+    # 読める。** 誤導だけが時刻を持つ（あるいは持たない）盤面は、
+    # 時間軸に載るかどうかを見るだけで罠が振り分けられる — 周4 が
+    # 収集範囲の欄で作りかけた「白の印」と同じ形の漏れである。
+    # ローダは 2×2 の空きを拒否し、ここは比を見る。
+    n = occurrence_split(sc)
+    timed = n["mis_with"] + n["real_with"]
+    out.append(Check(
+        timed >= 3,
+        "事件の時計に載る証拠がある",
+        f"時刻を持つ証拠 {timed}/{len(sc.evidence)}件"
+        f"（誤導 {n['mis_with']} / 本物 {n['real_with']}）。"
+        "3件未満だと軸が並びにならず、時刻を並べる場所を出した意味が無い",
+    ))
+    mis_n = n["mis_with"] + n["mis_without"]
+    real_n = n["real_with"] + n["real_without"]
+    if timed and mis_n and real_n and n["real_with"]:
+        p_mis = n["mis_with"] / mis_n
+        p_real = n["real_with"] / real_n
+        r_t = p_mis / p_real
+        out.append(Check(
+            0.7 <= r_t <= 1.3,
+            "時刻の有無が、誤導の印になっていない",
+            f"時刻を持つ割合 誤導 {p_mis:.2f}（{n['mis_with']}/{mis_n}）"
+            f" / 本物 {p_real:.2f}（{n['real_with']}/{real_n}）"
+            f" → {r_t:.2f}倍（両側の帯 0.7〜1.3）。"
+            "軸に載るかどうかだけで罠を振り分けられてはいけない",
         ))
 
     # ─── 可能性の列挙（SPEC 3.10 / v1.46） ───

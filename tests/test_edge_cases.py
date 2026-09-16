@@ -1429,9 +1429,11 @@ def test_an_enumeration_may_point_at_the_direction_that_settles_it(raw):
     """
     data = copy.deepcopy(raw)
     ev = _set_ev(data, "ev_007")
+    # 折り返しの行数は揃えたまま差し替える（v1.47）。**同じ欄に規則が
+    # 2つある**ので、片方を確かめる材料でもう片方を破ってはいけない
     ev["possibilities"][0] = (
         "予定された自動の処理が、決まった時刻に外へ出した。"
-        "その端末に何が仕込まれていたかを見れば分かれる"
+        "その端末の仕込みを見れば分かれる"
     )
     build(data)   # 例外が出ないこと
 
@@ -1497,3 +1499,159 @@ def test_the_board_only_repeats_what_the_outcome_already_said(scenario):
     # 告げていないものを盤が勝手に足していないこと
     said = set(out.contained)
     assert {a.id for a in board.values() if a.contained} == said
+
+
+# ─────────── 事件の時計（SPEC 5.4 / 7.6.17 / v1.47） ───────────
+
+
+def test_a_time_that_is_not_in_the_log_cannot_be_put_on_the_axis(raw):
+    """時間軸に出せるのは、その資料に**書かれている**時刻だけ。
+
+    `occurred_at` は content の再掲であって、新しい開示ではない。
+    ここが緩いと、作者は「ログには載っていないが本当はこの時刻だった」を
+    欄で配れる — それは 25分の値札を付けて手で買わせるべき資料である。
+    """
+    data = copy.deepcopy(raw)
+    _set_ev(data, "ev_001", occurred_at="2026-03-14 05:55")
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "content に出ていません" in str(exc.value)
+
+
+def test_a_day_that_is_not_in_the_log_cannot_be_put_on_the_axis(raw):
+    """日付も同じ。時刻だけ合っていれば通る、にはしない。
+
+    盤面が日をまたぐと（2本目は同意が 5/17、騒ぎが 6/18）、
+    日付を取り違えた1件が軸の上で1か月ずれた場所に立つ。
+    """
+    data = copy.deepcopy(raw)
+    _set_ev(data, "ev_001", occurred_at="2026-03-15 02:17")
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "content の日付" in str(exc.value)
+
+
+def test_a_log_without_any_date_may_still_declare_one(raw):
+    """日付を1行も書いていない資料には、日付を要求しない。
+
+    メモリのプロセス一覧は `Start 02:40:58` としか書かない。
+    そこに日付を強要すると、**資料として不自然な行を足すこと**になり、
+    「平常日テスト」（SPEC 5.4）の側の規則と噛み合わなくなる。
+    """
+    data = copy.deepcopy(raw)
+    ev = next(e for e in data["evidence"] if e["id"] == "ev_010")
+    assert "2026-" not in ev["content"], "前提が崩れている（この資料は日付を書いている）"
+    build(data)  # 例外が出ないこと
+
+
+def test_the_axis_cannot_become_a_mark_for_the_misdirection(raw):
+    """**欄の有無は、それ自体が読める。**
+
+    誤導だけが時刻を持たない盤面では、「時間軸に載らないもの」を
+    数えるだけで罠が全部わかる。周4 が収集範囲の欄で作りかけた
+    「白の印」と同じ形の漏れで、新しい欄を足すたびに再発する。
+    """
+    data = copy.deepcopy(raw)
+    for e in data["evidence"]:
+        if e.get("misleading"):
+            e.pop("occurred_at", None)
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "誤導だけが時刻を持っていません" in str(exc.value)
+
+
+def test_the_axis_cannot_become_a_mark_the_other_way_round(raw):
+    """逆側も同じ。誤導だけが全部時刻を持つのも印である。
+
+    片側だけ見る帯は、**誤導を薄く書く作者だけを止めて、
+    誤導に力を入れる作者を素通りさせる**（v1.46 の reading の厚みと同じ論法）。
+    """
+    data = copy.deepcopy(raw)
+    _set_ev(data, "ev_020", occurred_at="2026-03-14 02:00")
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "誤導だけが全部時刻を持っています" in str(exc.value)
+
+
+def test_the_loader_and_the_instrument_count_the_same_way():
+    """2×2 を数える場所は1つだけ（`occurrence_split`）。
+
+    ローダと `tools/balance.py` で数え方を別々に書くと、片方だけが
+    更新されたまま何年も通る。この盤面は既に2度それをやっている。
+    """
+    text = (SCENARIO_DIR.parent / "tools" / "balance.py").read_text(encoding="utf-8")
+    assert "occurrence_split" in text, "測定器がローダと別の数え方をしている"
+    assert "e.occurred_at" not in text, "測定器が自前で数え直している"
+
+
+def test_every_declared_time_can_be_found_by_hand(any_scenario):
+    """同梱の盤面すべてで、宣言された時刻が本文の中に見つかること。
+
+    ローダが見ている性質そのものだが、**同梱が実際に守っているか**は
+    別に確かめる。規則はあるが誰も通っていない、が一番起きやすい。
+    """
+    timed = [e for e in any_scenario.evidence if e.occurred_at]
+    assert timed, "この盤面は事件の時計を一度も使っていない"
+    for e in timed:
+        assert e.occurred_at.split(" ")[1] in e.content, e.id
+
+
+# ─────────── 列挙の折り返し（SPEC 5.4 / v1.47） ───────────
+
+
+def test_one_item_that_wraps_to_two_lines_is_rejected(raw):
+    """**読む側が測るのは字数ではなく高さである。**
+
+    45字・48字・46字の3項目は文字数の帯（2.0倍）を楽に通るのに、
+    画面では 1行・2行・1行に折れて、2行の項目だけが倍の高さで並ぶ。
+    実測では 21枚中13枚がそうで、うち3枚は「2行になっている
+    唯一の項目が真相側」だった — 罠を壊す唯一の手がかりが、
+    読む前から目立っていた。
+    """
+    data = copy.deepcopy(raw)
+    ev = _set_ev(data, "ev_007")
+    ev["possibilities"][1] = ev["possibilities"][1] + "。ここに一行ぶん余計に書き足して折り返させる"
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "折り返しの行数が揃っていません" in str(exc.value)
+
+
+def test_the_character_band_alone_would_have_let_it_through(raw):
+    """**その項目が、古い帯（文字数 2.0倍）では素通りすること。**
+
+    これを確かめないと、新しい検査が既存の検査の言い換えになっていても
+    気づけない。落ちた理由が行数であって字数でないことまで見る。
+    """
+    data = copy.deepcopy(raw)
+    ev = _set_ev(data, "ev_007")
+    ev["possibilities"][1] = ev["possibilities"][1] + "。念のため別の観点も見る"
+    lens = [len(t.replace("\n", "")) for t in ev["possibilities"]]
+    assert max(lens) <= 2.0 * min(lens), f"字数の帯にも当たっている: {lens}"
+    with pytest.raises(ScenarioError) as exc:
+        build(data)
+    assert "折り返しの行数が揃っていません" in str(exc.value)
+
+
+def test_widths_are_counted_in_full_width_columns(raw):
+    """半角は 0.5 で数える。折り返しを決めているのは字数ではなく幅である。
+
+    半角の英数字が混じった項目を字数で測ると、実際より長く見積もって
+    「揃っていない」と言い出す。`display_width` が両方を分ける。
+    """
+    from irdojo.schema import display_width, wrapped_lines
+
+    assert display_width("abcd") == 2.0
+    assert display_width("あいう") == 3.0
+    assert wrapped_lines("あ" * 47) == 1
+    assert wrapped_lines("あ" * 48) == 2
+
+
+def test_every_bundled_enumeration_wraps_evenly(any_scenario):
+    """同梱の盤面すべてで、列挙の行数が揃っていること。"""
+    from irdojo.schema import wrapped_lines
+
+    for e in any_scenario.evidence:
+        if not e.possibilities:
+            continue
+        lines = {wrapped_lines(t) for t in e.possibilities}
+        assert len(lines) == 1, f"{e.id}: 行数が {sorted(lines)} に割れている"

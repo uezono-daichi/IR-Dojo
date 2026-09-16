@@ -1,0 +1,173 @@
+{
+  "dpr": 3,
+  "profile": "wanderer",
+  "assist": "hard",
+  "scenario": "ransomware-initial-response-01",
+  "base": "http://127.0.0.1:8000",
+  "moves": 22,
+  "log": [
+    {
+      "n": 1,
+      "at": "+00:30",
+      "action": "fs01 のイベントログを収集・解析30分",
+      "incoming": []
+    },
+    {
+      "n": 2,
+      "at": "+01:00",
+      "action": "fs01 の SMB セッション履歴を解析30分",
+      "incoming": []
+    },
+    {
+      "n": 3,
+      "at": "+01:40",
+      "action": "fs01 のメモリダンプ取得・解析40分",
+      "incoming": []
+    },
+    {
+      "n": 4,
+      "at": "+02:15",
+      "action": "fs01 をセーフモードで再起動して確認35分",
+      "incoming": []
+    },
+    {
+      "n": 5,
+      "at": "+02:35",
+      "action": "ネットワークフローの概況確認20分",
+      "incoming": []
+    },
+    {
+      "n": 6,
+      "at": "+03:10",
+      "action": "全端末に EDR のフルスキャンを実行35分",
+      "incoming": []
+    },
+    {
+      "n": 7,
+      "at": "+03:35",
+      "action": "メールゲートウェイのログを照合25分",
+      "incoming": []
+    },
+    {
+      "n": 8,
+      "at": "+04:00",
+      "action": "DLP ログを精査し外部送信を確認25分",
+      "incoming": []
+    },
+    {
+      "n": 9,
+      "at": "+04:10",
+      "action": "資産管理台帳・変更管理台帳の照会10分",
+      "incoming": []
+    },
+    {
+      "n": 10,
+      "at": "+04:25",
+      "action": "バックアップ運用設定の照会15分",
+      "incoming": [
+        "監視センターから追加連絡"
+      ]
+    },
+    {
+      "n": 11,
+      "at": "+04:55",
+      "action": "バックアップの健全性を確認30分",
+      "incoming": [
+        "運用チームから連絡"
+      ]
+    },
+    {
+      "n": 12,
+      "at": "+05:20",
+      "action": "dc01 の認証ログを確認25分",
+      "incoming": [
+        "バックアップ運用チームから連絡"
+      ]
+    },
+    {
+      "n": 13,
+      "at": "+05:45",
+      "action": "dc01 の特権グループ変更履歴を確認25分",
+      "incoming": []
+    },
+    {
+      "n": 14,
+      "at": "+06:05",
+      "action": "利用者（佐藤）に連絡して聞き取り20分",
+      "incoming": [
+        "ヘルプデスクから連絡"
+      ]
+    },
+    {
+      "n": 15,
+      "at": "+06:25",
+      "action": "ws-042 のメモリイメージを取得して保全20分",
+      "incoming": []
+    },
+    {
+      "n": 16,
+      "at": "+06:50",
+      "action": "ws-042 のメモリイメージを解析25分",
+      "incoming": []
+    },
+    {
+      "n": 17,
+      "at": "+07:10",
+      "action": "ws-042 のプロキシログを照合20分",
+      "incoming": []
+    },
+    {
+      "n": 18,
+      "at": "+08:10",
+      "action": "ws-042 を停止してディスクイメージを取得60分",
+      "incoming": []
+    },
+    {
+      "n": 19,
+      "at": "+08:30",
+      "action": "ws-055 の状態を管理コンソールで照会20分",
+      "incoming": []
+    },
+    {
+      "n": 20,
+      "at": "+09:10",
+      "action": "ws-055 に臨場して、稼働させたまま採取40分",
+      "incoming": []
+    },
+    {
+      "n": 21,
+      "at": "+09:35",
+      "action": "ws-113 をトリアージ25分",
+      "incoming": []
+    },
+    {
+      "n": 22,
+      "at": "+09:50",
+      "action": "全社に証拠保全の周知を出す15分",
+      "incoming": []
+    }
+  ],
+  "shots": [
+    ".pt/ransom-hard3/01-top.hard.dpr3.png",
+    ".pt/ransom-hard3/02-select.hard.dpr3.png",
+    ".pt/ransom-hard3/03-briefing.hard.dpr3.png",
+    ".pt/ransom-hard3/03b-briefing-legend.hard.dpr3.png",
+    ".pt/ransom-hard3/04-play-start.hard.dpr3.png",
+    ".pt/ransom-hard3/05-play-result-h800.hard.dpr3.png",
+    ".pt/ransom-hard3/05-play-result-h1000.hard.dpr3.png",
+    ".pt/ransom-hard3/06-play-late.hard.dpr3.png",
+    ".pt/ransom-hard3/06b-legend.hard.dpr3.png",
+    ".pt/ransom-hard3/07-assessment.hard.dpr3.png",
+    ".pt/ransom-hard3/08-response.hard.dpr3.png",
+    ".pt/ransom-hard3/08b-contained.hard.dpr3.png",
+    ".pt/ransom-hard3/09-debrief.hard.dpr3.png",
+    ".pt/ransom-hard3/09b-debrief-damage.hard.dpr3.png",
+    ".pt/ransom-hard3/09c-debrief-questions.hard.dpr3.png",
+    ".pt/ransom-hard3/09d-debrief-lost.hard.dpr3.png",
+    ".pt/ransom-hard3/09e-debrief-policy.hard.dpr3.png",
+    ".pt/ransom-hard3/09f-debrief-containment.hard.dpr3.png",
+    ".pt/ransom-hard3/10-debrief-bottom.hard.dpr3.png"
+  ],
+  "findings": [],
+  "passed": true
+}

@@ -1928,3 +1928,74 @@ def test_no_bundle_readable_at_zero_minutes_spells_out_the_truth(any_scenario):
                     f"束「{group}」の {field}{tag} が侵害資産と一致する: "
                     f"{sorted(reach | extra)}。押さずに読めるものだけで答えが出る"
                 )
+
+
+def test_the_axis_only_carries_times_that_are_already_on_the_page(client):
+    """**事件の時計は、content の再掲でしかない**（SPEC 7.6.17）。
+
+    時間軸は新しい開示ではなく、学習者が既に持っている紙の上の時刻を
+    並べ直す場所である。だから返す `occurred_at` は、同じ応答で返して
+    いる `content` の中に必ず見つかる。見つからない時刻が返るなら、
+    それは 25分の値札を付けて手で買わせるはずだった資料である。
+    """
+    sc = load_scenario("ransomware-initial-response-01")
+    sid = client.post("/api/session", json={"scenario_id": sc.meta.id}).json()["session_id"]
+    seen = 0
+    for aid in ("act_collect_evtx_fs01", "act_netflow_overview",
+                "act_dc_authlog", "act_mail_gateway"):
+        res = client.post(
+            f"/api/session/{sid}/decide",
+            json={"kind": "action", "action_id": aid},
+        ).json()
+        for ev in res["view"]["obtained_evidence"]:
+            if not ev.get("occurred_at"):
+                continue
+            seen += 1
+            assert ev["occurred_at"].split(" ")[1] in ev["content"], (
+                f"{ev['id']}: 本文に無い時刻が時間軸へ渡っている"
+            )
+    assert seen, "この手順では一度も時刻が返っていない（検査が空回りしている）"
+
+
+def test_the_axis_is_silent_about_evidence_never_taken(client):
+    """取っていない証拠の時刻は、どこにも出ない。
+
+    時間軸は「調査の進み方そのものが図になる」ことに価値がある。
+    取っていないものが並んだ瞬間、図は盤面の構造を配る装置になる。
+    """
+    sc = load_scenario("ransomware-initial-response-01")
+    sid = client.post("/api/session", json={"scenario_id": sc.meta.id}).json()["session_id"]
+    res = client.post(
+        f"/api/session/{sid}/decide",
+        json={"kind": "action", "action_id": "act_collect_evtx_fs01"},
+    ).json()
+    got = {ev["id"] for ev in res["view"]["obtained_evidence"]}
+    assert got, "前提が崩れている（1手押しても証拠が出ていない）"
+    missing = [e.id for e in sc.evidence if e.occurred_at and e.id not in got]
+    assert missing, "前提が崩れている（1手で全部の時刻が出ている）"
+    text = json.dumps(res, ensure_ascii=False)
+    for eid in missing:
+        assert eid not in text, f"取っていない {eid} が応答に出ている"
+
+
+def test_hard_still_gets_the_times(client):
+    """`hard` でも時刻は渡す。**伏せるのは要約であって、生ログではない。**
+
+    hard は消化された見せ方（要約・読み方・列挙・図）を奪うレベルで、
+    `content` は全レベルで出る（SPEC 5.4）。時刻はその content の中に
+    既に書いてある。ここで伏せると、hard だけが「並べる場所」を
+    持たないまま「並べろ」と言われることになる。
+    """
+    sc = load_scenario("ransomware-initial-response-01")
+    sid = client.post(
+        "/api/session",
+        json={"scenario_id": sc.meta.id, "assist_level": "hard"},
+    ).json()["session_id"]
+    res = client.post(
+        f"/api/session/{sid}/decide",
+        json={"kind": "action", "action_id": "act_collect_evtx_fs01"},
+    ).json()
+    evs = res["view"]["obtained_evidence"]
+    assert evs, "前提が崩れている"
+    assert all(e["summary"] is None for e in evs), "hard で要約が出ている"
+    assert any(e["occurred_at"] for e in evs), "hard で時刻まで消えている"

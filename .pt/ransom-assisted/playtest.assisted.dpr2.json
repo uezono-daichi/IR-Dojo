@@ -1,0 +1,173 @@
+{
+  "dpr": 2,
+  "profile": "wanderer",
+  "assist": "assisted",
+  "scenario": "ransomware-initial-response-01",
+  "base": "http://127.0.0.1:8000",
+  "moves": 22,
+  "log": [
+    {
+      "n": 1,
+      "at": "+00:30",
+      "action": "fs01 のイベントログを収集・解析30分fs01 のセキュリティログ、PowerShell 操作ログ、ファイル監査ログを まとめて取得し、時系列に並べる。サーバ側から見て「誰が・いつ・何をしたか」を 洗い出す作業。",
+      "incoming": []
+    },
+    {
+      "n": 2,
+      "at": "+01:00",
+      "action": "fs01 の SMB セッション履歴を解析30分fs01 のファイル共有への接続履歴を解析する。 どのアカウントが、どの端末から、どの認証方式で接続したかを見る。",
+      "incoming": []
+    },
+    {
+      "n": 3,
+      "at": "+01:40",
+      "action": "fs01 のメモリダンプ取得・解析40分稼働中の fs01 からメモリイメージを取得して解析する。 実行中プロセスと開いているファイルハンドルを見る。サーバは止めない。",
+      "incoming": []
+    },
+    {
+      "n": 4,
+      "at": "+02:15",
+      "action": "fs01 をセーフモードで再起動して確認35分fs01 をセーフモードで再起動し、自動起動項目とディスク上のファイルを確認する。 再起動するため、稼働中のプロセス情報は残らない。",
+      "incoming": []
+    },
+    {
+      "n": 5,
+      "at": "+02:35",
+      "action": "ネットワークフローの概況確認20分境界とコアスイッチのフロー情報から、深夜帯の通信を通信量順に並べる。 通信の中身は見えないが、どの端末がどこへどれだけ話したかが分かる。",
+      "incoming": []
+    },
+    {
+      "n": 6,
+      "at": "+03:10",
+      "action": "全端末に EDR のフルスキャンを実行35分全端末に EDR のフルスキャンを走らせ、既知のマルウェアシグネチャと照合する。 ディスク上の検体を探す作業。",
+      "incoming": []
+    },
+    {
+      "n": 7,
+      "at": "+03:35",
+      "action": "メールゲートウェイのログを照合25分メールゲートウェイの配送ログから、対象利用者宛の受信を洗う。 差出人、件名、添付、認証結果（SPF/DKIM）を確認する。",
+      "incoming": []
+    },
+    {
+      "n": 8,
+      "at": "+04:00",
+      "action": "DLP ログを精査し外部送信を確認25分DLP と CASB のログを引き、機密ファイルの外部送信が検知されていないかを確認する。 承認済み宛先への送信と、未承認宛先への送信を分けて見る。",
+      "incoming": []
+    },
+    {
+      "n": 9,
+      "at": "+04:10",
+      "action": "資産管理台帳・変更管理台帳の照会10分資産管理台帳と変更管理台帳を引き、各端末の用途・管理者と、 この時間帯に承認済みの作業が入っていないかを確認する。 異常かどうかを判定するには、平常時の姿を知る必要がある。",
+      "incoming": []
+    },
+    {
+      "n": 10,
+      "at": "+04:25",
+      "action": "バックアップ運用設定の照会15分バックアップ製品の設定と実行履歴を引き、 どの端末が・いつ・どこへ・どれだけ送る設定になっているかを確認する。",
+      "incoming": [
+        "監視センターから追加連絡"
+      ]
+    },
+    {
+      "n": 11,
+      "at": "+04:55",
+      "action": "バックアップの健全性を確認30分バックアップからの復元を試験し、世代とデータが健全かを確認する。 ランサムウェア対応では復旧可否を早期に把握したい。",
+      "incoming": [
+        "運用チームから連絡"
+      ]
+    },
+    {
+      "n": 12,
+      "at": "+05:20",
+      "action": "dc01 の認証ログを確認25分ドメインコントローラのセキュリティログから、深夜帯の認証イベントを抽出する。 誰がどの端末からドメインにログオンしたかを見る。",
+      "incoming": [
+        "バックアップ運用チームから連絡"
+      ]
+    },
+    {
+      "n": 13,
+      "at": "+05:45",
+      "action": "dc01 の特権グループ変更履歴を確認25分Active Directory の特権グループ（Domain Admins 等）の メンバー変更履歴を確認する。攻撃者が権限を追加していないかを見る。",
+      "incoming": []
+    },
+    {
+      "n": 14,
+      "at": "+06:05",
+      "action": "利用者（佐藤）に連絡して聞き取り20分端末の利用者に電話で連絡し、心当たりのある操作がなかったかを聞く。 深夜帯であり、つながる保証はない。",
+      "incoming": [
+        "ヘルプデスクから連絡"
+      ]
+    },
+    {
+      "n": 15,
+      "at": "+06:25",
+      "action": "ws-042 のメモリイメージを取得して保全20分稼働中の ws-042 からメモリイメージを取得し、保全用の領域に収める。 端末は動かしたまま行う。取得したイメージの解析は別の作業で、 そちらにさらに時間がかかる。",
+      "incoming": []
+    },
+    {
+      "n": 16,
+      "at": "+06:50",
+      "action": "ws-042 のメモリイメージを解析25分保全してあるメモリイメージを解析する。実行中プロセス、確立中の接続、 メモリ上の文字列、自動起動の設定を見る。端末には触らない。",
+      "incoming": []
+    },
+    {
+      "n": 17,
+      "at": "+07:10",
+      "action": "ws-042 のプロキシログを照合20分プロキシと境界ファイアウォールのログから、対象端末の外向き通信を 1リクエストずつ洗う。宛先、間隔、転送量、User-Agent を見る。",
+      "incoming": []
+    },
+    {
+      "n": 18,
+      "at": "+08:10",
+      "action": "ws-042 を停止してディスクイメージを取得60分ws-042 をシャットダウンしてディスクを取り外し、物理イメージを取得する。 $MFT、レジストリ、ShimCache といったディスク上の痕跡を網羅的に見られる。 停止が前提なので、稼働中にしか存在しない情報は取れなくなる。",
+      "incoming": []
+    },
+    {
+      "n": 19,
+      "at": "+08:30",
+      "action": "ws-055 の状態を管理コンソールで照会20分管理コンソールに集まっている ws-055 のインベントリとイベントを照会し、 標準構成との差分を取る。手元の画面から引くだけで、端末には触れない。",
+      "incoming": []
+    },
+    {
+      "n": 20,
+      "at": "+09:10",
+      "action": "ws-055 に臨場して、稼働させたまま採取40分ws-055 のところまで行き、端末を動かしたままメモリを取得して、 端末のローカルに残っているイベントログを直接吸い上げる。 移動と現地での作業の分だけ時間がかかる。",
+      "incoming": []
+    },
+    {
+      "n": 21,
+      "at": "+09:35",
+      "action": "ws-113 をトリアージ25分ws-113 の自動起動項目、直近の実行履歴、スケジュールタスクを 自動収集ツールで一括取得して確認する。",
+      "incoming": []
+    },
+    {
+      "n": 22,
+      "at": "+09:50",
+      "action": "全社に証拠保全の周知を出す15分情報システム部から全社へ、異常が出ている端末の電源断・再起動・ ファイルの削除を行わないよう周知する。ヘルプデスクの一次応答も 同じ文面に差し替え、問い合わせへの回答を揃える。 調査そのものは1ミリも進まない。",
+      "incoming": []
+    }
+  ],
+  "shots": [
+    ".pt/ransom-assisted/01-top.assisted.dpr2.png",
+    ".pt/ransom-assisted/02-select.assisted.dpr2.png",
+    ".pt/ransom-assisted/03-briefing.assisted.dpr2.png",
+    ".pt/ransom-assisted/03b-briefing-legend.assisted.dpr2.png",
+    ".pt/ransom-assisted/04-play-start.assisted.dpr2.png",
+    ".pt/ransom-assisted/05-play-result-h800.assisted.dpr2.png",
+    ".pt/ransom-assisted/05-play-result-h1000.assisted.dpr2.png",
+    ".pt/ransom-assisted/06-play-late.assisted.dpr2.png",
+    ".pt/ransom-assisted/06b-legend.assisted.dpr2.png",
+    ".pt/ransom-assisted/07-assessment.assisted.dpr2.png",
+    ".pt/ransom-assisted/08-response.assisted.dpr2.png",
+    ".pt/ransom-assisted/08b-contained.assisted.dpr2.png",
+    ".pt/ransom-assisted/09-debrief.assisted.dpr2.png",
+    ".pt/ransom-assisted/09b-debrief-damage.assisted.dpr2.png",
+    ".pt/ransom-assisted/09c-debrief-questions.assisted.dpr2.png",
+    ".pt/ransom-assisted/09d-debrief-lost.assisted.dpr2.png",
+    ".pt/ransom-assisted/09e-debrief-policy.assisted.dpr2.png",
+    ".pt/ransom-assisted/09f-debrief-containment.assisted.dpr2.png",
+    ".pt/ransom-assisted/10-debrief-bottom.assisted.dpr2.png"
+  ],
+  "findings": [],
+  "passed": true
+}

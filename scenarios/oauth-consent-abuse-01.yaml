@@ -224,6 +224,7 @@ evidence:
     misleading: false
     plausibility: high
     volatile: false
+    occurred_at: "2026-06-18 10:12"
     summary: "森のアカウントから、社外30宛先へ共有リンク付きのメールが一斉に送られている"
     reading: |
       メッセージ追跡ログの1行は「時刻 / 差出人 / 宛先 / 件名 / 経路 / 結果」で並ぶ。
@@ -303,6 +304,7 @@ evidence:
     misleading: false
     plausibility: high
     volatile: false
+    occurred_at: "2026-05-17 10:04"
     summary: "5/17 10:04 に、森が外部のアプリへ委任同意を与えている"
     reading: |
       監査ログの Consent to application は、利用者が同意画面で「承諾」を
@@ -380,6 +382,7 @@ evidence:
     misleading: false
     plausibility: high
     volatile: false
+    occurred_at: "2026-05-14 03:26"
     summary: "そのアプリは同意の3日前に登録され、発行元の検証がなく、応答先が社外である"
     reading: |
       アプリ登録の内容は、テナントに登録された連携アプリの素性である。
@@ -679,6 +682,7 @@ evidence:
     misleading: false
     plausibility: high
     volatile: false
+    occurred_at: "2026-05-17 10:02"
     summary: "5/17 10:02 に、森宛へ同意画面の URL を含むメールが配送されている"
     reading: |
       メールゲートウェイの配送ログ。認証結果の読み方は次のとおり。
@@ -762,6 +766,7 @@ evidence:
     misleading: false
     plausibility: high
     volatile: false
+    occurred_at: "2026-05-17 10:09"
     summary: "共有ファイル領域から、委任された立場のアプリ経由で 1,902 件が取り出されている"
     reading: |
       共有ファイル領域のアクセス記録は、1操作1行で残る。
@@ -802,6 +807,7 @@ evidence:
     misleading: true
     plausibility: medium
     volatile: false
+    occurred_at: "2026-06-18 10:05"
     summary: "会議室予約コネクタの呼び出しが 10:05 前後に集中している"
     reading: |
       API 呼び出しの概況は、テナント全体の呼び出しを5分ごとに畳んだものである。

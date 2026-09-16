@@ -671,6 +671,20 @@ function renderLegend(view, mini, notes) {
       + 'プレイ中は畳んであります。畳んだままでも、見出しの横に'
       + '「手を当てた資産 / 止めた / 取り除いた」の数だけは出ています。'));
   }
+  // 事件の時計も画面いっぱいに敷いてある。見本は実画面と同じ関数から出す。
+  // 開始前は空なので、**最初に見る姿**（まだ何も並んでいない）がそのまま出る
+  var tl = el('section', 'tl');
+  row.appendChild(region(tl,
+    '取った証拠を、ログの中に書かれている時刻の順に並べた軸です。' +
+    '点の位置は時刻の比例なので、同じ時刻に起きたことは同じ位置に重なります。' +
+    '近いことは、同じ原因であることを意味しません。' +
+    'ここに出るのはあなたが取った証拠だけで、取っていないものは並びません。' +
+    '札を押すと、その証拠のカードが開きます。' +
+    '台帳や、期間をまとめた集計のように出来事の時刻を持たない資料は、' +
+    '軸には並ばず件数だけが下に出ます。' +
+    '大きく間が空いているところは軸を切ってあり、切った跡に空いた長さを書きます。' +
+    'なお、ここの時刻はログの中の壁時計で、帯の「経過時間」（+00:30）とは' +
+    '別の時計です。'));
   mini.appendChild(row);
 
   // ── 本体
@@ -722,8 +736,10 @@ function renderLegend(view, mini, notes) {
   cols.appendChild(right);
   mini.appendChild(cols);
 
-  // 描画は組み立ててから。非表示のままだと clientWidth が 0 になる
-  if (cv || board) {
+  // 描画は組み立ててから。非表示のままだと clientWidth が 0 になる。
+  // **条件を付けない** — hard はグラフも盤も出ないので、
+  // 条件に入れると事件の時計だけが描かれないまま残る
+  {
     setTimeout(function () {
       if (cv) {
         var s = [], v = 0;
@@ -733,6 +749,7 @@ function renderLegend(view, mini, notes) {
       // 見本も本物の盤と同じ関数・同じビューから描く。
       // 開始前なら「手 0 証 0」が並ぶ — それが実際に最初に見る盤である
       if (board) { renderTopology(board.host, view.assets, { marks: true }); }
+      renderTimeline(tl, view, { sample: true });
     }, 0);
   }
 }
@@ -890,6 +907,209 @@ function renderPlay() {
   wrapEl.style.display = v.damage_history ? 'flex' : 'none';
   if (v.damage_history) { DamageChart.draw(chart, v.damage_history, {}); }
   renderBoard(v);
+  renderTimeline($('play-timeline'), v);
+}
+
+/* ── 事件の時計（SPEC 7.6.17） ──
+
+   key_lessons の1行目は「時刻の近さは関係の証明にならない」と言うのに、
+   **学習者に時刻を並べる場所が無かった。** 時刻は生ログの中に
+   `2026-03-14T02:17:33Z` の形で埋まっていて、カードをまたいで頭の中で
+   並べるしかない。並べる作業を要求しておいて、並べる場所を出していない。
+
+   置くのは**学習者が取った証拠だけ**で、真実は一切使わない。誤導かどうかで
+   色も順序も大きさも変えない（変えたら答えを配る）。取るほど埋まるので、
+   調査の進み方そのものが図になる。
+
+   **2つの時計を混ぜない。** 被害グラフは経過時間（+03:20）、こちらは
+   事件の壁時計（02:34）である。軸を共有させず、見出しでそう言う。 */
+
+// 時刻を持つ出来事の間が、この分数より空いていたら軸を切る。
+// 切った跡には「何日空いたか」を書く — 切ったことを黙ると軸が嘘をつく
+var TL_BREAK_MINUTES = 60;
+// 切った跡に与える幅（分に換算した見かけの長さ）。
+// 潰さずに実寸で描くと、1か月離れた2本目が右端の1点に潰れる
+var TL_BREAK_SPAN = 12;
+// 札の最大幅の候補。上から順に試し、段が TL_MAX_LANES に収まった幅を採る。
+// 最後の候補では要約が落ちて時刻と id だけになる（hard と同じ姿）
+var TL_LABEL_WIDTHS = [280, 210, 150, 104];
+var TL_MAX_LANES = 6;
+// 1段の高さ（px）。CSS の .tl-item の高さと揃える
+var TL_LANE_H = 18;
+
+/* 「2026-03-14 02:17」を分に直す。並べ替えと間隔の計算にだけ使う */
+function tlMinutes(at) {
+  var m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/.exec(at || '');
+  if (!m) { return null; }
+  return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) / 60000;
+}
+
+/* 空いた間を言葉にする。「32日」「2時間」。切った跡にだけ出す */
+function tlGapLabel(minutes) {
+  if (minutes >= 1440) { return Math.round(minutes / 1440) + '日'; }
+  return Math.round(minutes / 60) + '時間';
+}
+
+/* 事件の時計の並び。取った証拠のうち、時刻を持つものだけを時刻順に */
+function timelineEntries(v) {
+  var got = (v && v.obtained_evidence) || [];
+  var out = [];
+  got.forEach(function (ev) {
+    var t = tlMinutes(ev.occurred_at);
+    if (t === null) { return; }
+    out.push({ id: ev.id, at: t, clock: ev.occurred_at.slice(11), day: ev.occurred_at.slice(0, 10),
+               summary: ev.summary || '' });
+  });
+  out.sort(function (a, b) { return a.at - b.at || (a.id < b.id ? -1 : 1); });
+  return out;
+}
+
+/* 軸の目盛りを組み立てる。空きが TL_BREAK_MINUTES を超えたら切って、
+   切った跡に「何日空いたか」を置く。返すのは各点の論理座標（0..1） */
+function timelineScale(entries) {
+  var breaks = [];
+  var span = 0;
+  var pos = [0];
+  for (var i = 1; i < entries.length; i++) {
+    var gap = entries[i].at - entries[i - 1].at;
+    if (gap > TL_BREAK_MINUTES) {
+      breaks.push({ at: span + TL_BREAK_SPAN / 2, label: tlGapLabel(gap) });
+      span += TL_BREAK_SPAN;
+    } else {
+      span += gap;
+    }
+    pos.push(span);
+  }
+  var scale = span > 0 ? 1 / span : 0;
+  return {
+    frac: pos.map(function (x) { return span > 0 ? x * scale : 0.5; }),
+    breaks: breaks.map(function (b) { return { frac: b.at * scale, label: b.label }; })
+  };
+}
+
+/* 何段に積むか。札は左から順に、前の札と重ならない最初の段へ置く */
+function timelineLanes(items, containerW, maxW) {
+  var ends = [];
+  var lanes = [];
+  for (var i = 0; i < items.length; i++) {
+    var w = Math.min(items[i].natural, maxW);
+    // 右端にかかる札は、点の**手前**に引く。入れ物の右端へ寄せて畳むと、
+    // 札とその点の対応が切れる
+    var left = items[i].x + w <= containerW ? items[i].x
+             : Math.max(0, Math.min(items[i].x - w, containerW - w));
+    var lane = 0;
+    while (ends[lane] !== undefined && ends[lane] > left - 6) { lane++; }
+    ends[lane] = left + w;
+    lanes.push({ lane: lane, left: left, width: w });
+  }
+  return lanes;
+}
+
+/* 事件の時計を描く。**画面に入れてから測る** — clientWidth が 0 のまま
+   段を割ると、全部が1段に重なる（被害グラフと構成図で2度やっている） */
+function renderTimeline(host, v, opts) {
+  clear(host);
+  var entries = timelineEntries(v);
+  var untimed = ((v && v.obtained_evidence) || []).length - entries.length;
+
+  var head = el('div', 'tl-head');
+  head.appendChild(el('span', 'tl-title', '事件の時計'));
+  head.appendChild(el('span', 'tl-note',
+    'ログの中の時刻です。帯の「経過時間 +」とは別の時計です。'));
+  host.appendChild(head);
+
+  if (!entries.length) {
+    host.appendChild(el('div', 'tl-empty',
+      '取った証拠のうち、出来事の時刻を持つものがここに並びます。'));
+    return;
+  }
+
+  var band = el('div', 'tl-band');
+  var rule = el('div', 'tl-rule');
+  band.appendChild(rule);
+  var sc = timelineScale(entries);
+
+  // 同じ日に収まっているなら時刻だけ、日をまたぐなら日付も出す
+  var multiday = entries[0].day !== entries[entries.length - 1].day;
+  var lanes = el('div', 'tl-lanes');
+
+  entries.forEach(function (e, i) {
+    var dot = el('span', 'tl-dot');
+    dot.style.left = (sc.frac[i] * 100) + '%';
+    band.appendChild(dot);
+
+    var btn = el('button', 'tl-item');
+    btn.appendChild(el('b', null, (multiday ? e.day.slice(5) + ' ' : '') + e.clock));
+    btn.appendChild(el('span', 'tl-what', e.summary || e.id));
+    btn.setAttribute('data-ev', e.id);
+    if (!(opts && opts.sample)) {
+      btn.addEventListener('click', function () { focusEvidence(e.id); });
+    }
+    lanes.appendChild(btn);
+    e.node = btn;
+  });
+
+  sc.breaks.forEach(function (b) {
+    var mark = el('span', 'tl-break', b.label);
+    mark.style.left = (b.frac * 100) + '%';
+    band.appendChild(mark);
+  });
+
+  band.appendChild(lanes);
+  host.appendChild(band);
+
+  if (untimed > 0) {
+    host.appendChild(el('div', 'tl-rest',
+      'ほかに、出来事の時刻を持たない資料が ' + untimed
+      + ' 件あります（台帳や、期間をまとめた集計）。'));
+  }
+
+  var place = function () {
+    var w = band.clientWidth;
+    if (!w) { return false; }
+    var items = entries.map(function (e, i) {
+      e.node.style.maxWidth = 'none';
+      return { natural: e.node.offsetWidth, x: Math.round(sc.frac[i] * w) };
+    });
+    var put = null, maxW = TL_LABEL_WIDTHS[TL_LABEL_WIDTHS.length - 1];
+    for (var k = 0; k < TL_LABEL_WIDTHS.length; k++) {
+      put = timelineLanes(items, w, TL_LABEL_WIDTHS[k]);
+      maxW = TL_LABEL_WIDTHS[k];
+      var used = Math.max.apply(null, put.map(function (p) { return p.lane; })) + 1;
+      if (used <= TL_MAX_LANES) { break; }
+    }
+    var top = 0;
+    entries.forEach(function (e, i) {
+      e.node.style.maxWidth = maxW + 'px';
+      e.node.style.left = put[i].left + 'px';
+      e.node.style.top = (put[i].lane * TL_LANE_H) + 'px';
+      top = Math.max(top, put[i].lane);
+    });
+    lanes.style.height = ((top + 1) * TL_LANE_H) + 'px';
+    return true;
+  };
+  if (!place()) { setTimeout(place, 0); }
+}
+
+/* 時間軸の札から、その証拠のカードへ送る。時間軸は索引であって、
+   読むものはカードの側にある。**何も新しいことは言わない** */
+function focusEvidence(id) {
+  S.openIds[id] = true;
+  var past = $('past-evidence');
+  var inResult = document.querySelector('#result-area [data-ev="' + id + '"]');
+  if (!inResult && past) { past.open = true; }
+  renderEvidence(S.view);
+  var box = document.querySelector('[data-ev="' + id + '"].ev');
+  if (!box) { return; }
+  box.classList.add('open');
+  // **カードの頭を、追従している帯の下に置く。** 真ん中に寄せると、
+  // 開いたカードは長いので [ev_004] の見出しが帯の上へ抜ける —
+  // どれを開いたのか分からないまま生ログだけが出る
+  var css = getComputedStyle(document.documentElement);
+  var off = (parseInt(css.getPropertyValue('--header-h'), 10) || 66)
+          + (parseInt(css.getPropertyValue('--strip-h'), 10) || 140) + 10;
+  window.scrollTo(0, Math.max(0,
+    window.pageYOffset + box.getBoundingClientRect().top - off));
 }
 
 /* 資産盤。プレイ中ずっと出しておく（SPEC 7.6.16）。
@@ -1248,6 +1468,9 @@ function renderPast(v) {
 
 function evidenceCard(ev, isNew, forceOpen) {
   var box = el('div', 'ev' + (isNew ? ' new' : ''));
+  // 事件の時計の札から辿れるようにする（索引 → 本体）。属性だけで、
+  // 中身は何も変えない
+  if (ev.id) { box.setAttribute('data-ev', ev.id); }
   // 結果の箱の中は開く。積み上がった側は畳んで一覧として読ませる。
   // 凡例の見本は本物の開閉状態を引き継がない（畳んだ姿が見本だから）
   var open = forceOpen || (!ev.sample && !!S.openIds[ev.id]);
@@ -1278,9 +1501,20 @@ function evidenceCard(ev, isNew, forceOpen) {
   // 考えられること。読み方の**後ろ**に置く。生ログ → 読み方 → 意味しうること
   // の順でないと、まだ読めていないものの意味を先に渡すことになる。
   // 箇条書きにするのは、散文にすると順番と接続詞が本命を作るため
+  // **既定では畳む。** 毎回読むものではなく「詰まったときに考えを広げる
+  // 道具」であり、開いたままだと押した直後の視野から結果が落ちる
+  // （実測 674px 下。押した直後に一度も目に入っていなかった）
   if (ev.possibilities && ev.possibilities.length) {
-    var m = el('div', 'ev-reading ev-maybe');
-    m.appendChild(el('div', 'ev-reading-head', '考えられること'));
+    var m = el('details', 'ev-reading ev-maybe');
+    var sm = el('summary');
+    var mk = caret(false);
+    sm.appendChild(mk);
+    sm.appendChild(el('span', 'ev-reading-head',
+      '考えられること　' + ev.possibilities.length + ' 通り'));
+    m.appendChild(sm);
+    m.addEventListener('toggle', function () {
+      mk.textContent = caret(m.open).textContent;
+    });
     var ul = el('ul', 'ev-maybe-list');
     ev.possibilities.forEach(function (t) {
       ul.appendChild(el('li', null, String(t).trim().replace(/\s*\n\s*/g, '')));
@@ -2156,6 +2390,8 @@ function init() {
     if (S.view && S.view.damage_history) {
       DamageChart.draw($('damage-chart'), S.view.damage_history, {});
     }
+    // 段の割り方は幅で決まる。幅が変わったら割り直す
+    if (S.view) { renderTimeline($('play-timeline'), S.view); }
   });
 }
 

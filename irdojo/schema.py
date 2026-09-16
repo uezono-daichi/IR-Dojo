@@ -6,14 +6,20 @@
 
 from __future__ import annotations
 
+import math
 import re
+import unicodedata
 from collections.abc import Collection
+from datetime import datetime
 from enum import Enum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 SCHEMA_VERSION = "0.4"
+
+# 事件の時計の書式（SPEC 5.4 / 7.6.17）
+_OCCURRED_AT = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}")
 
 
 # ─────────── 列挙型 ───────────
@@ -168,12 +174,62 @@ class Evidence(Strict):
     # **決着はさせない。** 「毎日 02:15 のバックアップジョブかもしれません」は、
     # 台帳を引く手を 25分ぶん無料で配っているのと同じである。
     possibilities: list[str] = []
+    # **事件の時計**（v1.47）。この資料が記録している出来事が、
+    # 現実の壁時計でいつ起きたか。`YYYY-MM-DD HH:MM`。
+    #
+    # key_lessons の1行目は「時刻の近さは関係の証明にならない」と言うのに、
+    # **学習者に時刻を並べる場所が無かった。** 時刻は生ログの中に
+    # `2026-03-14T02:17:33Z` の形で埋まっていて、カードをまたいで頭の中で
+    # 並べるしかない。並べる作業を要求しておいて、並べる場所を出していない。
+    #
+    # **content からの解析にしなかった。** 1つの資料には時刻が何個も出る
+    # （収集範囲の期間、他ホストの最終受信、定義ファイルの更新時刻）。
+    # どれがその資料の言う「出来事」なのかは作者にしか決められない。
+    # 代わりにローダが、**content に出ていない時刻を書けないようにする** —
+    # 欄は content の再掲であって、新しい開示ではない。
+    #
+    # **空にしてよい。** 台帳・期間の集計・聞き取りは、事件の出来事ではなく
+    # 平常時の事実や期間をまとめたものであって、1点の時刻を持たない。
+    # ただし**有無が誤導の印になってはいけない** — 誤導だけが時刻を持つ
+    # （あるいは持たない）盤面は、欄そのものが答えを配る。ローダが
+    # 2×2 の空きを拒否し、tools/balance.py が比を見る。
+    occurred_at: str = ""
     refuted_by: list[str] = []
     # 棄却の条件。`open_questions.resolution_mode` と同じ形で読む。
     #   any … どれか1つ持っていれば棄却できる（既定）
     #   all … すべて揃って初めて棄却できる
     # `misleading: true` の証拠にだけ意味がある（ローダが他での指定を拒否する）。
     refutation_mode: Literal["any", "all"] = "any"
+
+    @model_validator(mode="after")
+    def check_occurred_at(self) -> "Evidence":
+        """事件の時計の書式。`YYYY-MM-DD HH:MM` 固定にする。
+
+        **日付まで書かせる。** 時刻だけにすると、盤面が日をまたいだ
+        瞬間に嘘になる（2本目は同意が 5/17、騒ぎが 6/18 で、1か月
+        離れている）。日付を持っていれば、画面の側が「同じ日なら
+        時刻だけ・またぐなら日付も」と選べる。
+        """
+        t = self.occurred_at.strip()
+        self.occurred_at = t
+        if not t:
+            return self
+        if not _OCCURRED_AT.fullmatch(t):
+            raise ValueError(
+                f"{self.id}.occurred_at: 書式は 'YYYY-MM-DD HH:MM' です（{t!r}）"
+            )
+        try:
+            datetime.strptime(t, "%Y-%m-%d %H:%M")
+        except ValueError as exc:
+            raise ValueError(f"{self.id}.occurred_at: 実在しない日時です（{t!r}）") from exc
+        return self
+
+    @property
+    def occurred(self) -> "datetime | None":
+        """並べ替えのための日時。書かれていなければ None。"""
+        if not self.occurred_at:
+            return None
+        return datetime.strptime(self.occurred_at, "%Y-%m-%d %H:%M")
 
     @model_validator(mode="after")
     def fold_possibilities(self) -> "Evidence":
@@ -910,6 +966,8 @@ def _validate_scenario(sc: "Scenario") -> None:
     _reject_conclusion_vocabulary(sc)
     _reject_possibilities_that_settle(sc)
     _reject_possibilities_that_leak(sc)
+    _reject_occurrences_not_in_the_log(sc)
+    _reject_occurrence_times_that_mark_the_trap(sc)
 
     # 被害モデルの params
     _validate_damage_params(sc.damage)
@@ -1404,6 +1462,36 @@ LEANING_WORDS = (
 # 止めたい語気より広く書くと日本語の活用に当たる。** 助詞まで含めて書く。
 
 
+# **1行に入る全角の字数**（SPEC 5.4 / v1.47）。
+# 実測して決めた値である — 1440幅のプレイ画面で、列挙の `li` は内寸 613px、
+# 文字は 13px。613 / 13 = 47.2 字が1行に入る。
+#
+# **文字数の帯と、目が測る行数はずれる。** 45字・48字・46字の3項目は
+# 文字数では 1.07倍（帯は 2.0倍まで）で楽に通るのに、画面では
+# 1行・2行・1行に折れて、**2行の項目だけが倍の高さで並ぶ。**
+# 実測で 21枚中13枚がそうなっていて、うち3枚は「2行になっている
+# 唯一の項目が真相側」だった。厚みで本命を示唆しない（②）という規則は、
+# 文字数ではなく行数で書かれていなければならなかった。
+POSSIBILITY_COLUMNS = 47
+
+
+def display_width(text: str) -> float:
+    """全角換算の幅。全角（W/F/A）を 1、半角を 0.5 と数える。
+
+    文字数で数えると、半角の英数字が混じった項目を過大に見積もる。
+    折り返しを決めているのは字数ではなく幅である。
+    """
+    return sum(
+        1.0 if unicodedata.east_asian_width(c) in "WFA" else 0.5
+        for c in text
+    )
+
+
+def wrapped_lines(text: str, columns: int = POSSIBILITY_COLUMNS) -> int:
+    """`columns` 字幅の箱に流したときの行数。"""
+    return max(1, math.ceil(display_width(text) / columns))
+
+
 def _reject_possibilities_that_settle(sc: "Scenario") -> None:
     """可能性の列挙が、そこで決着していないか（SPEC 3.10）。
 
@@ -1447,6 +1535,16 @@ def _reject_possibilities_that_settle(sc: "Scenario") -> None:
                 f"{e.id}.possibilities: 項目の厚みが偏っています"
                 f"（{min(lengths)}字 〜 {max(lengths)}字）。"
                 "長いほうが本命に読めます（最長は最短の 2.0倍まで）"
+            )
+        lines = [wrapped_lines(t) for t in items]
+        if len(set(lines)) != 1:
+            raise ValueError(
+                f"{e.id}.possibilities: 折り返しの行数が揃っていません"
+                f"（{'/'.join(str(n) for n in lines)} 行、"
+                f"全角換算 {'/'.join(f'{display_width(t):g}' for t in items)} 字幅、"
+                f"1行 {POSSIBILITY_COLUMNS} 字）。"
+                "読む側が測るのは字数ではなく高さで、"
+                "1つだけ2行になっている項目はそれだけで本命に見えます"
             )
         for text in items:
             for word in LEANING_WORDS:
@@ -1553,6 +1651,94 @@ def _reject_possibilities_that_leak(sc: "Scenario") -> None:
             f"{eid}.possibilities: {what}が入っています。"
             "列挙が書けるのは可能性の空間と、それを決める方向までです。"
             "どれなのかを決める資料は、手で買わせてください"
+        )
+
+
+# ─────────── 事件の時計の検査（SPEC 5.4 / 7.6.17 / v1.47） ───────────
+
+_DATE_IN_LOG = re.compile(r"\d{4}[-/]\d{2}[-/]\d{2}")
+
+
+def _reject_occurrences_not_in_the_log(sc: "Scenario") -> None:
+    """時間軸に出す時刻が、その資料に本当に書かれているか（原則2）。
+
+    `occurred_at` は **content の再掲**である。時間軸は学習者が既に
+    持っている紙の上の時刻を並べ直す場所であって、新しい開示ではない。
+    content に無い時刻を欄に書けてしまうと、作者は
+    「ログには載っていないが本当はこの時刻だった」を配れる — それは
+    手で買わせるべき資料であり、欄で配ってよいものではない。
+
+    見るのは2つ。
+
+    ①**時刻（HH:MM）が content に文字列として出ていること。**
+      `2026-03-14T02:17:33Z` でも `02:41:07` でも部分一致で拾える。
+    ②**日付が content の日付と食い違っていないこと。** 日付を1つも
+      書いていない資料（メモリのプロセス一覧など）は①だけを見る —
+      そこに日付を要求すると、資料として不自然な行を足すことになる。
+    """
+    for e in sc.evidence:
+        if not e.occurred_at:
+            continue
+        day, clock = e.occurred_at.split(" ")
+        if clock not in e.content:
+            raise ValueError(
+                f"{e.id}.occurred_at: 時刻 {clock} が content に出ていません。"
+                "時間軸に出せるのは、その資料に書かれている時刻だけです"
+            )
+        days = {d.replace("/", "-") for d in _DATE_IN_LOG.findall(e.content)}
+        if days and day not in days:
+            raise ValueError(
+                f"{e.id}.occurred_at: 日付 {day} が content の日付 {sorted(days)} に"
+                "ありません。時間軸に出せるのは、その資料に書かれている日だけです"
+            )
+
+
+def occurrence_split(sc: "Scenario") -> dict[str, int]:
+    """時刻を持つ／持たないを、誤導と本物で数えた 2×2。
+
+    **ローダと測定器で数え方を2つ書かない**（possibility_leaks と同じ）。
+    ローダは空きのある表を拒否し、`tools/balance.py` は比を見る。
+    """
+    out = {"mis_with": 0, "mis_without": 0, "real_with": 0, "real_without": 0}
+    for e in sc.evidence:
+        side = "mis" if e.misleading else "real"
+        out[f"{side}_{'with' if e.occurred_at else 'without'}"] += 1
+    return out
+
+
+def _reject_occurrence_times_that_mark_the_trap(sc: "Scenario") -> None:
+    """時刻の有無が、誤導の印になっていないか（原則2 / SPEC 3.4）。
+
+    新しい欄を足すたびに、盤面には**新しい目印**が生まれる。
+    周4 は収集範囲の欄をネガティブ所見にだけ付けて「白の印」を作り、
+    v1.46 は列挙の厚みで同じことをやりかけた。**欄の有無は、
+    それ自体が読める。**
+
+    ここが禁じるのは 2×2 の空き — 誤導が全部時刻を持つ（本物には
+    持たないものがいる）、あるいは誤導が1つも時刻を持たない
+    （本物には持つものがいる）。どちらも「時間軸に載るか」を見るだけで
+    誤導を振り分けられてしまう。
+
+    誤導が1件しかない盤面では見ない（1件では有無の分布に意味が無い）。
+    細かい偏りは `tools/balance.py` の比（0.7〜1.3）が見る。
+    """
+    n = occurrence_split(sc)
+    if not (n["mis_with"] + n["real_with"]):
+        return  # 事件の時計を使っていない盤面
+    if n["mis_with"] + n["mis_without"] < 2:
+        return
+    if n["mis_with"] == 0 and n["real_with"]:
+        raise ValueError(
+            "occurred_at: 誤導だけが時刻を持っていません"
+            f"（誤導 0/{n['mis_without']} 件・本物 {n['real_with']}件に時刻あり）。"
+            "時間軸に載らないことが、そのまま誤導の印になります"
+        )
+    if n["mis_without"] == 0 and n["real_without"]:
+        raise ValueError(
+            "occurred_at: 誤導だけが全部時刻を持っています"
+            f"（誤導 {n['mis_with']}/{n['mis_with']} 件・"
+            f"時刻を持たない本物 {n['real_without']}件）。"
+            "時間軸に載ることが、そのまま誤導の印になります"
         )
 
 
