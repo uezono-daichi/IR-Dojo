@@ -69,14 +69,25 @@ button.primary:hover { color: #000; }
    「まだ何かあるはず」に見える。margin:auto にしているのは、
    中身が画面より高いときに上端を切り落とさないため */
 #screen-top.active { display: flex; min-height: 100vh; }
-.wrap-top { max-width: 1040px; margin: auto; width: 100%; padding: 36px 24px 36px; }
+/* 入口は**アプリ本体より狭くしない**。1040px で頭打ちにしていたので、
+   1920px の画面では 54%、2560px では 41% しか使っておらず、
+   プレイ画面（.wrap-wide の 1280px）より窮屈に見えていた。
+   広げるのは図と札の側だけで、散文の段は下の grid が 1fr で押さえる —
+   1行が 1000px を超える散文は、広いだけで読めない */
+.wrap-top { max-width: 1600px; margin: auto; width: 100%; padding: 36px 32px 36px; }
 .top-head { text-align: center; margin-bottom: 24px; }
 .top-head .sub { margin: 0; }
 
+/* **広げた幅は余白に使い、中身は伸ばさない。**
+   散文は 34em を超えると行が追えなくなり、表は数字が離れるほど比べにくくなる
+   （1040px 時代の 483px から 1012px まで伸ばしたら、隣の列と見比べられなくなった）。
+   両方を上限で止めて、余った幅は列の間と左右に逃がす */
 .top-claim {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.02fr);
-  gap: 36px; align-items: center;
+  grid-template-columns: minmax(0, 34em) minmax(0, 40em);
+  gap: clamp(48px, 7vw, 120px);
+  justify-content: center;
+  align-items: center;
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   padding: 22px 0 24px;
@@ -91,6 +102,8 @@ button.primary:hover { color: #000; }
 /* 方針の入れ替え表。数字は /api/policy-swap から来る */
 .swap { margin: 0; }
 .swap h2 { font-size: 15px; margin: 0 0 14px; line-height: 1.6; }
+/* 表の下の注記も散文。表の幅につられて1行 1180px になっていた */
+.swap .note, .swap > p { max-width: 40em; }
 table.swap-grid { border-collapse: collapse; width: 100%; }
 table.swap-grid th, table.swap-grid td { padding: 7px 10px; }
 table.swap-grid thead th {
