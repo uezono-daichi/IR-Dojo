@@ -162,12 +162,113 @@ function fail(err) {
   }
 }
 
+/* ── ① トップ ── */
+
+/* 入口に置く 3×3（SPEC 7.6.5）。
+
+   この製品の主張は「同じ盤面・同じ真相でも、方針が変われば別の対応が
+   最善になる」の一点で、以前はそれを文章で2回言っていた。
+   **数字はサーバから来る。画面は1つも持たない** — 手で書いた数字は、
+   盤面を触った日から嘘になる。生成物が古ければサーバが `available: false`
+   を返し、この箱ごと出ない（古い数字は出ない）。 */
+function loadPolicySwap() {
+  return api('/api/policy-swap').then(renderPolicySwap, function () {
+    // 入口の飾りである。取れなくても演習は選べるので、警告は出さない
+    renderPolicySwap(null);
+  });
+}
+
+function renderPolicySwap(data) {
+  var host = $('top-swap');
+  if (!data || !data.available || !data.rows || !data.rows.length) {
+    host.hidden = true;
+    return;
+  }
+  var cols = data.policies;
+
+  // 各列の最高点。**印の位置は数字が決める。**
+  // 対角に印を焼き付けると、盤面が変わったとき表だけが正しい顔で嘘をつく
+  var best = {};
+  cols.forEach(function (c) {
+    best[c.id] = Math.max.apply(null, data.rows.map(function (r) {
+      return r.scores[c.id];
+    }));
+  });
+
+  var table = el('table', 'swap-grid');
+  var thead = el('thead');
+  var hr = el('tr');
+  hr.appendChild(el('th'));
+  cols.forEach(function (c) {
+    var th = el('th', null, c.label);
+    th.setAttribute('scope', 'col');
+    hr.appendChild(th);
+  });
+  thead.appendChild(hr);
+  table.appendChild(thead);
+
+  var tbody = el('tbody');
+  data.rows.forEach(function (r) {
+    var tr = el('tr');
+    var th = el('th', null, r.label);
+    th.setAttribute('scope', 'row');
+    tr.appendChild(th);
+    cols.forEach(function (c) {
+      var td = el('td', r.scores[c.id] === best[c.id] ? 'best' : null,
+        r.scores[c.id]);
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+
+  var mount = $('top-swap-table');
+  clear(mount);
+  mount.appendChild(table);
+
+  // 何の表かは、行数・列数から組み立てる。件数を手で書かない
+  $('top-swap-note').textContent =
+    cols.length + 'つの方針それぞれに向けて立てた' + data.rows.length +
+    '通りの対応を、同じ盤面・同じ真相のまま' + cols.length +
+    'つとも採点し直した点数です（0〜100）。色が付いているのが各列の最高点。';
+  host.hidden = false;
+}
+
+/* 入っている演習を入口にも並べる。
+
+   以前はここを1回押さないと、何が遊べるのかが分からなかった。 */
+function renderTopScenarios() {
+  var host = $('top-scenarios');
+  clear(host);
+  S.scenarios.forEach(function (sc) {
+    var card = el('div', 'card card-pick');
+    card.setAttribute('role', 'button');
+    card.setAttribute('data-scenario', sc.id);
+    card.setAttribute('tabindex', '0');
+    fillScenarioCard(card, sc);
+    function go() { toSelect(sc); }
+    card.addEventListener('click', go);
+    card.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
+    });
+    host.appendChild(card);
+  });
+}
+
+/* 選択画面へ渡す。札から来たときは、そのシナリオを選んだ状態にする */
+function toSelect(sc) {
+  show('screen-select');
+  if (!S.scenarios.length) { loadScenarios().catch(fail); return; }
+  if (sc) { selectScenario(sc); }
+}
+
 /* ── ② シナリオ選択 ── */
 
 function loadScenarios() {
   return api('/api/scenarios').then(function (list) {
     S.scenarios = list;
     renderScenarioList();
+    renderTopScenarios();
   }, function (err) {
     // 警告を閉じたあと真っ白にしない。画面上にも理由と復帰手段を残す
     showListError(err);
@@ -193,10 +294,31 @@ function showListError(err) {
   retry.addEventListener('click', function () { loadScenarios().catch(function () {}); });
   box.appendChild(retry);
   host.appendChild(box);
+  // 入口にも同じことを出す。**片方だけに出すと、入口は黙って空になる**
+  var top = $('top-scenarios');
+  clear(top);
+  top.appendChild(el('p', 'dim', err.offline
+    ? 'サーバに接続できていないため、演習の一覧を出せません。'
+    : '演習の一覧を取得できませんでした。'));
   // 一覧が無い状態で開始させない
   clear($('policy-list'));
   clear($('assist-list'));
   $('btn-start').disabled = true;
+}
+
+/* シナリオの札の中身。**入口と選択画面で同じ関数から作る。**
+
+   別々に書くと片方だけが古い並びのまま残る — 凡例の手書きモックが
+   3フェーズのまま腐ったのと同じ壊れ方をする（SPEC 7.6.7）。 */
+function fillScenarioCard(card, sc) {
+  var head = el('div', 'card-head');
+  head.appendChild(el('div', 'card-title', sc.title));
+  head.appendChild(el('div', 'dim',
+    '複雑度 ' + '★'.repeat(sc.complexity) + '☆'.repeat(5 - sc.complexity)));
+  card.appendChild(head);
+  card.appendChild(el('div', 'faint',
+    sc.tags.join(' / ') + '\u3000約' + sc.estimated_play_minutes + '分'));
+  return card;
 }
 
 function renderScenarioList() {
@@ -217,13 +339,7 @@ function renderScenarioList() {
     card.setAttribute('role', 'radio');
     card.setAttribute('data-scenario', sc.id);
     card.setAttribute('tabindex', '0');
-    var head = el('div', 'card-head');
-    head.appendChild(el('div', 'card-title', sc.title));
-    head.appendChild(el('div', 'dim',
-      '複雑度 ' + '★'.repeat(sc.complexity) + '☆'.repeat(5 - sc.complexity)));
-    card.appendChild(head);
-    card.appendChild(el('div', 'faint',
-      sc.tags.join(' / ') + '　約' + sc.estimated_play_minutes + '分'));
+    fillScenarioCard(card, sc);
     card.addEventListener('click', function () { selectScenario(sc); });
     card.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectScenario(sc); }
@@ -2310,10 +2426,7 @@ function stamp(iso) {
 /* ── 配線 ── */
 
 function init() {
-  $('btn-to-select').addEventListener('click', function () {
-    show('screen-select');
-    if (!S.scenarios.length) { loadScenarios().catch(fail); }
-  });
+  $('btn-to-select').addEventListener('click', function () { toSelect(null); });
   $('btn-what').addEventListener('click', function () { openModal('modal-what'); });
   $('btn-back-top').addEventListener('click', function () { show('screen-top'); });
   $('btn-start').addEventListener('click', startSession);
@@ -2395,4 +2508,10 @@ function init() {
   });
 }
 
-document.addEventListener('DOMContentLoaded', init);
+document.addEventListener('DOMContentLoaded', function () {
+  init();
+  // 入口が「何が遊べるか」と「何を主張しているか」を自分で言えるように、
+  // どちらも最初に取りに行く。どちらも失敗しても画面は開いたままにする
+  loadScenarios().catch(function () {});
+  loadPolicySwap();
+});

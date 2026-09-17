@@ -1,0 +1,79 @@
+{
+  "fingerprint": "d1faffb2b125e5d9e2bfbde4ced80e570830dcda0f77d7f8c6f1cfe405b77ef5",
+  "scenarios": [
+    {
+      "scenario_id": "oauth-consent-abuse-01",
+      "policy_ids": [
+        "business_continuity",
+        "evidence_preservation",
+        "damage_minimization"
+      ],
+      "rows": [
+        {
+          "label": "Aの対応",
+          "policy_id": "business_continuity",
+          "scores": {
+            "business_continuity": 97,
+            "evidence_preservation": 88,
+            "damage_minimization": 88
+          }
+        },
+        {
+          "label": "Bの対応",
+          "policy_id": "evidence_preservation",
+          "scores": {
+            "business_continuity": 95,
+            "evidence_preservation": 97,
+            "damage_minimization": 87
+          }
+        },
+        {
+          "label": "Cの対応",
+          "policy_id": "damage_minimization",
+          "scores": {
+            "business_continuity": 90,
+            "evidence_preservation": 86,
+            "damage_minimization": 94
+          }
+        }
+      ]
+    },
+    {
+      "scenario_id": "ransomware-initial-response-01",
+      "policy_ids": [
+        "business_continuity",
+        "evidence_preservation",
+        "damage_minimization"
+      ],
+      "rows": [
+        {
+          "label": "Aの対応",
+          "policy_id": "business_continuity",
+          "scores": {
+            "business_continuity": 97,
+            "evidence_preservation": 90,
+            "damage_minimization": 88
+          }
+        },
+        {
+          "label": "Bの対応",
+          "policy_id": "evidence_preservation",
+          "scores": {
+            "business_continuity": 94,
+            "evidence_preservation": 97,
+            "damage_minimization": 87
+          }
+        },
+        {
+          "label": "Cの対応",
+          "policy_id": "damage_minimization",
+          "scores": {
+            "business_continuity": 92,
+            "evidence_preservation": 85,
+            "damage_minimization": 94
+          }
+        }
+      ]
+    }
+  ]
+}

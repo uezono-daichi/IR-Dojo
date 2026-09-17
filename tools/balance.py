@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from irdojo import loader, retrospective, scoring
+from irdojo import swap as swap_data
 from irdojo.engine import Decision, Engine, InvalidDecision
 from irdojo.schema import (
     ActionType,
@@ -1600,11 +1601,56 @@ def report(sc: Scenario) -> dict:
     }
 
 
+def emit_swap() -> int:
+    """入口に置く 3×3 を、同梱シナリオ全部について焼き直す（SPEC 7.6.5）。
+
+    **入口の数字は、ここでしか作られない。** 画面にも SPEC にも
+    手で書き写さないこと — 書き写した瞬間に、盤面を触った日から嘘になる。
+    指紋（エンジン一式・この道具・全シナリオ）を一緒に入れるので、
+    焼き直しを忘れると入口から表が**消える**（古い数字は出ない）。
+    """
+    out = []
+    for sc in loader.list_scenarios():
+        table = policy_swap(sc)
+        if len(table) < 2:
+            print(f"  飛ばした: {sc.meta.id}（入れ替えられる対応が足りない）")
+            continue
+        order = [p.id for p in sc.policies if p.id in table]
+        out.append(swap_data.ScenarioSwap(
+            scenario_id=sc.meta.id,
+            policy_ids=order,
+            # 行の名前は **A / B / C** まで。どの盤面の何なのかは言わない
+            # （入口はシナリオを選ぶ前の画面である）
+            rows=[
+                swap_data.PolicyScores(
+                    label=f"{chr(ord('A') + i)}の対応",
+                    policy_id=pid,
+                    scores={k: int(v) for k, v in table[pid].items()},
+                )
+                for i, pid in enumerate(order)
+            ],
+        ))
+        print(f"  {sc.meta.id}: {len(out[-1].rows)}×{len(order)}")
+    data = swap_data.SwapFile(fingerprint=swap_data.fingerprint(), scenarios=out)
+    swap_data.DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
+    swap_data.DATA_FILE.write_text(
+        json.dumps(data.model_dump(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(f"■ 書き出した: {swap_data.DATA_FILE}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("scenario", nargs="?", default=DEFAULT_SCENARIO)
     ap.add_argument("--json", action="store_true", help="機械可読で出す")
+    ap.add_argument("--emit-swap", action="store_true",
+                    help="入口の 3×3（irdojo/data/policy_swap.json）を焼き直す")
     args = ap.parse_args()
+
+    if args.emit_swap:
+        return emit_swap()
 
     sc = loader.load_scenario(args.scenario)
     data = report(sc)

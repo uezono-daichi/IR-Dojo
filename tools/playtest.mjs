@@ -263,6 +263,62 @@ async function checkTimeline(where) {
   }
 }
 
+/** 入口の検査（SPEC 7.6.5）
+ *
+ *  入口は「文章が5ブロック・図が0・下 250px が真っ黒」だった。
+ *  見るのは4つ。**どれも入口が自分で持っていなければならないもの**である。
+ *
+ *   ①主張の図（方針の入れ替え表）が実際に描かれているか。
+ *     ここが空になるのは生成物が古いときなので、**消えたら落とす** —
+ *     `python tools/balance.py --emit-swap` を流し直せという合図
+ *   ②各列に最高点の印が付いているか（印は数字から決まる。焼き付けない）
+ *   ③入っている演習が、1回も押す前に見えているか
+ *   ④画面に収まっているか・下がどれだけ空いているか
+ */
+async function checkTopScreen(where) {
+  const m = await page.evaluate(() => {
+    const top = document.getElementById('screen-top');
+    let bottom = 0;
+    for (const el of top.querySelectorAll('*')) {
+      const b = el.getBoundingClientRect();
+      if (b.width > 0 && b.height > 0) bottom = Math.max(bottom, b.bottom);
+    }
+    const head = [...top.querySelectorAll('table.swap-grid thead th')].slice(1);
+    const cols = head.map((_, i) => [...top.querySelectorAll('table.swap-grid tbody tr')]
+      .map(tr => tr.children[i + 1]).filter(td => td && td.classList.contains('best')).length);
+    return {
+      rows: top.querySelectorAll('table.swap-grid tbody tr').length,
+      cols, heads: head.length,
+      cards: [...top.querySelectorAll('#top-scenarios .card-title')]
+        .map(e => e.textContent.trim()),
+      prose: top.querySelectorAll('.lede p').length,
+      bottom: Math.round(bottom), vh: window.innerHeight,
+      scrollH: document.documentElement.scrollHeight,
+      clientH: document.documentElement.clientHeight,
+    };
+  });
+  if (m.rows < 2 || m.heads < 2) {
+    note('error', where,
+      `入口に方針の入れ替え表が出ていない（${m.rows}行 × ${m.heads}列）。`
+      + 'python tools/balance.py --emit-swap を流し直す');
+  } else if (m.cols.some(n => n < 1)) {
+    note('error', where, `最高点の印が付いていない列がある: ${JSON.stringify(m.cols)}`);
+  }
+  if (!m.cards.length) {
+    note('error', where, '入口に演習が1つも並んでいない');
+  }
+  if (m.scrollH > m.clientH + 1) {
+    note('error', where,
+      `入口が画面に収まっていない（${m.scrollH} > ${m.clientH}）`);
+  }
+  const blank = (m.vh - m.bottom) / m.vh;
+  if (blank > 0.25) {
+    note('warn', where,
+      `入口の下が ${Math.round(blank * 100)}% 空いている（中身は ${m.bottom}px まで）`);
+  }
+  return m;
+}
+
 async function screen(name) {
   await checkNoHorizontalOverflow(name);
   await checkNoRawMarkdown(name);
@@ -272,10 +328,28 @@ async function screen(name) {
 // ── 遊ぶ ──────────────────────────────────────────
 
 await page.goto(BASE, { waitUntil: 'networkidle' });
+await page.waitForTimeout(250);
+const top = await checkTopScreen('top(1440×1000)');
 await screen('01-top');
+
+// **入口は一番狭いところで見る。** 1440 で通ったものが 1280×720 で
+// 縦に溢れると、押すべきボタンが折り返しの下に落ちる
+await page.setViewportSize({ width: 1280, height: 720 });
+await page.waitForTimeout(200);
+await checkTopScreen('top(1280×720)');
+await shot('01b-top-1280x720');
+await page.setViewportSize({ width: 1440, height: 1000 });
+await page.waitForTimeout(200);
 
 await page.click('#btn-to-select');
 await page.waitForSelector('#scenario-list .card:not(.card-error)');
+// 入口の札と選択画面の札は同じ関数から出ている。**別々に書いたら腐る**
+const listed = await page.$$eval('#scenario-list .card-title',
+  e => e.map(x => x.textContent.trim()));
+if (JSON.stringify(listed) !== JSON.stringify(top.cards)) {
+  note('error', 'top', `入口の演習一覧が選択画面と食い違っている: `
+    + `${JSON.stringify(top.cards)} ≠ ${JSON.stringify(listed)}`);
+}
 // どのシナリオを遊ぶか。指定が無ければ一覧の先頭（既定の選択）
 if (args.scenario) {
   const sel = `#scenario-list [data-scenario="${args.scenario}"]`;
