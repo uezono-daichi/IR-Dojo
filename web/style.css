@@ -62,9 +62,75 @@ button.primary:hover { color: #000; }
 .btn-row.right { justify-content: flex-end; }
 
 /* ── トップ ── */
+/* 入口は説明の場ではなく、主張を1つ見せて演習へ渡す場である（SPEC 7.6.5）。
+   文章は左、同じことを数字で言う表は右。下に実際に入っている演習を置く */
+/* 入口だけは画面の高さいっぱいを使い、中身を上下の真ん中に置く。
+   上に詰めると、下に残った黒帯が「ここで終わり」ではなく
+   「まだ何かあるはず」に見える。margin:auto にしているのは、
+   中身が画面より高いときに上端を切り落とさないため */
+#screen-top.active { display: flex; min-height: 100vh; }
+.wrap-top { max-width: 1040px; margin: auto; width: 100%; padding: 36px 24px 36px; }
+.top-head { text-align: center; margin-bottom: 24px; }
+.top-head .sub { margin: 0; }
+
+.top-claim {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.02fr);
+  gap: 36px; align-items: center;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 22px 0 24px;
+}
+
 .lede { font-size: 15px; line-height: 2; }
+.lede p { margin: 0 0 12px; }
+.lede p:last-child { margin-bottom: 0; }
 .lede strong { color: #fff; font-weight: 600; }
-.lede ul { padding-left: 1.4em; margin: 14px 0; }
+.lede ul { padding-left: 1.4em; margin: 0 0 12px; }
+
+/* 方針の入れ替え表。数字は /api/policy-swap から来る */
+.swap { margin: 0; }
+.swap h2 { font-size: 15px; margin: 0 0 14px; line-height: 1.6; }
+table.swap-grid { border-collapse: collapse; width: 100%; }
+table.swap-grid th, table.swap-grid td { padding: 7px 10px; }
+table.swap-grid thead th {
+  font-size: 12px; font-weight: 400; color: var(--fg-dim);
+  text-align: center; border-bottom: 1px solid var(--line);
+  line-height: 1.4;
+}
+table.swap-grid tbody th {
+  font-size: 13px; font-weight: 400; color: var(--fg-dim);
+  text-align: left; white-space: nowrap; padding-left: 0;
+}
+table.swap-grid td {
+  font-family: var(--mono); font-size: 14px;
+  color: var(--fg-faint); text-align: center;
+}
+/* 各列の最高点。**どこが最高かは JS が数字から決める** —
+   対角に印を焼き付けると、盤面が変わったとき表だけが正しい顔で嘘をつく */
+table.swap-grid td.best {
+  color: var(--accent); background: rgba(122, 162, 247, .12);
+  font-weight: 600; border-radius: 3px;
+}
+.swap figcaption { margin-top: 12px; line-height: 1.8; }
+
+/* 入っている演習。札の中身は選択画面と同じ関数が作る */
+.top-picks { padding: 20px 0 0; }
+.top-picks h2 {
+  font-size: 13px; font-weight: 400; color: var(--fg-dim);
+  letter-spacing: .08em; margin: 0 0 12px;
+}
+.pick-row {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+.pick-row .card { margin-bottom: 0; padding: 14px 18px; }
+.top-picks + .btn-row { margin-top: 22px; }
+
+button.big { padding: 12px 32px; font-size: 15px; }
+/* 副えるだけのものは、押せることだけ分かればよい */
+button.quiet { background: none; border-color: transparent; color: var(--fg-dim); }
+button.quiet:hover:not(:disabled) { color: var(--fg); border-color: var(--line); }
 
 /* ── シナリオ選択 ── */
 .card {

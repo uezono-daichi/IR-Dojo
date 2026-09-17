@@ -570,3 +570,107 @@ def test_the_playtest_watches_the_axis(playtest_mjs):
     assert "時刻順" in fn, "並びが時刻順かを見ていない"
     assert "取っていない証拠" in fn, "取っていない証拠が出ていないかを見ていない"
     assert "重なっている" in fn, "札が重なっていないかを見ていない"
+
+
+# ── 入口（SPEC 7.6.5） ─────────────────────────────────
+
+
+def test_the_entrance_does_not_carry_the_numbers_it_shows(index_html, app_js):
+    """入口の 3×3 は、原稿の側に1つも数字を持たないこと。
+
+    **手で書き写した数字は、盤面を触った日から嘘になる。**
+    凡例の手書きモックが3フェーズのまま腐ったのと同じ壊れ方をする
+    （SPEC 7.6.7）。入口の点数は `/api/policy-swap` からしか来ない。
+    """
+    from irdojo import swap
+
+    data = swap.load()
+    assert data is not None, "生成物が読めない（--emit-swap を流し直す）"
+    scores = {v for s in data.scenarios for r in s.rows for v in r.scores.values()}
+    top = index_html[index_html.index('id="screen-top"'):]
+    top = top[: top.index("</section>")]
+    for n in sorted(scores):
+        assert str(n) not in top, f"入口の原稿に点数 {n} が書いてある"
+    body = strip_comments(app_js)
+    fn = body[body.index("function renderPolicySwap"):]
+    fn = fn[: fn.index("\nfunction ")]
+    for n in sorted(scores):
+        assert str(n) not in fn, f"描画側に点数 {n} が書いてある"
+
+
+def test_the_best_cell_is_decided_by_the_numbers(app_js):
+    """各列の最高点の印は、**数字から決める。**
+
+    対角に印を焼き付けると、盤面が動いて対角が最高でなくなった日に、
+    表だけが正しい顔で嘘をつく。`tools/balance.py` の
+    「同じ行動列が方針で違う評価になる」が落ちていることに、
+    入口を見た人は気づけない。
+    """
+    body = strip_comments(app_js)
+    fn = body[body.index("function renderPolicySwap"):]
+    fn = fn[: fn.index("\nfunction ")]
+    assert "Math.max" in fn, "最高点を数字から出していない"
+    assert "=== best[c.id]" in fn, "印の条件が数字の比較になっていない"
+
+
+def test_the_entrance_keeps_its_prose_short(index_html):
+    """入口の文章は増やさない。**足すなら減らす。**
+
+    以前ここには5ブロックあり、そのうち2つは「正解は一つではない」を
+    2回言っていた。表がその2つの仕事をしているので、文章は
+    「何を測るか」だけに戻した。ここが再び伸びたら、
+    表を置いた意味が消えている。
+    """
+    top = index_html[index_html.index('id="screen-top"'):]
+    top = top[: top.index("</section>")]
+    lede = top[top.index('class="lede"'):]
+    lede = lede[: lede.index("</div>")]
+    assert lede.count("<p>") <= 3, "入口の散文が増えている"
+    assert lede.count("<li>") <= 3, "入口の箇条書きが増えている"
+
+
+def test_the_entrance_and_the_list_share_one_card_builder(app_js):
+    """入口の札と選択画面の札は、同じ関数から出ること。
+
+    別々に書くと、片方だけが古い並びのまま残る。
+    **実際に描いた DOM どうしの突き合わせは `playtest.mjs` が行う**
+    （入口の題名と一覧の題名を比べる）。こちらは
+    そもそも二重に書ける形になっていないかを原稿の側で見る。
+    """
+    body = strip_comments(app_js)
+    assert body.count("function fillScenarioCard") == 1
+    for fn in ("renderScenarioList", "renderTopScenarios"):
+        part = body[body.index("function " + fn):]
+        part = part[: part.index("\nfunction ")]
+        assert "fillScenarioCard(card, sc)" in part, f"{fn} が札を自前で組んでいる"
+        assert "card-title" not in part, f"{fn} が札の中身を自前で書いている"
+
+
+def test_the_entrance_hides_the_table_rather_than_ageing_it(app_js):
+    """生成物が無い・古いときは、表を**出さない**。
+
+    古い数字を出すくらいなら、入口から図が1つ消えるほうがよい。
+    消えたことは `playtest.mjs` が落として教える。
+    """
+    body = strip_comments(app_js)
+    fn = body[body.index("function renderPolicySwap"):]
+    fn = fn[: fn.index("\nfunction ")]
+    assert "host.hidden = true" in fn, "表が出せないときに箱ごと消していない"
+    assert "!data.available" in fn, "サーバが出さないと言ったことを見ていない"
+
+
+def test_the_playtest_watches_the_entrance(playtest_mjs):
+    """遊んで確かめる側も、入口を見張ること。
+
+    入口は「文章が5ブロック・図が0・下が真っ黒」の状態で何周も残った。
+    **誰も入口を測っていなかったからである。**
+    一番狭いところ（1280×720）で収まるかまで見る。
+    """
+    body = playtest_mjs
+    assert "checkTopScreen" in body, "入口を見ていない"
+    fn = body[body.index("async function checkTopScreen"):]
+    fn = fn[: fn.index("\nasync function ")]
+    assert "swap-grid" in fn, "主張の図が出ているかを見ていない"
+    assert "top-scenarios" in fn, "入っている演習が並んでいるかを見ていない"
+    assert "空いている" in fn, "下がどれだけ空いているかを見ていない"
+    assert "1280" in body and "720" in body, "一番狭いところで見ていない"

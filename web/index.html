@@ -9,28 +9,47 @@
 </head>
 <body>
 
-<!-- ① トップ -->
+<!-- ① トップ。
+     **主張は書くより見せるほうが短い**（SPEC 7.6.5）。
+     「正解は一つではない」を文章で2回言っていたものを、
+     エンジンが実際に出した 3×3 の入れ替え表に置き換えている。
+     表の数字はここには書かない — 手で書いた数字は、盤面を触った日から
+     嘘になる。JS が /api/policy-swap から入れる -->
 <section id="screen-top" class="screen active">
-  <div class="wrap center">
-    <h1>IR Dojo</h1>
-    <p class="sub">インシデント対応 判断演習</p>
-    <hr class="rule">
-    <div class="lede" style="text-align:left">
-      <p>この演習は、あなたの判断が<strong>正しかったか</strong>ではなく、
-         その判断を支える<strong>根拠が健全だったか</strong>を測ります。</p>
-      <ul>
-        <li>もっともらしい偽の手がかりに引っ張られなかったか</li>
-        <li>説明できていないことを残したまま決断しなかったか</li>
-      </ul>
-      <p>対応の当否は問いません。何を封じ込めるべきかは組織の方針で変わるからです。
-         <strong>方針は演習が与えます。</strong></p>
-      <p class="faint">満点は存在しますが、正解は一つではありません。
-         方針を差し替えれば、別の行動列が満点になります。</p>
+  <div class="wrap wrap-top">
+    <header class="top-head">
+      <h1>IR Dojo</h1>
+      <p class="sub">インシデント対応 判断演習</p>
+    </header>
+
+    <div class="top-claim">
+      <div class="lede">
+        <p>この演習は、あなたの判断が<strong>正しかったか</strong>ではなく、
+           その判断を支える<strong>根拠が健全だったか</strong>を測ります。</p>
+        <ul>
+          <li>もっともらしい偽の手がかりに引っ張られなかったか</li>
+          <li>説明できていないことを残したまま決断しなかったか</li>
+        </ul>
+        <p>対応の当否は問いません。<strong>方針は演習が与えます。</strong></p>
+      </div>
+
+      <!-- 表が出ないことがある（生成物が古い／欠けている）。
+           そのときは古い数字を出さずに、この箱ごと消える -->
+      <figure class="swap" id="top-swap" hidden>
+        <h2>方針を差し替えると、最善の対応が入れ替わります</h2>
+        <div id="top-swap-table"></div>
+        <figcaption class="faint" id="top-swap-note"></figcaption>
+      </figure>
     </div>
-    <hr class="rule">
+
+    <section class="top-picks">
+      <h2>入っている演習</h2>
+      <div class="pick-row" id="top-scenarios"></div>
+    </section>
+
     <div class="btn-row">
-      <button class="primary" id="btn-to-select">演習を選ぶ</button>
-      <button id="btn-what">何を測るのか</button>
+      <button class="primary big" id="btn-to-select">演習を選ぶ</button>
+      <button class="quiet" id="btn-what">何を測るのか</button>
     </div>
   </div>
 </section>

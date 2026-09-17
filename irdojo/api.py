@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import records as records_mod
+from . import swap as swap_data
 from .engine import AssessmentRequired, Decision, Engine, InvalidDecision
 from .loader import ScenarioError, list_scenarios, load_scenario
 from .report import json as report_json
@@ -78,6 +79,40 @@ def get_scenarios() -> list[ScenarioBrief]:
         )
         for sc in list_scenarios()
     ]
+
+
+@app.get("/api/policy-swap")
+def get_policy_swap() -> dict[str, Any]:
+    """入口の 3×3（SPEC 7.6.5）。**どの盤面のものかは返さない。**
+
+    入口はシナリオを選ぶ前の画面なので、表が特定の演習と結び付く必要が
+    ない。配線に scenario_id を載せないのが一番簡単な閉じ方である。
+
+    数字は `tools/balance.py --emit-swap` の生成物から読む。指紋が
+    合わなければ `available: false` を返す — **古い数字を出すくらいなら
+    表ごと出さない**（`swap.py` の docstring）。
+    """
+    data = swap_data.load()
+    if data is None or not data.scenarios:
+        return {"available": False}
+
+    # 並べるのは一覧の先頭のもの1つ。規則を固定しないと、
+    # 「一番よく見える盤面を選ぶ」余地が残る
+    chosen = data.scenarios[0]
+    labels = {p.id: p.label for sc in list_scenarios() if sc.meta.id == chosen.scenario_id
+              for p in sc.policies}
+    if not set(chosen.policy_ids) <= set(labels):
+        # 方針 id が動いた = 表の列が何を指しているか言えない
+        return {"available": False}
+
+    return {
+        "available": True,
+        "policies": [{"id": pid, "label": labels[pid]} for pid in chosen.policy_ids],
+        "rows": [
+            {"label": r.label, "scores": {k: r.scores[k] for k in chosen.policy_ids}}
+            for r in chosen.rows
+        ],
+    }
 
 
 @app.post("/api/session")
