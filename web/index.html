@@ -16,6 +16,11 @@
      表の数字はここには書かない — 手で書いた数字は、盤面を触った日から
      嘘になる。JS が /api/policy-swap から入れる -->
 <section id="screen-top" class="screen active">
+  <!-- 背後の格子（SPEC 7.6.18）。**この道具が実際に描いている依存図の抽象**で、
+       特定の盤面の形ではない（形を似せた時点で漏洩になる）。
+       CSS のグラデーションだけで描く静止画で、中央はマスクで抜いてある -->
+  <div class="top-field" aria-hidden="true"></div>
+
   <div class="wrap wrap-top">
     <header class="top-head">
       <h1>IR Dojo</h1>
@@ -51,6 +56,11 @@
       <button class="primary big" id="btn-to-select">演習を選ぶ</button>
       <button class="quiet" id="btn-what">何を測るのか</button>
     </div>
+
+    <!-- 隅の帯。**中身は全部その場で数えるか、サーバが読んだもの。**
+         手で書いた数字は、次に何かを足した日から嘘になる。
+         取れなかった項目は黙って落ちる（空なら帯ごと出ない） -->
+    <div class="top-meta" id="top-meta" hidden></div>
   </div>
 </section>
 

@@ -278,6 +278,10 @@ async function checkTimeline(where) {
 async function checkTopScreen(where) {
   const m = await page.evaluate(() => {
     const top = document.getElementById('screen-top');
+    const field = top.querySelector('.top-field');
+    const btn = document.getElementById('btn-to-select');
+    const r = btn.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
     let bottom = 0;
     for (const el of top.querySelectorAll('*')) {
       const b = el.getBoundingClientRect();
@@ -292,6 +296,12 @@ async function checkTopScreen(where) {
       cards: [...top.querySelectorAll('#top-scenarios .card-title')]
         .map(e => e.textContent.trim()),
       prose: top.querySelectorAll('.lede p').length,
+      // 隅の帯（SPEC 7.6.18）。**中身は実データからしか来ない**ので、
+      // ここでは「札の枚数と食い違っていないか」だけを見る
+      meta: [...top.querySelectorAll('#top-meta span:not(.sep)')]
+        .map(e => e.textContent.trim()),
+      // 背後の格子が中身を覆っていないか。覆うと**ボタンが押せなくなる**
+      fieldOnTop: !!field && hit !== btn && !btn.contains(hit),
       bottom: Math.round(bottom), vh: window.innerHeight,
       scrollH: document.documentElement.scrollHeight,
       clientH: document.documentElement.clientHeight,
@@ -307,6 +317,18 @@ async function checkTopScreen(where) {
   if (!m.cards.length) {
     note('error', where, '入口に演習が1つも並んでいない');
   }
+  if (m.fieldOnTop) {
+    note('error', where, '背後の格子が中身の前に出ている（ボタンが押せない）');
+  }
+  // 帯が「N SCENARIOS」と言うなら、その N は下に並んでいる札の枚数である。
+  // **別の経路で数えた数を並べると、片方が落ちた日に矛盾が表に出る**
+  const said = m.meta.find(t => / SCENARIOS$/.test(t));
+  if (m.meta.length && !said) {
+    note('error', where, `隅の帯に演習の数が無い: ${JSON.stringify(m.meta)}`);
+  } else if (said && parseInt(said, 10) !== m.cards.length) {
+    note('error', where,
+      `隅の帯と札の枚数が食い違っている: 「${said}」だが札は ${m.cards.length} 枚`);
+  }
   if (m.scrollH > m.clientH + 1) {
     note('error', where,
       `入口が画面に収まっていない（${m.scrollH} > ${m.clientH}）`);
@@ -317,6 +339,93 @@ async function checkTopScreen(where) {
       `入口の下が ${Math.round(blank * 100)}% 空いている（中身は ${m.bottom}px まで）`);
   }
   return m;
+}
+
+/** 対角を歩く光が、本当に歩いているか（SPEC 7.6.18）
+ *
+ *  これは装飾ではなく**主張を運ぶ動き**である。各列の最高点が
+ *  A → B → C と移ることがこの道具の主張で、そこを順に照らしている。
+ *  止まっていたら主張が伝わらないし、全部同時に光っていたら
+ *  「最善が1つずつ入れ替わる」と食い違う。
+ *
+ *  見るのは「どの升目が一番強く光っているか」が、1周のあいだに
+ *  **列の数だけ違う場所を通るか**。CSS の値は見ない（値を見ると、
+ *  明るさを調整しただけで落ちる検査になる）。
+ */
+async function checkTheLightWalks(where) {
+  const walking = await page.$('#screen-top table.swap-grid.walk');
+  if (!walking) return;              // 3列でない表では光らせない。正しい状態
+  const cols = await page.$$eval('#screen-top table.swap-grid thead th',
+    ths => ths.length - 1);
+  const seen = new Set();
+  const step = 420, span = 8000;     // 1周は 3列 × 2.2秒 = 6.6秒
+  for (let t = 0; t < span; t += step) {
+    const lit = await page.evaluate(() => {
+      let best = null, top = -1;
+      for (const td of document.querySelectorAll('#screen-top table.swap-grid td.best')) {
+        const m = getComputedStyle(td).backgroundColor.match(/[\d.]+\)$/);
+        const a = m ? parseFloat(m[0]) : 1;
+        if (a > top) { top = a; best = td.getAttribute('data-swap'); }
+      }
+      return best;
+    });
+    if (lit !== null) seen.add(lit);
+    await page.waitForTimeout(step);
+  }
+  if (seen.size < cols) {
+    note('error', where,
+      `対角を歩く光が全部の列を通らない（${cols}列のうち ${seen.size}箇所: `
+      + `${[...seen].join(',')}）`);
+  }
+}
+
+/** 動きを止めた人から、表の主張が消えていないか（SPEC 7.6.18）
+ *
+ *  `prefers-reduced-motion: reduce` は「動きを減らす」であって
+ *  「情報を減らす」ではない。**各列の最高点が青いことを動きの中に置くと、
+ *  止めた人には 9 個の同じ数字が並んでいるようにしか見えない。**
+ *  止まった状態を1枚撮って、人／エージェントが見る側にも残す。
+ */
+async function checkStillLifeHoldsUp() {
+  const ctx = await browser.newContext({
+    viewport: { width: 1440, height: 1000 }, deviceScaleFactor: DPR,
+    reducedMotion: 'reduce',
+  });
+  const still = await ctx.newPage();
+  try {
+    await still.goto(BASE, { waitUntil: 'networkidle' });
+    await still.waitForSelector('#top-swap:not([hidden])', { timeout: 5000 });
+    await still.waitForTimeout(300);
+    const m = await still.evaluate(() => {
+      const tds = [...document.querySelectorAll('#screen-top table.swap-grid td.best')];
+      return {
+        best: tds.length,
+        plain: tds.filter(td => {
+          const cs = getComputedStyle(td);
+          // 比べる相手は**同じ行の最高点でない升目**。自分と比べても何も分からない
+          const other = td.parentElement.querySelector('td:not(.best)');
+          return cs.backgroundColor === 'rgba(0, 0, 0, 0)'
+            && (!other || cs.color === getComputedStyle(other).color);
+        }).length,
+        running: tds.filter(td => td.getAnimations().some(a => a.playState === 'running')).length,
+      };
+    });
+    if (!m.best) {
+      note('error', 'top(reduced-motion)', '止めた状態で最高点の印が1つも無い');
+    } else if (m.plain) {
+      note('error', 'top(reduced-motion)',
+        `止めると最高点が分からなくなる升目が ${m.plain} 個ある`);
+    }
+    if (m.running) {
+      note('error', 'top(reduced-motion)',
+        `reduce を指定しても ${m.running} 個が動き続けている`);
+    }
+    const path = join(OUT, `01c-top-reduced-motion.${TAG}.png`);
+    await still.screenshot({ path });
+    shots.push(path);
+  } finally {
+    await ctx.close();
+  }
 }
 
 async function screen(name) {
@@ -331,6 +440,8 @@ await page.goto(BASE, { waitUntil: 'networkidle' });
 await page.waitForTimeout(250);
 const top = await checkTopScreen('top(1440×1000)');
 await screen('01-top');
+await checkTheLightWalks('top(1440×1000)');
+await checkStillLifeHoldsUp();
 
 // **入口は一番狭いところで見る。** 1440 で通ったものが 1280×720 で
 // 縦に溢れると、押すべきボタンが折り返しの下に落ちる

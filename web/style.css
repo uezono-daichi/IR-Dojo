@@ -1,5 +1,7 @@
 /* IR Dojo — 単一ページの表示切替のみ。フレームワークなし。
-   アニメーション・レスポンシブ・テーマ切替はしない（SPEC 7.6.14）。 */
+   レスポンシブ・テーマ切替はしない（SPEC 7.6.14）。
+   演習の中も動かさない。**動くのは入口の入れ替え表だけ**で、
+   それは装飾ではなく主張を運ぶ動きだから（SPEC 7.6.18）。 */
 
 :root {
   --bg:        #12151a;
@@ -90,7 +92,7 @@ button.primary:hover { color: #000; }
   align-items: center;
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
-  padding: 22px 0 24px;
+  padding: 20px 0 20px;
 }
 
 .lede { font-size: 15px; line-height: 2; }
@@ -120,11 +122,8 @@ table.swap-grid td {
   color: var(--fg-faint); text-align: center;
 }
 /* 各列の最高点。**どこが最高かは JS が数字から決める** —
-   対角に印を焼き付けると、盤面が変わったとき表だけが正しい顔で嘘をつく */
-table.swap-grid td.best {
-  color: var(--accent); background: rgba(122, 162, 247, .12);
-  font-weight: 600; border-radius: 3px;
-}
+   対角に印を焼き付けると、盤面が変わったとき表だけが正しい顔で嘘をつく。
+   印の見た目と、そこを順に照らす光は下の「入口の装飾」に置いてある */
 .swap figcaption { margin-top: 12px; line-height: 1.8; }
 
 /* 入っている演習。札の中身は選択画面と同じ関数が作る */
@@ -138,7 +137,126 @@ table.swap-grid td.best {
   gap: 14px;
 }
 .pick-row .card { margin-bottom: 0; padding: 14px 18px; }
-.top-picks + .btn-row { margin-top: 22px; }
+.top-picks + .btn-row { margin-top: 18px; }
+
+/* ── 入口の装飾（SPEC 7.6.18）──────────────────────────────
+   シックは抑制のこと。**色は増やさない**（--accent の青1色で足りる）。
+   ここにあるものは全部 #screen-top の中で閉じていて、
+   演習中と講評には1つも効かない。 */
+
+/* 背後の格子と結節点。**依存図の抽象**であって、どの盤面の形でもない。
+   静止画（グラデーションの重ね合わせ）なので、描き続けるものは無い。
+   中央はマスクで抜いてある — 散文と表が載る場所の背後は完全な無地に
+   なり、可読性は1ミリも落ちない */
+/* position だけ。**overflow は切らない** — 中身が画面より高いとき、
+   セクションを切り抜くと下が二度と読めなくなる。
+   格子は inset:0 の中に収まるので、はみ出すものはそもそも無い */
+#screen-top.active { position: relative; }
+#screen-top .top-field {
+  position: absolute; inset: 0;
+  pointer-events: none; z-index: 0;
+  background-image:
+    /* 結節点 */
+    radial-gradient(circle at 1px 1px, rgba(122, 162, 247, .34) 1.1px, transparent 1.6px),
+    /* 結ぶ線（斜め）。規則的な抽象で、特定の依存関係ではない */
+    repeating-linear-gradient(45deg,
+      rgba(122, 162, 247, .045) 0 1px, transparent 1px 136px),
+    repeating-linear-gradient(-45deg,
+      rgba(122, 162, 247, .03) 0 1px, transparent 1px 136px),
+    /* 格子 */
+    linear-gradient(to right, rgba(122, 162, 247, .055) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(122, 162, 247, .055) 1px, transparent 1px);
+  background-size: 96px 96px, auto, auto, 96px 96px, 96px 96px;
+  background-position: 50% 50%, 0 0, 0 0, 50% 50%, 50% 50%;
+  /* 中央を抜く。中身が載るところに格子を残さない */
+  -webkit-mask-image: radial-gradient(ellipse 62% 54% at 50% 46%,
+    transparent 30%, #000 100%);
+  mask-image: radial-gradient(ellipse 62% 54% at 50% 46%,
+    transparent 30%, #000 100%);
+}
+/* 中身は格子より前。**装飾は絶対に押せない**（pointer-events: none）*/
+#screen-top .wrap-top { position: relative; z-index: 1; }
+
+/* 計器の隅金。左上と右下の2つだけ置く。4つ全部だと額縁になり、
+   中身より枠のほうが強く出る */
+#screen-top .wrap-top::before, #screen-top .wrap-top::after {
+  content: ''; position: absolute; width: 22px; height: 22px;
+  border: 0 solid rgba(122, 162, 247, .28);
+  pointer-events: none;
+}
+#screen-top .wrap-top::before { top: 10px; left: 10px; border-top-width: 1px; border-left-width: 1px; }
+#screen-top .wrap-top::after { bottom: 10px; right: 10px; border-bottom-width: 1px; border-right-width: 1px; }
+
+/* 見出し。入口だけ字間を開ける。text-indent は末尾の字間ぶんを
+   戻して、中央寄せの中心をずらさないため */
+#screen-top h1 { font-size: 32px; font-weight: 500; letter-spacing: .34em; text-indent: .34em; }
+/* 副題の両脇に細い罫。要素は足さない（擬似要素でやる） */
+#screen-top .top-head .sub::before, #screen-top .top-head .sub::after {
+  content: ''; display: inline-block; width: 44px;
+  border-top: 1px solid var(--line); vertical-align: middle;
+}
+#screen-top .top-head .sub::before { margin-right: 16px; }
+#screen-top .top-head .sub::after { margin-left: 16px; }
+
+/* 隅の帯。等幅・極小・低コントラスト。中身は app.js が実データから組む */
+#screen-top .top-meta {
+  margin-top: 14px; padding-top: 10px;
+  border-top: 1px solid var(--line);
+  font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: .18em; color: var(--fg-faint);
+  text-align: center;
+  display: flex; flex-wrap: wrap; justify-content: center;
+  gap: 0 14px; line-height: 1.6;
+}
+#screen-top .top-meta .sep { color: rgba(122, 162, 247, .38); }
+
+/* 対角を歩く光（SPEC 7.6.18）。
+
+   **これは装飾ではなく主張を運ぶ動きである。** 各列の最高点が
+   A → B → C と移ることが、この道具の主張そのもので、
+   そこを順に照らすと主張が読まれる速さで伝わる。
+
+   **どこを照らすかは JS が数字から決める**（--swap-col）。CSS 側に
+   nth-child で対角を焼き付けると、盤面が変わった日に表だけが
+   正しい顔で嘘をつく。
+
+   止めたときに何も失われないこと: 光は .best の**上に足す**だけで、
+   各列の最高点が青いこと自体は動きの外にある。 */
+#screen-top table.swap-grid { --swap-step: 2.2s; --swap-col: 0; --swap-cols: 3; }
+#screen-top table.swap-grid td.best {
+  color: var(--accent); background: rgba(122, 162, 247, .12);
+  font-weight: 600; border-radius: 3px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  #screen-top table.swap-grid.walk td.best,
+  #screen-top table.swap-grid.walk th[data-swap] {
+    animation-duration: calc(var(--swap-cols) * var(--swap-step));
+    animation-delay: calc(var(--swap-col) * var(--swap-step));
+    animation-timing-function: ease-in-out;
+    animation-iteration-count: infinite;
+  }
+  #screen-top table.swap-grid.walk td.best { animation-name: swap-walk-cell; }
+  /* 行と列の見出しも一緒に上がる。「どの方針のとき、どの対応か」が
+     交点だけでなく両端で読める */
+  #screen-top table.swap-grid.walk th[data-swap] { animation-name: swap-walk-head; }
+}
+
+/* 33.3% = 1/3。**3列を前提にした形である**（app.js は列が3でないとき
+   .walk を付けない）。keyframes の % に変数は書けないので、
+   列数が変わったら静止した .best だけが残る — 嘘になるくらいなら止める */
+@keyframes swap-walk-cell {
+  0%           { background-color: rgba(122, 162, 247, .20); box-shadow: inset 0 0 0 1px rgba(122, 162, 247, .42); color: #a8c3ff; }
+  25%          { background-color: rgba(122, 162, 247, .20); box-shadow: inset 0 0 0 1px rgba(122, 162, 247, .42); color: #a8c3ff; }
+  33.3%        { background-color: rgba(122, 162, 247, .12); box-shadow: inset 0 0 0 1px rgba(122, 162, 247, 0); color: var(--accent); }
+  100%         { background-color: rgba(122, 162, 247, .12); box-shadow: inset 0 0 0 1px rgba(122, 162, 247, 0); color: var(--accent); }
+}
+@keyframes swap-walk-head {
+  0%    { color: var(--accent); }
+  25%   { color: var(--accent); }
+  33.3% { color: var(--fg-dim); }
+  100%  { color: var(--fg-dim); }
+}
 
 button.big { padding: 12px 32px; font-size: 15px; }
 /* 副えるだけのものは、押せることだけ分かればよい */

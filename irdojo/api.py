@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from .report import json as report_json
 from .schema import AssistLevel
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+SPEC_FILE = Path(__file__).resolve().parent.parent / "SPEC.md"
 
 app = FastAPI(title="IR Dojo", docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -79,6 +81,50 @@ def get_scenarios() -> list[ScenarioBrief]:
         )
         for sc in list_scenarios()
     ]
+
+
+def _spec_version() -> str | None:
+    """SPEC.md の冒頭から版を読む。**読めなければ None。**
+
+    入口の隅に出す計器風の帯（7.6.18）に載る。版を画面やコードに
+    手で書くと、次に SPEC を上げた日から入口が古い版を名乗る —
+    `policy_swap.json` の指紋と同じ話で、**腐るくらいなら出さない**。
+
+    SPEC.md は配布物の一部ではあるが、無い状態で動かされることはある
+    （パッケージだけ取り出した場合など）。そのときは黙って版を落とす。
+    """
+    try:
+        with SPEC_FILE.open(encoding="utf-8") as fh:
+            for _ in range(20):  # 版は冒頭にある。無ければ諦める
+                line = fh.readline()
+                if not line:
+                    break
+                m = re.fullmatch(r"\*\*仕様書 (v\d+\.\d+)\*\*", line.strip())
+                if m:
+                    return m.group(1)
+    except OSError:
+        return None
+    return None
+
+
+@app.get("/api/meta")
+def get_meta() -> dict[str, Any]:
+    """入口の帯に出す、この配布物そのものの素性（SPEC 7.6.18）。
+
+    **ここに入れてよいのは「実際に取れるもの」だけ。** 演習の数と方針の
+    数は画面が `/api/scenarios` から数える（並べた札と食い違いようが
+    ない場所で数えるため、ここでは返さない）。返すのはファイルを読まないと
+    分からない2つだけで、どちらも取れなければ `null` = 帯に出ない。
+
+    `build` は入口の表を作った生成物の指紋である。生成物が古ければ
+    `swap.load()` が None を返すので、**表が消えるときは指紋も消える** —
+    帯が、画面に無い表の素性を名乗ることはない。
+    """
+    data = swap_data.load()
+    return {
+        "spec_version": _spec_version(),
+        "build": data.fingerprint[:8] if data is not None else None,
+    }
 
 
 @app.get("/api/policy-swap")

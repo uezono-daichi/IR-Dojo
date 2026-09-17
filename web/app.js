@@ -21,6 +21,7 @@ var S = {
   openIds: {},
   closedPhases: {},
   lastOutcome: null,
+  meta: null,         // /api/meta。入口の隅の帯に出す、この配布物の素性
   cards: [],          // シナリオ選択のカード。押して選べるようにするために持つ
   incoming: []        // 向こうから入ってきたこと。押した結果とは別に積む
 };
@@ -178,10 +179,21 @@ function loadPolicySwap() {
   });
 }
 
+/* 「この升目は何列目か」を印として置く。**位置を決めるのは数字である。**
+
+   CSS に nth-child で対角を書いてしまうと、盤面を触って最高点が
+   対角から外れた日に、光だけが古い対角を歩き続ける。
+   何列目かだけを渡し、いつ光るかは CSS が --swap-col から計算する。 */
+function markSwapColumn(node, index) {
+  node.setAttribute('data-swap', String(index));
+  node.style.setProperty('--swap-col', index);
+}
+
 function renderPolicySwap(data) {
   var host = $('top-swap');
   if (!data || !data.available || !data.rows || !data.rows.length) {
     host.hidden = true;
+    renderTopMeta();
     return;
   }
   var cols = data.policies;
@@ -199,9 +211,11 @@ function renderPolicySwap(data) {
   var thead = el('thead');
   var hr = el('tr');
   hr.appendChild(el('th'));
-  cols.forEach(function (c) {
+  cols.forEach(function (c, i) {
     var th = el('th', null, c.label);
     th.setAttribute('scope', 'col');
+    // 列の見出しも、その列が照らされる番に一緒に上がる（SPEC 7.6.18）
+    markSwapColumn(th, i);
     hr.appendChild(th);
   });
   thead.appendChild(hr);
@@ -213,14 +227,30 @@ function renderPolicySwap(data) {
     var th = el('th', null, r.label);
     th.setAttribute('scope', 'row');
     tr.appendChild(th);
-    cols.forEach(function (c) {
-      var td = el('td', r.scores[c.id] === best[c.id] ? 'best' : null,
-        r.scores[c.id]);
+    var topIn = [];
+    cols.forEach(function (c, i) {
+      var isBest = r.scores[c.id] === best[c.id];
+      var td = el('td', isBest ? 'best' : null, r.scores[c.id]);
+      if (isBest) { markSwapColumn(td, i); topIn.push(i); }
       tr.appendChild(td);
     });
+    // 行の見出しが上がるのは、その行が**ちょうど1つの列で**最高のとき。
+    // 2列で最高なら、どちらの番に上がるべきか数字が決めてくれない
+    if (topIn.length === 1) { markSwapColumn(th, topIn[0]); }
     tbody.appendChild(tr);
   });
   table.appendChild(tbody);
+
+  /* 対角を歩く光を入れるかどうか（SPEC 7.6.18）。
+
+     **3列を前提にした形である。** 光っている時間の長さは CSS の
+     keyframes に 1/3 と書いてあり、% に変数は書けない。列が3でない表に
+     そのまま掛けると、2つ同時に光ったり間が空いたりして
+     「最善が1つずつ移る」という主張と食い違う。
+     そのときは .walk を付けない — 各列の最高点が青いことは
+     動きの外にあるので、止まっても表は何も失わない。 */
+  table.style.setProperty('--swap-cols', cols.length);
+  if (cols.length === 3) { table.classList.add('walk'); }
 
   var mount = $('top-swap-table');
   clear(mount);
@@ -231,6 +261,60 @@ function renderPolicySwap(data) {
     cols.length + 'つの方針それぞれに向けて立てた' + data.rows.length +
     '通りの対応を、同じ盤面・同じ真相のまま' + cols.length +
     'つとも採点し直した点数です（0〜100）。色が付いているのが各列の最高点。';
+  host.hidden = false;
+  // 表の出し入れがあったら帯も組み直す。**どちらが先に返るかに依存させない**
+  renderTopMeta();
+}
+
+/* 隅の帯（SPEC 7.6.18）。
+
+   計器らしさは、数字が本物であることから出る。**ここに手で書いた値を
+   1つでも混ぜると、その日から入口が嘘をつく** — 凡例のモックが
+   3フェーズのまま腐ったのと同じ壊れ方をする（SPEC 7.6.7）。
+
+   だから出所はこの3つだけ:
+     - 版と生成物の指紋 … サーバがファイルから読んだもの（/api/meta）
+     - 演習の数・方針の数 … **下に並べている札と同じ配列から数える**
+     - 接続先 … いま開いている URL そのもの
+   取れなかったものは黙って落ちる。事実が1つも無ければ帯ごと出ない。 */
+function loadTopMeta() {
+  return api('/api/meta').then(function (m) {
+    S.meta = m;
+    renderTopMeta();
+  }, function () {
+    // 入口の飾りである。取れなくても演習は選べるので警告は出さない
+    renderTopMeta();
+  });
+}
+
+function renderTopMeta() {
+  var host = $('top-meta');
+  clear(host);
+  var facts = [];
+  if (S.meta && S.meta.spec_version) { facts.push('SPEC ' + S.meta.spec_version); }
+  // 指紋を名乗ってよいのは、その指紋が作った表が**画面に出ているとき**だけ。
+  // 生成物が古ければサーバが null を返すが、取りに行けなかっただけでも
+  // 表は消える。消えた表の素性を帯が語らないように、ここでも見る
+  if (S.meta && S.meta.build && !$('top-swap').hidden) {
+    facts.push('BUILD ' + S.meta.build);
+  }
+  if (S.scenarios.length) {
+    facts.push(S.scenarios.length + ' SCENARIOS');
+    var seen = {}, n = 0;
+    S.scenarios.forEach(function (sc) {
+      sc.policies.forEach(function (pol) {
+        if (!seen[pol.id]) { seen[pol.id] = true; n += 1; }
+      });
+    });
+    if (n) { facts.push(n + ' POLICIES'); }
+  }
+  if (window.location.host) { facts.push(window.location.host); }
+
+  if (!facts.length) { host.hidden = true; return; }
+  ['IR DOJO'].concat(facts).forEach(function (text, i) {
+    if (i) { host.appendChild(el('span', 'sep', '·')); }
+    host.appendChild(el('span', null, text));
+  });
   host.hidden = false;
 }
 
@@ -269,6 +353,8 @@ function loadScenarios() {
     S.scenarios = list;
     renderScenarioList();
     renderTopScenarios();
+    // 帯の「N SCENARIOS」は**この配列から数える**。札と食い違いようがない
+    renderTopMeta();
   }, function (err) {
     // 警告を閉じたあと真っ白にしない。画面上にも理由と復帰手段を残す
     showListError(err);
@@ -2514,4 +2600,5 @@ document.addEventListener('DOMContentLoaded', function () {
   // どちらも最初に取りに行く。どちらも失敗しても画面は開いたままにする
   loadScenarios().catch(function () {});
   loadPolicySwap();
+  loadTopMeta();
 });
