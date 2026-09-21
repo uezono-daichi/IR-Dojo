@@ -891,3 +891,69 @@ def test_the_entrance_keeps_prose_on_the_left_and_the_figure_on_the_right(index_
         f"図の側に図以外のものがある: {sorted(set(tags))}"
     )
     assert "<p" not in right, "図の側に段落が残っている"
+
+
+# ─────────── ブリーフィングの畳み込み（SPEC 7.6.23） ───────────
+
+
+def test_the_briefing_folds_its_manuals(index_html):
+    """**道具の説明は畳む。盤面と方針は畳まない。**
+
+    ブリーフィングは開始前に 3,961px あり、そのうち 1,801px が
+    「この演習の進み方」と「画面の見方」だった（利用者の指摘：
+    「文章が基本多すぎる」「この画面も畳み込み使いたい」）。
+    どちらも**道具の説明**であって、事案でも方針でも盤面でもない。
+
+    畳んではいけないものを、名指しで守る。
+    """
+    brief = index_html[index_html.index('id="screen-briefing"') :]
+    brief = brief[: brief.index("</section>")]
+
+    folded = re.findall(r'<details[^>]*id="(brief-[\w-]+)"[^>]*>', brief)
+    assert "brief-flow-fold" in folded, "進み方が畳まれていない"
+    assert "brief-legend-fold" in folded, "画面の見方が畳まれていない"
+
+    # 畳んだものには必ず見出しが要る。**何が入っているか言わない畳みは、
+    # 開かれないまま終わる**
+    for block in re.findall(r"<details.*?</details>", brief, flags=re.S):
+        assert "<summary>" in block, "見出しの無い畳み込みがある"
+
+    # 事案・方針・構成図は畳まない。これらは読まずに始めてよいものではない
+    first_fold = brief.index("<details")
+    for must_show in ('id="brief-body"', "policy-box", 'id="brief-topo"'):
+        assert brief.index(must_show) < first_fold, f"{must_show} が畳まれている"
+
+
+def test_the_briefing_sample_is_drawn_after_it_is_opened(app_js):
+    """**畳んだ中では描かない**（SPEC 7.6.9）。
+
+    閉じた `<details>` の中は幅が 0 になる。そこで `renderLegend` を呼ぶと、
+    グラフも盤も潰れたまま組まれ、開いても潰れたままである
+    （dpr 1 だけの検証が Retina の不具合を素通りさせたのと同じ形で、
+    「エラーが出ない」ので気づけない）。
+
+    見本を組むのは `toggle` のとき。ブリーフィングを描くところで
+    呼んでいないことを、原稿の側で見る。
+    """
+    body = strip_comments(app_js)
+    # ブリーフィングを組む処理の中で、見本を直に描いていないこと
+    start = body.index("$('brief-title').textContent")
+    block = body[start : body.index("show('screen-briefing')", start)]
+    assert "renderLegend" not in block, "畳んだままの見本を描いている"
+    # toggle で組んでいること
+    assert "brief-legend-fold" in body and "'toggle'" in body, "開いたときに組んでいない"
+    toggle = body[body.index("$('brief-legend-fold').addEventListener") :]
+    toggle = toggle[: toggle.index("});")]
+    assert "renderLegend" in toggle, "開いたときに見本を組んでいない"
+
+
+def test_the_playtest_opens_the_fold_before_reading_the_sample(playtest_mjs):
+    """遊んで確かめる側も、畳みを開いてから読むこと。
+
+    開かずに読むと「凡例から見本が読めない」で落ちる。
+    **それは正しい落ち方ではない** — 畳んであることは不具合ではない。
+    """
+    assert "brief-legend-fold" in playtest_mjs, "畳みを開かずに見本を読んでいる"
+    assert playtest_mjs.index("brief-legend-fold") < playtest_mjs.index(
+        "legendSample('#brief-mini')"
+    ), "見本を読んだ後に畳みを開いている"

@@ -141,14 +141,20 @@
 
     <h2 style="margin-top:34px" id="brief-topo-head">この環境の構成</h2>
     <div class="topo" id="brief-topo"></div>
-    <p class="faint" id="brief-topo-note">
-      <strong>線は依存</strong>を表します。上のものが止まると、下のものも実質止まります。
-      <!-- 例はシナリオから作る。資産名を手で書くと、別のシナリオで嘘になる -->
-      <span id="brief-topo-example"></span><br>
-      <strong>色と右上の印は「止めたときに業務が受ける影響の大きさ」</strong>です
-      （最重要 &gt; 重要 &gt; 中 &gt; 小）。侵害されているかどうかとは無関係で、
-      これは平常時から決まっている性質です。
-    </p>
+    <!-- 図の読み方は畳む。**見出しに要点を1つ出しておく** —
+         畳んだものは開かれないことがあるので、開かなくても
+         線と色が何を意味するかは分かる -->
+    <details class="fold" id="brief-topo-fold">
+      <summary>図の読み方 — 線は依存、色は止めたときの影響の大きさ</summary>
+      <p class="faint" id="brief-topo-note">
+        <strong>線は依存</strong>を表します。上のものが止まると、下のものも実質止まります。
+        <!-- 例はシナリオから作る。資産名を手で書くと、別のシナリオで嘘になる -->
+        <span id="brief-topo-example"></span><br>
+        <strong>色と右上の印は「止めたときに業務が受ける影響の大きさ」</strong>です
+        （最重要 &gt; 重要 &gt; 中 &gt; 小）。侵害されているかどうかとは無関係で、
+        これは平常時から決まっている性質です。
+      </p>
+    </details>
 
     <details class="primer" id="brief-primer" open>
       <summary>はじめての人へ — この演習の考え方</summary>
@@ -180,22 +186,35 @@
       </div>
     </details>
 
-    <h2 style="margin-top:34px">この演習の進み方</h2>
-    <ol class="flow" id="brief-phases"></ol>
-    <ul class="rules">
-      <li><strong>フェーズを進めるのは、あなたが宣言したとき。</strong>
-          自動では進みません。いつ調査を打ち切って動くかの判断も、評価の対象です。</li>
-      <li><strong>移行は取り消せません。</strong>
-          ただし前のフェーズのアクションは、移行後も引き続き実行できます。</li>
-      <li><strong>調べると、調べられることが増えます。</strong>
-          知らない資産は調べられません。手がかりが出て初めて選択肢になります。</li>
-      <li id="brief-assessment-rule" hidden></li>
-    </ul>
+    <!-- **進み方と画面の見方は畳む。** どちらも道具の説明であって、
+         盤面でも方針でもない。ブリーフィングは開始前に 3,961px あり、
+         そのうち 1,801px がこの2つだった（利用者の指摘：
+         「文章が基本多すぎる」「畳み込みを使ってみたい人が見れるように」）。
+         **一番効く決まりは見出しに出しておく** — 畳んだものは
+         開かれないことがある。「戻れません」は後から知ると遅い -->
+    <details class="fold block" id="brief-flow-fold">
+      <summary>この演習の進み方 — フェーズを進めるのはあなた。戻れません</summary>
+      <ol class="flow" id="brief-phases"></ol>
+      <ul class="rules">
+        <li><strong>フェーズを進めるのは、あなたが宣言したとき。</strong>
+            自動では進みません。いつ調査を打ち切って動くかの判断も、評価の対象です。</li>
+        <li><strong>移行は取り消せません。</strong>
+            ただし前のフェーズのアクションは、移行後も引き続き実行できます。</li>
+        <li><strong>調べると、調べられることが増えます。</strong>
+            知らない資産は調べられません。手がかりが出て初めて選択肢になります。</li>
+        <li id="brief-assessment-rule" hidden></li>
+      </ul>
+    </details>
 
-    <h2 style="margin-top:34px">画面の見方</h2>
-    <p class="faint" style="margin-top:-8px">実際の画面です。番号の説明を下に並べます。</p>
-    <div class="mini" id="brief-mini"></div>
-    <ol class="mini-notes" id="brief-legend"></ol>
+    <!-- 見本は開いてから描く。**閉じたままだと幅が 0 になる**（SPEC 7.6.9）ので、
+         中身は `toggle` で初めて組む。プレイ中も同じものを上の
+         「画面の見方」から開けるので、ここで閉じていても失われない -->
+    <details class="fold block" id="brief-legend-fold">
+      <summary>画面の見方 — 欄の意味を番号で説明します（プレイ中も開けます）</summary>
+      <p class="faint">実際の画面です。番号の説明を下に並べます。</p>
+      <div class="mini" id="brief-mini"></div>
+      <ol class="mini-notes" id="brief-legend"></ol>
+    </details>
 
     <div class="btn-row right">
       <button class="primary" id="btn-begin">対応を開始</button>

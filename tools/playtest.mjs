@@ -504,6 +504,11 @@ await page.click('#btn-start');
 await page.waitForSelector('#screen-briefing.active');
 await screen('03-briefing');
 
+// 画面の見方は畳んである（SPEC 7.6.23）。**開くまで中身は組まれない** —
+// 閉じた `<details>` の中は幅が 0 なので、そこで描くと潰れる。
+// ここで開けるのは、凡例と実画面の突き合わせがこの先にあるため
+await page.click('#brief-legend-fold > summary');
+await page.waitForTimeout(250);
 // 凡例は画面の下端にあり、上端だけを撮ると一度も写らない
 await page.evaluate(() => document.getElementById('brief-mini')
   .scrollIntoView({ block: 'start' }));
