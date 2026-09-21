@@ -28,7 +28,7 @@ from typing import Callable
 
 from irdojo import loader, retrospective, scoring
 from irdojo import swap as swap_data
-from irdojo.engine import Decision, Engine, InvalidDecision
+from irdojo.engine import Decision, Engine, InvalidDecision, compromised_now
 from irdojo.schema import (
     ActionType,
     Scenario,
@@ -289,6 +289,12 @@ class Run:
     # 「何を止めたか」の表が、5.8 の減衰がどちらだったかを説明できない
     eradicated: list[str] = field(default_factory=list)
     unresolved: list[str] = field(default_factory=list)
+    # **真実が動く盤面だけが使う**（SPEC 5.2）。判定した時点で何台が
+    # 侵害されていたかと、終わった時点で何台だったか。事実認識層は前者で、
+    # 封じ込めの完全度は後者で測るので、2つ持たないと差が読めない
+    named_at_decision: list[str] = field(default_factory=list)
+    compromised_at_end: list[str] = field(default_factory=list)
+    spread_to: list[str] = field(default_factory=list)
     fired: list[str] = field(default_factory=list)
     averted: list[str] = field(default_factory=list)
     by_policy: dict[str, dict] = field(default_factory=dict)
@@ -548,6 +554,10 @@ def run_profile(sc: Scenario, prof: Profile, notices: list[str]) -> Run:
         contained=sorted(st.contained_at),
         eradicated=sorted(st.eradicated_at),
         unresolved=[q.id for q in sc.open_questions if q.id not in st.resolved_questions],
+        named_at_decision=list(st.assessment_snapshot.compromised)
+        if st.assessment_snapshot else [],
+        compromised_at_end=compromised_now(sc, st),
+        spread_to=sorted(st.spread_at),
         fired=list(st.fired_events),
         averted=list(st.averted_events),
     )
@@ -1547,6 +1557,74 @@ def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
             )
             + f"（最大 {top[2]:.2f}点 = {top[1]}。狙い 0.5〜1.5点。"
             "下を割ると誤導の代価が方針に現れず、上を超えると隔離そのものが損になる）",
+        ))
+
+    # ─── 演習中に真実が動く盤面（SPEC 5.2 / v1.48） ───
+    # **この3本は `spreads` を持つ盤面にしか出ない。** 持たない盤面に
+    # 「判定時点 3台 → 終了時点 3台」と出しても、読み手には何の話か
+    # 分からないし、判定の本数だけが意味なく増える
+    spreads = sc.world.ground_truth.spreads
+    if spreads:
+        # ① 防げない拡散が無いこと。**どの方針で最良に解いても、最初の窓より
+        #    前に手が終わっている**ことを見る。ここが割れると、渡された方針の
+        #    せいで拡散する学習者が出る — 折れ点を方針ごとに校正したのと
+        #    同じ理由である（8.2 手順7）。ローダは「盤面で物理的に間に合うか」
+        #    だけを見るので、方針を含めた余裕はここでしか測れない
+        first = min(sp.at_minutes for sp in spreads)
+        reach = {
+            pol.id: retrospective.minimal_response(sc, pol)[0] for pol in sc.policies
+        }
+        out.append(Check(
+            all(v is not None and v < first for v in reach.values()),
+            "防げない拡散が無い",
+            "方針ごとの L: "
+            + "・".join(f"{k} {v}分" for k, v in reach.items())
+            + f" / 最初の窓 {first}分"
+            f"（余裕 {first - max(v or 0 for v in reach.values())}分）。"
+            "どの方針で最良に解いても、窓が開く前に配り元が止まっていること",
+        ))
+
+        # ② 配り元を早く止めた像と、遅く止めた像で、侵害資産の数が違うこと。
+        #    ここが同じなら `spreads` は書いてあるだけで何も起こしていない
+        #    （`persistence` が死にフィールドだったのと同じ形。9.4 #5）
+        quick = runs[("skilled", False)]
+        slow = runs[("exhaustive", False)]
+        base_n = len(sc.world.ground_truth.compromised)
+        out.append(Check(
+            len(quick.compromised_at_end) == base_n
+            and len(slow.compromised_at_end) > base_n,
+            "配り元を早く止めれば、配られない",
+            f"巧い {len(quick.compromised_at_end)}台（{quick.minutes}分・"
+            f"配られた先 {quick.spread_to or 'なし'}） / "
+            f"全部押す {len(slow.compromised_at_end)}台（{slow.minutes}分・"
+            f"配られた先 {slow.spread_to or 'なし'}）"
+            f"。開始時点は {base_n}台",
+        ))
+
+        # ③ 事実認識の分母が動くこと。**判定時点で測る**ので、早く判断して
+        #    早く止めた学習者の分母は動かない（6.2）。遅く判断した学習者は
+        #    「その時点の盤面」と突き合わせられる — 「判定した時点では
+        #    正しかった」が言えるのは、この2つの数が別々にあるからである
+        moved = [
+            r for (_k, notice), r in runs.items()
+            if not notice and len(r.named_at_decision) > base_n
+        ]
+        widened = [
+            r for (_k, notice), r in runs.items()
+            if not notice and len(r.compromised_at_end) > len(r.named_at_decision)
+        ]
+        out.append(Check(
+            bool(moved) and bool(widened),
+            "判定の分母と完全度の分母が別々に動く",
+            "判定した時点で既に増えていた像 "
+            + (f"{moved[0].profile} {len(moved[0].named_at_decision)}台"
+               if moved else "なし")
+            + "／判定のあとにさらに増えた像 "
+            + (f"{widened[0].profile} {len(widened[0].named_at_decision)}台 → "
+               f"{len(widened[0].compromised_at_end)}台"
+               if widened else "なし")
+            + "（前者が assessment_recall の分母、後者が"
+            "containment_completeness の分母を動かす）",
         ))
 
     # 方針を差し替えると評価が変わる（原則3 / 9.1 差分#1）。

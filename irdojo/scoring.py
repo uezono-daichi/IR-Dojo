@@ -11,7 +11,7 @@ from collections.abc import Callable
 from pydantic import BaseModel
 
 from . import damage as damage_mod
-from .engine import GameState
+from .engine import GameState, compromised_now, effective_truth
 from .schema import Policy, Scenario
 
 
@@ -35,8 +35,25 @@ class Consequences(BaseModel):
     containment_completeness: float
 
 
+def _truth_at_decision(state: GameState, scenario: Scenario) -> set[str]:
+    """被疑判定を突き合わせる相手（SPEC 6.2 / 5.2）。
+
+    **宣言した時点で侵害されていた資産**である。拡散を持つ盤面では
+    演習中に真実が動くので、終了時点の集合で採点すると
+    「判定した時点では正しかった」が表現できない — 早く正しく判断して、
+    そのあと配り元を止めそこねた学習者は、事実認識を間違えたのではなく
+    **止めそこねた**のであり、それは帰結の層（完全度・被害）が測る。
+
+    拡散の無い盤面では `compromised` と同値になる。宣言していない状態で
+    採点されたときも同じ（「まだ判断していない」を読み替えない）。
+    """
+    return set(state.assessment_compromised or scenario.world.ground_truth.compromised)
+
+
 def consequences(state: GameState, scenario: Scenario) -> Consequences:
-    truth = scenario.world.ground_truth
+    # 帰結の層が見るのは**終了時点の世界**である。判定の時点ではない —
+    # 止まったかどうかは事実の問題であって、思い込みでは変わらない（6.3）
+    truth = effective_truth(scenario, state)
 
     # 取り損ねた証拠の割合。分母はシナリオ内の全証拠数。
     # 取得数を分母にすると「調べないほど保全した」ことになる。
@@ -51,7 +68,9 @@ def consequences(state: GameState, scenario: Scenario) -> Consequences:
     # 依存連鎖を混ぜると「dc01 を落としたので ws-042 も封じ込めた」ことになり、
     # 生きている Run キーを封じ込め成立と数えることになる（SPEC 6.3）
     contained = set(state.contained_at)
-    compromised = set(truth.compromised)
+    # **こちらも分母が動く**（SPEC 5.2）。演習中に配られた先は、
+    # 止めるべきものとして終了時点の分母に入る
+    compromised = set(compromised_now(scenario, state))
     completeness = safe_ratio(len(contained & compromised), len(compromised))
 
     # 業務影響が見るのは halted_at。止めたことと仕事が止まることは別の問い
@@ -145,7 +164,7 @@ def _assessed(state: GameState) -> set[str]:
 @metric("assessment_precision")
 def _precision(state: GameState, scenario: Scenario) -> float:
     a = _assessed(state)
-    hit = a & set(scenario.world.ground_truth.compromised)
+    hit = a & _truth_at_decision(state, scenario)
     # 判断を放棄した場合は 0。誤った判断より良くはない（SPEC 6.7）
     return safe_ratio(len(hit), len(a))
 
@@ -153,20 +172,22 @@ def _precision(state: GameState, scenario: Scenario) -> float:
 @breakdown("assessment_precision")
 def _precision_parts(state: GameState, scenario: Scenario) -> list[MetricPart]:
     a = _assessed(state)
-    hit = a & set(scenario.world.ground_truth.compromised)
+    hit = a & _truth_at_decision(state, scenario)
     return [MetricPart(label="当たり", num=len(hit), den_label="名指し", den=len(a))]
 
 
 @metric("assessment_recall")
 def _recall(state: GameState, scenario: Scenario) -> float:
-    compromised = set(scenario.world.ground_truth.compromised)
+    # **分母が動く。** 拡散を持つ盤面では、遅く判定するほど
+    # 「名指しすべきもの」が増える（SPEC 5.2 / 6.2）
+    compromised = _truth_at_decision(state, scenario)
     hit = _assessed(state) & compromised
     return safe_ratio(len(hit), len(compromised))
 
 
 @breakdown("assessment_recall")
 def _recall_parts(state: GameState, scenario: Scenario) -> list[MetricPart]:
-    compromised = set(scenario.world.ground_truth.compromised)
+    compromised = _truth_at_decision(state, scenario)
     hit = _assessed(state) & compromised
     return [
         MetricPart(label="名指しできた", num=len(hit),

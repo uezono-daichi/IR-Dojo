@@ -161,7 +161,20 @@ async function legendSample(root) {
  *
  *  畳んだ連絡はシェブロンを消しており、hover の色変化しか手がかりが無かった。
  *  同じ画面の証拠カードには ▸ が付いていた。世界が動いている唯一の証拠が、
- *  次の一手で読めなくなる。 */
+ *  次の一手で読めなくなる。
+ *
+ *  **見るのは語彙であって、状態ではない**（v1.48 で直した）。
+ *  ここは長らく「画面上のすべての記号が同じ1文字であること」を要求して
+ *  いたが、▸ と ▾ は**開いているかどうか**を言う記号なので、
+ *  閉じた束と開いた束が同時に見えている画面では必ず両方出る。
+ *  同梱2本でこれが通っていたのは、play-late の時点でたまたま
+ *  **全部が実行済みで全部畳まれていた**からにすぎない。
+ *  3本目は引き直せる手（`repeatable`）を持つので、その束だけが最後まで
+ *  開いたままになり、盤面は何も壊れていないのに落ちた。
+ *
+ *  SPEC 7.6.15 が要求しているのは「記号は `caret(open)` 1箇所でしか
+ *  作らない」— つまり**語彙が共有されていること**である。
+ *  状態が揃っていることではない。 */
 async function checkCaretsShared(where) {
   const bad = await page.evaluate(() => {
     const openers = [
@@ -180,6 +193,7 @@ async function checkCaretsShared(where) {
     }
     return out;
   });
+  const VOCAB = ['▸', '▾'];     // caret() が作る2文字。ここ以外から出てはいけない
   const seen = new Set();
   for (const g of bad) {
     if (g.marks.includes('なし')) {
@@ -187,8 +201,10 @@ async function checkCaretsShared(where) {
     }
     g.marks.forEach(m => { if (m !== 'なし') seen.add(m); });
   }
-  if (seen.size > 1) {
-    note('error', where, `押せるものの記号が場所ごとに違う: ${[...seen].join(' ')}`);
+  const stray = [...seen].filter(m => !VOCAB.includes(m));
+  if (stray.length) {
+    note('error', where,
+      `caret() が作らない記号が混ざっている: ${stray.join(' ')}`);
   }
 }
 

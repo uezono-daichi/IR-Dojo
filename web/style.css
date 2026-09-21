@@ -133,11 +133,35 @@ table.swap-grid td {
   letter-spacing: .08em; margin: 0 0 12px;
 }
 .pick-row {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 14px;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
 }
-.pick-row .card { margin-bottom: 0; padding: 14px 18px; }
-.top-picks + .btn-row { margin-top: 18px; }
+/* **入口の札は、演習が増えるほど細くなる。**
+   列は auto-fit なので、3本目が入った日に札の中の1行が折り返し、
+   入口が 1280×720 に収まらなくなった（縦 729 > 720）。
+   2つの worktree が別々に同じ症状を踏み、片方は余白を詰め、
+   片方は溢れた文字を省いた。**どちらも要る** — 余白は行の数を減らし、
+   省略は1行が折り返さないことを保証する。札1枚の作りは変えていない。
+   全文は選択画面の札にある。 */
+.pick-row .card { margin-bottom: 0; padding: 15px 16px; }
+.pick-row .card-title,
+.pick-row .card > .faint {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.pick-row .card-head > * { min-width: 0; }
+.pick-row .card-head > .dim { flex: none; }
+.top-picks + .btn-row { margin-top: 14px; }
+
+/* **演習が増えると、入口は縦に溢れる。**
+   札は列で分け合うので、枚数が増えるほど1枚が細くなり、札の下段
+   （タグと所要）が2行に折れる。3本目を足した日に、1280×720 で
+   729px（画面 720px）になった — 演習の中身とは無関係に、枚数だけで起きる。
+   短い画面のときだけ上下の余白を詰めて吸収する。広い画面の見た目は変えない。
+   **これで持つのは札が1行に収まる間（4枚まで）である。** それを超えると
+   札が2行になり、入口の構成そのものを決め直すことになる */
+@media (max-height: 800px) {
+  .wrap-top { padding-top: 24px; padding-bottom: 24px; }
+}
 
 /* ── 入口の装飾（SPEC 7.6.18）──────────────────────────────
    シックは抑制のこと。**色は増やさない**（--accent の青1色で足りる）。
