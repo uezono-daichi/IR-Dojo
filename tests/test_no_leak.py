@@ -162,6 +162,23 @@ def test_scenarios_directory_is_not_served(client):
         assert client.get(path).status_code in (403, 404, 405)
 
 
+def test_the_screen_is_never_cached(client):
+    """画面は一度もキャッシュさせない（SPEC 7.6.21）。
+
+    **直したのに古いまま、が実際に起きた。** `FileResponse` も
+    `StaticFiles` も `ETag` と `Last-Modified` を付けるので、
+    再読み込みすれば新しいものを取る — **再読み込みしないかぎり取らない。**
+    開いたままのタブは前の版を表示し続け、利用者には
+    「直したと言っているのに無い」としか見えない。
+
+    この道具は 127.0.0.1 でしか動かず、開発と学習が同じ画面で行われる。
+    **転送量より、目の前の画面が本物であることのほうが大事である。**
+    """
+    for path in ("/", "/static/app.js", "/static/style.css", "/static/index.html"):
+        head = client.get(path).headers.get("cache-control", "")
+        assert "no-store" in head, f"{path} がキャッシュされうる: {head!r}"
+
+
 def test_records_endpoint_requires_scenario_id(client):
     """シナリオ横断のエンドポイントを作らない（SPEC 3.11 / 7.5.3）。"""
     assert client.get("/api/records").status_code == 422

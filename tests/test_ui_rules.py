@@ -632,13 +632,17 @@ def test_the_entrance_keeps_its_prose_short(index_html):
     直すのに `<li>` が増えるだけで落ちた。**落ちるべきなのは
     読む量が増えたときで、構造が増えたときではない。**
 
-    | | 入口の散文 |
-    |---|---|
-    | v1.50（差別化点だけ） | 141字 |
-    | v1.51（概要と流れの帯を足し、重複した箇条書き2つを落とす） | 206字 |
-    | v1.52（遊び方3手を足し、定義1文と講評の一文を詰める） | 207字 |
+    **畳んだぶんは別に数える**（v1.54）。利用者が言ったのは
+    「普通はざっくり概要が分かればいい」で、縛るべきは
+    **開かずに目に入る量**である。畳み込みの中身も無制限ではない —
+    無制限なら、畳めば何でも書けることになる。
 
-    v1.52 で足したのは**構造**であって文章ではない。
+    | | 既定で見える | 畳んである |
+    |---|---|---|
+    | v1.50（差別化点だけ） | 141字 | — |
+    | v1.51（概要と流れの帯） | 206字 | — |
+    | v1.52（遊び方3手） | 207字 | — |
+    | v1.54（文章を左へ／手順を畳む） | **147字** | 65字 |
     """
     top = index_html[index_html.index('id="screen-top"') :]
     top = top[: top.index("</section>")]
@@ -650,9 +654,20 @@ def test_the_entrance_keeps_its_prose_short(index_html):
     lists = re.findall(r'<ol class="(ir-flow|play-steps)".*?</ol>', claim, flags=re.S)
     assert sorted(lists) == ["ir-flow", "play-steps"], f"入口の一覧が増減している: {lists}"
     assert "<ul" not in claim, "入口に箇条書きが戻っている"
-    body = re.sub(r'<ol class="(ir-flow|play-steps)".*?</ol>', "", claim, flags=re.S)
-    prose = re.sub(r"\s+", "", re.sub(r"<[^>]+>", "", body))
-    assert len(prose) <= 230, f"入口の散文が {len(prose)}字に伸びている（上限 230）"
+
+    def prose(html: str) -> str:
+        html = re.sub(r'<ol class="(ir-flow|play-steps)".*?</ol>', "", html, flags=re.S)
+        return re.sub(r"\s+", "", re.sub(r"<[^>]+>", "", html))
+
+    folds = re.findall(r"<details.*?</details>", claim, flags=re.S)
+    visible = claim
+    for block in folds:
+        visible = visible.replace(block, "")
+
+    seen = prose(visible)
+    assert len(seen) <= 170, f"開かずに見える散文が {len(seen)}字（上限 170）"
+    hidden = sum(len(prose(block)) for block in folds)
+    assert hidden <= 160, f"畳み込みの中の散文が {hidden}字（上限 160）"
 
     # 一覧のほうも、1項目が文章にならないこと
     for block in re.findall(r'<ol class="(?:ir-flow|play-steps)".*?</ol>', claim, flags=re.S):
@@ -816,6 +831,10 @@ def test_the_entrance_says_what_you_actually_do(index_html):
 
     書くのは**手順**であって、手の中身でも巧い順番でもない — それは
     盤面の話になる（7.7.3）。
+
+    **手順は畳んである**（v1.54）。既定で見えるのは
+    「何の仕事か／どこを扱うか／何を測るか」までで、
+    手順は開いた人にだけ出る。
     """
     top = index_html[index_html.index('id="screen-top"') :]
     top = top[: top.index("</section>")]
@@ -824,5 +843,51 @@ def test_the_entrance_says_what_you_actually_do(index_html):
     steps = steps[: steps.index("</ol>")]
     labels = re.findall(r"<b>([^<]+)</b>", steps)
     assert len(labels) == 3, f"手順が3つでない: {labels}"
-    # 説明 → 手順 → 主張。手順が主張より後なら、絞る順になっていない
-    assert top.index("ir-flow") < top.index("play-steps") < top.index("lede-claim")
+    # 概要（何の仕事か → どこを扱うか → 何を測るか）が先。手順はその後ろ
+    assert top.index("ir-flow") < top.index("lede-claim") < top.index("play-steps")
+
+
+def test_the_entrance_folds_the_details_and_opens_nothing_by_default(index_html):
+    """**ざっくり分かればよい人は、開かずに進める。**
+
+    利用者の指摘：「文章が基本多すぎるので畳み込みを使って、
+    みたい人が見れるように。普通はざっくりと概要が分かればいい」。
+
+    畳み込みは `<details>` にする — JS を1行も足さずに済み、
+    キーボードでも開け、読み上げにも最初から乗る。
+    **`open` を書かない。** 書いた瞬間に「畳んである」が嘘になる。
+    """
+    top = index_html[index_html.index('id="screen-top"') :]
+    top = top[: top.index("</section>")]
+    folds = re.findall(r"<details[^>]*>", top)
+    assert folds, "入口に畳み込みが無い"
+    for tag in folds:
+        assert "open" not in tag, f"既定で開いている畳み込みがある: {tag}"
+    # 畳むのは詳細だけ。概要そのものを畳んだら、開くまで何も分からない
+    for must_show in ("インシデントレスポンスとは", "ir-flow", "lede-claim"):
+        assert top.index(must_show) < top.index("<details"), (
+            f"{must_show} が畳み込みの中に入っている"
+        )
+    # 手順は畳み込みの中にあること
+    fold = top[top.index("<details") : top.index("</details>")]
+    assert "play-steps" in fold, "手順が畳まれていない"
+
+
+def test_the_entrance_keeps_prose_on_the_left_and_the_figure_on_the_right(index_html):
+    """**左は文章、右は図。**
+
+    v1.52 で主張を右の柱の頭に置いたが、図の側に段落があると
+    読むものと見るものが混ざる（利用者の指摘：
+    「文章が右側にも入っているの見栄え的にも気になる」）。
+    右に残ってよいのは図と、その図の見出し・注記だけ。
+    """
+    claim = index_html[index_html.index('<div class="top-claim">') :]
+    claim = claim[: claim.index('<section class="top-picks">')]
+    claim = re.sub(r"<!--.*?-->", "", claim, flags=re.S)
+    right = claim[claim.index("<figure") :]
+    # 図の中身は h2（見出し）・表の器・figcaption（注記）だけ
+    tags = re.findall(r"<(\w+)[^>]*>", right)
+    assert set(tags) <= {"figure", "h2", "div", "figcaption"}, (
+        f"図の側に図以外のものがある: {sorted(set(tags))}"
+    )
+    assert "<p" not in right, "図の側に段落が残っている"
