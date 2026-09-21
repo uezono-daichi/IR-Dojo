@@ -186,6 +186,13 @@ button.primary:hover { color: #000; }
 .fold[open] > summary { color: var(--fg); margin-bottom: 4px; }
 .fold > *:not(summary) { margin-left: 2px; }
 
+/* ブリーフィングのように節として並ぶ畳みは、上に間を取る */
+.fold.block { margin-top: 26px; }
+.fold.block > summary { font-size: 14px; padding: 9px 14px 9px 12px; }
+.fold.block > *:not(summary) { margin-left: 0; }
+.fold.block > .flow, .fold.block > .rules, .fold.block > .mini,
+.fold.block > .mini-notes, .fold.block > .faint { margin-top: 12px; }
+
 /* 方針の入れ替え表。数字は /api/policy-swap から来る */
 .swap { margin: 0; }
 .swap h2 { font-size: 15px; margin: 0 0 14px; line-height: 1.6; }

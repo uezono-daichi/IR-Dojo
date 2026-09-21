@@ -534,7 +534,13 @@ function startSession() {
     $('brief-policy-name').textContent = '【今回の対応方針】' + data.policy_label;
     prose($('brief-policy-body'), data.policy_briefing);
     renderFlow(data.phases || []);
-    renderLegend(data.view, $('brief-mini'), $('brief-legend'));
+    // **見本は開いてから描く。** 畳んだ `<details>` の中は幅が 0 なので、
+    // ここで描くとグラフも盤も潰れる（SPEC 7.6.9）。組むのは `toggle` のとき
+    S.legendView = data.view;
+    S.legendDrawn = false;
+    $('brief-legend-fold').open = false;
+    $('brief-flow-fold').open = false;
+    $('brief-topo-fold').open = false;
     // 考え方の枠組みを出すかはアシストレベルが決める（3.10）
     var primer = $('brief-primer');
     primer.hidden = !data.view.show_primer;
@@ -542,7 +548,7 @@ function startSession() {
     // 構成図はアシスト。依存関係そのものは資産一覧に残る（3.10）
     var topo = data.view.show_topology;
     $('brief-topo').hidden = !topo;
-    $('brief-topo-note').hidden = !topo;
+    $('brief-topo-fold').hidden = !topo;
     $('brief-topo-head').hidden = !topo;
     show('screen-briefing');
     // 描画は画面を表示してから。非表示のままだと clientWidth が 0 になる
@@ -2641,6 +2647,17 @@ function init() {
   });
 
   $('btn-what-play').addEventListener('click', function () { openModal('modal-what'); });
+
+  /* 画面の見方の見本は、**畳みを開いたときに初めて組む。**
+     閉じた `<details>` の中は幅が 0 で、そこでグラフや盤を描くと
+     潰れたまま残る（SPEC 7.6.9 — dpr 1 だけの検証で素通りした不具合と同じ形）。
+     一度組んだら組み直さない。組み直す必要があるのは演習が変わったときで、
+     そのときは `S.legendDrawn` が false に戻る */
+  $('brief-legend-fold').addEventListener('toggle', function () {
+    if (!this.open || S.legendDrawn || !S.legendView) { return; }
+    S.legendDrawn = true;
+    renderLegend(S.legendView, $('brief-mini'), $('brief-legend'));
+  });
 
   $('btn-show-policy').addEventListener('click', function () {
     $('policy-modal-name').textContent = '【対応方針】' + S.view.policy_label;
