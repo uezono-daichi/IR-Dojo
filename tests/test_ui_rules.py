@@ -121,6 +121,11 @@ def test_legend_does_not_copy_scenario_content(app_js, index_html, scenario):
 
     # HTML は静的なので、ここは部分一致で見る（資産 id は短く紛れやすい）
     text = re.sub(r"<!--.*?-->", "", index_html, flags=re.S)
+    # 入口の流れの帯（7.6.20）だけは外す。ここはフェーズ名を**わざと**書いており、
+    # `test_the_flow_strip_covers_exactly_the_phases_the_engine_has` が
+    # 「エンジンの持つフェーズと集合として一致すること」を強制している。
+    # **この規則より強い** — あちらはズレたら落ちるが、こちらは書かなければ通る。
+    text = re.sub(r"<ol class=\"ir-flow\".*?</ol>", "", text, flags=re.S)
     hits = sorted(w for w in forbidden if len(w) >= 4 and w in text)
     assert not hits, f"index.html にシナリオの中身が書かれている: {hits}"
 
@@ -678,3 +683,96 @@ def test_the_playtest_watches_the_entrance(playtest_mjs):
     assert "top-scenarios" in fn, "入っている演習が並んでいるかを見ていない"
     assert "空いている" in fn, "下がどれだけ空いているかを見ていない"
     assert "1280" in body and "720" in body, "一番狭いところで見ていない"
+
+
+# ─────────── 入口が「何の道具か」を言えているか（SPEC 7.6.20） ───────────
+
+
+def test_the_entrance_says_what_incident_response_is(index_html):
+    """**入口は、知らない人に向かって最初に一言で説明すること。**
+
+    v1.50 までの入口には差別化点しか書いていなかった
+    （「正しかったかではなく根拠が健全だったか」）。それは既に
+    インシデント対応を知っている人にしか読めない文で、知らない人には
+    **黒地に文字が並んでいるのと同じ**である。概要 → 扱う範囲 →
+    その中で何を測るか、の順に並んでいることを見る。
+    """
+    top = index_html[index_html.index('id="screen-top"') :]
+    top = top[: top.index("</section>")]
+    assert "インシデントレスポンスとは" in top, "何の仕事かを言っていない"
+    assert "ir-flow" in top, "扱う範囲を図で示していない"
+    # 並び順。概要が主張より後に来ていたら、絞る順になっていない
+    assert top.index("インシデントレスポンスとは") < top.index("lede-claim")
+    assert top.index("ir-flow") < top.index("lede-claim")
+
+
+def test_the_flow_strip_covers_exactly_the_phases_the_engine_has():
+    """**流れの帯で色が付くのは、エンジンが実際に持つフェーズだけ。**
+
+    帯は手で書いた図なので、放っておけば腐る（凡例のモックが3フェーズの
+    まま腐ったのと同じ壊れ方 / 7.6.7）。同梱シナリオのフェーズ名を全部集め、
+    それが `data-covered` の札に出ていること、かつ
+    **色の付いた札がフェーズより多くない**ことを見る。
+    扱っていない工程まで色が付けば、入口がこの道具の守備範囲について嘘をつく。
+    """
+    from irdojo.loader import list_scenarios
+
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    strip = html[html.index('class="ir-flow"') :]
+    strip = strip[: strip.index("</ol>")]
+    covered = re.findall(r"<li data-covered=\"1\">([^<]+)</li>", strip)
+    labels = {p.label for sc in list_scenarios() for p in sc.phases}
+    assert labels, "同梱シナリオにフェーズが無い"
+    assert set(covered) == labels, (
+        f"帯の色 {covered} とエンジンのフェーズ {sorted(labels)} が食い違う"
+    )
+    # 色の付いていない札に盤面の言葉を隠さない。この帯は
+    # `test_legend_does_not_copy_scenario_content` の走査から外してあるので、
+    # 中身を見張るのはここだけである
+    plain = re.findall(r"<li>([^<]+)</li>", strip)
+    assert not (set(plain) & labels), f"色の付いていない札にフェーズ名がある: {plain}"
+    forbidden = {
+        w
+        for sc in list_scenarios()
+        for w in [a.label for a in sc.actions]
+        + [a.label for a in sc.world.assets]
+        + [q.label for q in sc.open_questions]
+    }
+    assert not (set(plain) & forbidden), f"帯に盤面の言葉が混ざっている: {plain}"
+
+
+def test_the_entrance_does_not_repeat_the_panel(index_html):
+    """**足したぶん、減らす。**
+
+    入口に出していた箇条書き2つは「何を測るのか」の中に一字一句同じものが
+    あった。概要を足すときに、重なっているほうを落とした。
+    片方に戻すだけなら構わないが、**両方に出ている状態に戻さない。**
+    """
+    top = index_html[index_html.index('id="screen-top"') : index_html.index('id="screen-select"')]
+    panel = index_html[index_html.index('id="modal-what"') :]
+    for line in (
+        "もっともらしい偽の手がかりに引っ張られなかったか",
+        "説明できていないことを残したまま決断しなかったか",
+    ):
+        assert line in panel, "「何を測るのか」から消えている"
+        assert line not in top, "入口と「何を測るのか」が同じ文を二度出している"
+
+
+def test_the_card_shows_the_policies_not_the_complexity(app_js):
+    """**選ぶ画面の札に出すのは、難しさではなく綱引きの名前。**
+
+    複雑度（★1〜5）はローダが内容から算出する正しい数字だが、
+    同梱5本すべてが 3 に落ちる（raw 8.86〜9.92）。執筆ガイド（8.1）が
+    薦める規模が、その定義域の一点だからである。**壊れているのではなく
+    定数なので、絞り込みには使えない。** 画面からは外し、設計の道具として
+    `balance.py` に残した（3.12）。
+
+    代わりに出すのは方針3つの名前。**漏洩にならない** — 方針はこの札の
+    すぐ下で学習者自身が選ぶもので、盤面の真相ではない。
+    """
+    body = strip_comments(app_js)
+    fn = body[body.index("function fillScenarioCard") :]
+    fn = fn[: fn.index("\nfunction ")]
+    assert "sc.policies" in fn, "札が方針を出していない"
+    assert "複雑度" not in fn and "★" not in fn, "札がまだ複雑度を出している"
+    assert "複雑度" not in body, "どこかに複雑度の表示が残っている"

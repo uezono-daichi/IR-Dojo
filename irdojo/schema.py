@@ -691,21 +691,30 @@ def bearing_evidence(sc: "Scenario") -> list["Evidence"]:
     ]
 
 
-def compute_complexity(sc: "Scenario") -> int:
-    """シナリオ内容から 1〜5 を算出する。YAML には書かせない。"""
+def complexity_raw(sc: "Scenario") -> float:
+    """丸める前の値（SPEC 3.12）。**式が住んでいるのはここ1か所。**
+
+    丸めた★だけでは、同梱シナリオが全部 3 に落ちたときに
+    「式が壊れている」のか「盤面が似ている」のかが分からない。
+    `tools/balance.py` が作者向けにこの値を出す。
+    """
     misleading = [e for e in sc.evidence if e.misleading]
     crit = [q for q in sc.open_questions if q.critical]
     # 「棄却に2つ以上の証拠を要する誤導」は refutation_mode が決める。
     # 件数だけで数えると、逃げ道が2本ある易しい誤導を多段と数えてしまう
     multi_step = [e for e in misleading if e.needs_every_refutation]
-    raw = (
+    return (
         1.0 * len(misleading)
         + 0.5 * sum(PLAUSIBILITY_SCORE[e.plausibility] for e in misleading)
         + 0.8 * len(crit)
         + 0.3 * (len(bearing_evidence(sc)) / 5)
         + 1.0 * len(multi_step)
     )
-    return max(1, min(5, round(raw / 3.0)))
+
+
+def compute_complexity(sc: "Scenario") -> int:
+    """シナリオ内容から 1〜5 を算出する。YAML には書かせない。"""
+    return max(1, min(5, round(complexity_raw(sc) / 3.0)))
 
 
 # ─────────── meta / root ───────────
