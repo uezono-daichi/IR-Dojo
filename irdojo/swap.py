@@ -70,10 +70,23 @@ class SwapFile(BaseModel):
 
     fingerprint: str
     scenarios: list[ScenarioSwap]
+    # 表を焼いた道具そのものの指紋（v1.56）。
+    # **`balance.py` は配布物に入らない** — 真実を読むプレイ像を持っているので、
+    # テスターに渡す zip からは外す（7.5.6）。それでも「どの道具が焼いたか」は
+    # 記録しておく。手元では突き合わせ、無い場所では名乗るだけにする
+    generator: str = ""
 
 
-def source_files() -> list[Path]:
-    """指紋を取る対象。点数を1点でも動かしうるものを全部入れる。"""
+# 表を焼く道具。**配布物には入らない**ので、指紋の扱いを分けてある
+GENERATOR = ROOT / "tools" / "balance.py"
+
+
+def shipped_files() -> list[Path]:
+    """指紋を取る対象。**点数を1点でも動かしうるもので、かつ配布物に入るもの。**
+
+    エンジン一式と同梱シナリオ。どちらも配布物に入るので、
+    テスターの手元でも最後まで突き合わせられる。
+    """
     out: list[Path] = []
     for path in sorted(ROOT.joinpath("irdojo").rglob("*.py")):
         rel = path.relative_to(ROOT).as_posix()
@@ -82,15 +95,13 @@ def source_files() -> list[Path]:
         if "__pycache__" in rel:
             continue
         out.append(path)
-    out.append(ROOT / "tools" / "balance.py")
     out += sorted(ROOT.joinpath("scenarios").glob("*.yaml"))
     return out
 
 
-def fingerprint() -> str:
-    """いまのソースとシナリオの指紋。"""
+def _digest(paths: list[Path]) -> str:
     h = hashlib.sha256()
-    for path in source_files():
+    for path in paths:
         h.update(path.relative_to(ROOT).as_posix().encode("utf-8"))
         h.update(b"\0")
         h.update(path.read_bytes())
@@ -98,10 +109,35 @@ def fingerprint() -> str:
     return h.hexdigest()
 
 
+def fingerprint() -> str:
+    """配布物に入るソースとシナリオの指紋。"""
+    return _digest(shipped_files())
+
+
+def generator_digest() -> str:
+    """表を焼いた道具の指紋。**無ければ空。**"""
+    return _digest([GENERATOR]) if GENERATOR.is_file() else ""
+
+
 def load(path: Path | None = None) -> SwapFile | None:
-    """生成物を読む。無い・壊れている・古いなら None。
+    """生成物を読む。無い・壊れている・古い・確かめられないなら None。
 
     **None は「表を出さない」であって「0点の表を出す」ではない。**
+
+    突き合わせは2段ある。
+
+    | | 手元（開発） | 配布物（テスター） |
+    |---|---|---|
+    | エンジン・シナリオ | 突き合わせる | **突き合わせる** |
+    | `balance.py` | 突き合わせる | 無いので名乗るだけ |
+
+    **点数を決めるのはエンジンとシナリオで、そこは配った先でも最後まで見る。**
+    `balance.py` はプレイ像の作り方を決めるので手元では見るが、
+    配布物には入らない（真実を読むコードを配らない / 7.7.3）。
+    配った先では中身が変わりようがないので、確かめられないまま出す。
+
+    **確かめられないことと、確かめずに出すことは違う。** ここで分けているのは
+    「変わりうる場所」で、変わりうる場所は最後まで突き合わせている。
     """
     path = DATA_FILE if path is None else path
     try:
@@ -112,6 +148,15 @@ def load(path: Path | None = None) -> SwapFile | None:
         data = SwapFile.model_validate(raw)
     except ValidationError:
         return None
-    if data.fingerprint != fingerprint():
+    try:
+        if data.fingerprint != fingerprint():
+            return None
+        # **道具が手元にあるときだけ突き合わせる。**
+        gen = generator_digest()
+        if gen and data.generator and data.generator != gen:
+            return None
+    except OSError:
+        # 指紋の材料が読めない。**読めないものは確かめられない** ので出さない。
+        # ここを素通りさせていたので、配布物で `/api/policy-swap` が 500 を返した
         return None
     return data

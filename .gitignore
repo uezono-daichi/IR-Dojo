@@ -21,3 +21,6 @@ node_modules/
 
 # エージェント用の作業ツリー（本体ではない）
 .claude/worktrees/
+
+# テスト配布用の zip（tools/make_tester_zip.py が作る）
+dist/

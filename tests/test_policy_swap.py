@@ -119,7 +119,7 @@ def test_the_fingerprint_covers_everything_that_moves_the_numbers():
     触っても指紋が動かず、入口だけが前の点数のまま生き残る。
     外してよいのは配信・記録・表示の層だけで、それは名前で列挙する。
     """
-    covered = {p.relative_to(swap.ROOT).as_posix() for p in swap.source_files()}
+    covered = {p.relative_to(swap.ROOT).as_posix() for p in swap.shipped_files()}
     engine = {
         p.relative_to(swap.ROOT).as_posix()
         for p in ROOT.joinpath("irdojo").rglob("*.py")
@@ -128,11 +128,46 @@ def test_the_fingerprint_covers_everything_that_moves_the_numbers():
     missing = engine - covered - swap.EXCLUDED
     missing = {m for m in missing if not m.startswith(swap.EXCLUDED_DIRS)}
     assert not missing, f"指紋から外れているモジュールがある: {sorted(missing)}"
-    # 全シナリオと、点数を作っている道具そのもの
+    # 全シナリオ
     assert {p.name for p in ROOT.joinpath("scenarios").glob("*.yaml")} <= {
         pathlib.Path(c).name for c in covered
     }
-    assert "tools/balance.py" in covered
+
+
+def test_the_generator_is_checked_where_it_exists():
+    """表を焼いた道具も突き合わせる。**手元にあるかぎりは。**
+
+    `tools/balance.py` は配布物に入らない（真実を読むプレイ像を持っている /
+    SPEC 7.7.3）。**点数を決めるのはエンジンとシナリオで、そこは配った先でも
+    最後まで突き合わせている**（上の検査）。道具はプレイ像の作り方を決めるので、
+    手元では突き合わせ、無い場所では名乗るだけにする。
+
+    **確かめられないことと、確かめずに出すことは違う。**
+    変わりうる場所は、変わりうるところ全部で見ている。
+    """
+    assert swap.GENERATOR.is_file(), "手元に道具が無い"
+    assert swap.generator_digest(), "道具の指紋が空"
+    data = swap.load()
+    assert data is not None, "生成物が読めない（--emit-swap を流し直す）"
+    assert data.generator == swap.generator_digest(), (
+        "生成物が名乗る道具と、手元の道具が食い違う（--emit-swap を流し直す）"
+    )
+
+
+def test_the_table_is_hidden_when_the_fingerprint_cannot_be_taken(tmp_path, monkeypatch):
+    """指紋の材料が読めないときは、**表を出さない。**
+
+    配布物（テスターに渡す zip）には `tools/` が入らない。指紋を取る途中で
+    `FileNotFoundError` が素通りしていたので、**テスターの機械でだけ**
+    `/api/policy-swap` が 500 を返していた。こちらでは動くので気づけない —
+    実際に zip を展開して動かすまで出なかった。
+
+    読めないものは確かめられない。**確かめられないなら出さない。**
+    """
+    monkeypatch.setattr(swap, "ROOT", tmp_path)
+    monkeypatch.setattr(swap, "GENERATOR", tmp_path / "tools" / "balance.py")
+    assert swap.generator_digest() == "", "無い道具の指紋を名乗っている"
+    assert swap.load() is None, "材料が読めないのに表を出している"
 
 
 def test_touching_a_scenario_moves_the_fingerprint(tmp_path, monkeypatch):

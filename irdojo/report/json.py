@@ -344,7 +344,17 @@ def build(
     scenario: Scenario,
     *,
     persist: bool = True,
+    moves: list[records_mod.Move] | None = None,
+    briefing_seconds: float | None = None,
 ) -> Report:
+    """講評を組み、必要なら記録を保存する。
+
+    `moves` / `briefing_seconds` は**実時間の足あと**で、
+    採点にも講評にも一切使われない（記録に書き残すだけ）。
+    エンジンは実時間を知らない — 知る必要が無く、知ると
+    `balance.py` の何千回の模擬プレイまで時計を持つことになる。
+    測るのは API の層である（SPEC 7.5.4）。
+    """
     report_score = scoring_mod.score(state, scenario)
     retro = retro_mod.build(state, scenario)
 
@@ -538,7 +548,10 @@ def build(
     is_first = not records_mod.has_any(scenario.meta.id)
 
     if persist:
-        rec = _to_record(state, scenario, report_score, is_first)
+        rec = _to_record(
+            state, scenario, report_score, is_first,
+            moves=moves, briefing_seconds=briefing_seconds,
+        )
         records_mod.save(rec)
 
     all_records = records_mod.load_all(scenario.meta.id)
@@ -779,6 +792,9 @@ def _to_record(
     scenario: Scenario,
     report_score: scoring_mod.ScoreReport,
     is_first: bool,
+    *,
+    moves: list[records_mod.Move] | None = None,
+    briefing_seconds: float | None = None,
 ) -> records_mod.Record:
     cons = report_score.consequences
     snap = state.assessment_snapshot
@@ -803,6 +819,8 @@ def _to_record(
         assessment=list(state.assessment),
         unresolved_at_decision=list(snap.unresolved_critical) if snap else [],
         constraint_violations=report_score.constraint_violations,
+        moves=list(moves or []),
+        briefing_seconds=briefing_seconds,
     )
 
 

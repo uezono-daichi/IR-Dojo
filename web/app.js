@@ -2604,6 +2604,13 @@ function init() {
   $('btn-start').addEventListener('click', startSession);
   $('btn-begin').addEventListener('click', function () {
     S.pendingFinish = false;
+    /* ブリーフィングを閉じた合図だけを送る（SPEC 7.5.4）。
+       **盤面は1つも動かない。** これを送らないと、最初の1手の
+       「考えていた秒」にブリーフィングを読んでいた時間が丸ごと混ざる。
+       **失敗しても遊びは止めない** — 足あとは採点に効かないので、
+       ここで転んで開始できなくなるほうが害が大きい */
+    api('/api/session/' + S.sessionId + '/begin', { method: 'POST' })
+      .catch(function () {});
     renderPlay();
   });
 
