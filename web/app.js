@@ -256,11 +256,12 @@ function renderPolicySwap(data) {
   clear(mount);
   mount.appendChild(table);
 
-  // 何の表かは、行数・列数から組み立てる。件数を手で書かない
+  // 何の表かは、行数・列数から組み立てる。件数を手で書かない。
+  // **1行に収める** — 図の脇の注記が2行に折り返すと、図の側にも
+  // 読むものが増える。入口の文章は左に集めてある
   $('top-swap-note').textContent =
-    cols.length + 'つの方針それぞれに向けて立てた' + data.rows.length +
-    '通りの対応を、同じ盤面・同じ真相のまま' + cols.length +
-    'つとも採点し直した点数です（0〜100）。色が付いているのが各列の最高点。';
+    '同じ盤面を' + data.rows.length + '通りに解き、' + cols.length +
+    'つの方針すべてで採点し直した点数。色付きが各列の最高点。';
   host.hidden = false;
   // 表の出し入れがあったら帯も組み直す。**どちらが先に返るかに依存させない**
   renderTopMeta();

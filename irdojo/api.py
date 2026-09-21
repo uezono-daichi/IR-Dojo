@@ -369,10 +369,37 @@ def _get(sid: str) -> Engine:
 # `web/` のみ。`scenarios/` は決してマウントしない（SPEC 7.7.3）。
 
 
+# **画面はキャッシュさせない。** 直したのに古いまま、が実際に起きた。
+# 127.0.0.1 でしか動かない道具なので、転送量より目の前の画面が本物である
+# ことのほうが大事である（下の `_NoStore` の docstring に理由を書いた）。
+NO_STORE = {"Cache-Control": "no-store, must-revalidate"}
+
+
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(WEB_DIR / "index.html")
+    return FileResponse(WEB_DIR / "index.html", headers=NO_STORE)
+
+
+class _NoStore(StaticFiles):
+    """静的ファイルも毎回取りに来させる。
+
+    **画面を直したのに古いままだ、が実際に起きた。** `FileResponse` と
+    `StaticFiles` は `ETag` と `Last-Modified` を付けるので、ブラウザは
+    再読み込みすれば新しいものを取る。**再読み込みしないかぎり取らない。**
+    開いたままのタブは、前の版を表示し続ける。
+
+    この道具は 127.0.0.1 でしか動かず（7.6.1）、開発と学習が同じ画面で
+    行われる。**転送量より、目の前の画面が本物であることのほうが大事である。**
+    """
+
+    def is_not_modified(self, response_headers, request_headers) -> bool:
+        return False
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        response.headers.update(NO_STORE)
+        return response
 
 
 if WEB_DIR.is_dir():
-    app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
+    app.mount("/static", _NoStore(directory=WEB_DIR), name="static")
