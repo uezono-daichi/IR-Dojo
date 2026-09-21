@@ -40,13 +40,12 @@
       <div class="lede">
         <h2 class="lede-h">インシデントレスポンスとは</h2>
         <p>攻撃を受けたかもしれない、と分かったところから始まる仕事です。
-           <strong>何が起きたかを調べ、どこまで及んだかを見極め、止める。</strong>
-           どれも、確かなことが分からないうちに決めなければなりません。</p>
+           <strong>何が起きたかを調べ、どこまで及んだかを見極め、止める。</strong></p>
 
         <!-- 仕事の流れ。**盤面ではなく仕事の形**なので、特定のシナリオを
              指していない（7.6.18 の格子と同じ考え方）。
              色が付く2つは、同梱シナリオが実際に持つフェーズと一致していること —
-             `test_the_flow_strip_matches_the_phases_the_engine_has` が強制する -->
+             `test_the_flow_strip_covers_exactly_the_phases_the_engine_has` が強制する -->
         <ol class="ir-flow" aria-label="インシデント対応の流れ">
           <li>検知</li>
           <li data-covered="1">調査</li>
@@ -56,10 +55,27 @@
         </ol>
         <p class="flow-note">この道場が演習するのは、<strong>色の付いた2つ</strong>です。</p>
 
-        <p class="lede-claim">測るのは、その判断が<strong>正しかったか</strong>ではなく、
-           判断を支える<strong>根拠が健全だったか</strong>。
-           対応の当否は問いません — <strong>方針は演習が与えます。</strong></p>
+        <!-- **何をする道具かを言う。** ここには「他と何が違うか」しか
+             書いていなかった。違いは、ベースの説明があって初めて立つ。
+             書くのは**手順**であって、手の中身でも巧い順番でもない
+             （それは盤面の話になる / SPEC 7.7.3） -->
+        <ol class="play-steps">
+          <li><b>調べる</b><span>記録を読む手を選ぶ。選ぶたびに時計が進む</span></li>
+          <li><b>名指しする</b><span>侵害された資産はどれかを宣言する</span></li>
+          <li><b>止める</b><span>封じ込めの手を打ち、終える</span></li>
+        </ol>
+        <p class="flow-note">終えると<strong>講評</strong>。
+           見落としも失ったものも、そこで初めて分かります。</p>
+
       </div>
+
+      <!-- 右の柱は「何を測るか」。**表はこの主張の証拠**なので隣に置く。
+           主張は図の外に出しておく — 生成物が古いと図は箱ごと消えるので、
+           中に入れると主張まで一緒に消える -->
+      <div class="top-right">
+      <p class="lede-claim">測るのは、その判断が<strong>正しかったか</strong>ではなく、
+         判断を支える<strong>根拠が健全だったか</strong>。
+         対応の当否は問いません — <strong>方針は演習が与えます。</strong></p>
 
       <!-- 表が出ないことがある（生成物が古い／欠けている）。
            そのときは古い数字を出さずに、この箱ごと消える -->
@@ -68,6 +84,7 @@
         <div id="top-swap-table"></div>
         <figcaption class="faint" id="top-swap-note"></figcaption>
       </figure>
+      </div>
     </div>
 
     <section class="top-picks">

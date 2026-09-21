@@ -625,14 +625,42 @@ def test_the_entrance_keeps_its_prose_short(index_html):
     2回言っていた。表がその2つの仕事をしているので、文章は
     「何を測るか」だけに戻した。ここが再び伸びたら、
     表を置いた意味が消えている。
-    """
-    top = index_html[index_html.index('id="screen-top"'):]
-    top = top[: top.index("</section>")]
-    lede = top[top.index('class="lede"'):]
-    lede = lede[: lede.index("</div>")]
-    assert lede.count("<p>") <= 3, "入口の散文が増えている"
-    assert lede.count("<li>") <= 3, "入口の箇条書きが増えている"
 
+    **数えるのは段落の数ではなく字数である**（v1.52）。
+    段落と箇条書きの数で見ていたときは、
+    「知らない人には読めない」（v1.51）と「何をする道具か分からない」（v1.52）を
+    直すのに `<li>` が増えるだけで落ちた。**落ちるべきなのは
+    読む量が増えたときで、構造が増えたときではない。**
+
+    | | 入口の散文 |
+    |---|---|
+    | v1.50（差別化点だけ） | 141字 |
+    | v1.51（概要と流れの帯を足し、重複した箇条書き2つを落とす） | 206字 |
+    | v1.52（遊び方3手を足し、定義1文と講評の一文を詰める） | 207字 |
+
+    v1.52 で足したのは**構造**であって文章ではない。
+    """
+    top = index_html[index_html.index('id="screen-top"') :]
+    top = top[: top.index("</section>")]
+    claim = top[top.index('<div class="top-claim">') : top.index('<section class="top-picks">')]
+    claim = re.sub(r"<!--.*?-->", "", claim, flags=re.S)
+
+    # 構造（流れの帯・遊び方の3手）は散文から外して数える。
+    # **外した分は別に縛る** — 外しただけでは、箇条書きに文章を流し込める
+    lists = re.findall(r'<ol class="(ir-flow|play-steps)".*?</ol>', claim, flags=re.S)
+    assert sorted(lists) == ["ir-flow", "play-steps"], f"入口の一覧が増減している: {lists}"
+    assert "<ul" not in claim, "入口に箇条書きが戻っている"
+    body = re.sub(r'<ol class="(ir-flow|play-steps)".*?</ol>', "", claim, flags=re.S)
+    prose = re.sub(r"\s+", "", re.sub(r"<[^>]+>", "", body))
+    assert len(prose) <= 230, f"入口の散文が {len(prose)}字に伸びている（上限 230）"
+
+    # 一覧のほうも、1項目が文章にならないこと
+    for block in re.findall(r'<ol class="(?:ir-flow|play-steps)".*?</ol>', claim, flags=re.S):
+        items = re.findall(r"<li[^>]*>(.*?)</li>", block, flags=re.S)
+        assert len(items) <= 5, f"一覧の項目が増えている: {len(items)}"
+        for item in items:
+            text = re.sub(r"\s+", "", re.sub(r"<[^>]+>", "", item))
+            assert len(text) <= 32, f"一覧の項目が文章になっている: {text}"
 
 def test_the_entrance_and_the_list_share_one_card_builder(app_js):
     """入口の札と選択画面の札は、同じ関数から出ること。
@@ -776,3 +804,25 @@ def test_the_card_shows_the_policies_not_the_complexity(app_js):
     assert "sc.policies" in fn, "札が方針を出していない"
     assert "複雑度" not in fn and "★" not in fn, "札がまだ複雑度を出している"
     assert "複雑度" not in body, "どこかに複雑度の表示が残っている"
+
+
+def test_the_entrance_says_what_you_actually_do(index_html):
+    """**「他と何が違うか」の前に、「何をする道具か」を言うこと。**
+
+    v1.51 で「インシデントレスポンスとは何の仕事か」までは言えるように
+    なったが、**この道具で何をするのか**はまだどこにも書いていなかった
+    （利用者の指摘：「特徴だけじゃん。ベースの説明がないって話」）。
+    領域の説明と差別化点の間に、操作の手順が抜けていた。
+
+    書くのは**手順**であって、手の中身でも巧い順番でもない — それは
+    盤面の話になる（7.7.3）。
+    """
+    top = index_html[index_html.index('id="screen-top"') :]
+    top = top[: top.index("</section>")]
+    assert "play-steps" in top, "何をするのかが書かれていない"
+    steps = top[top.index('class="play-steps"') :]
+    steps = steps[: steps.index("</ol>")]
+    labels = re.findall(r"<b>([^<]+)</b>", steps)
+    assert len(labels) == 3, f"手順が3つでない: {labels}"
+    # 説明 → 手順 → 主張。手順が主張より後なら、絞る順になっていない
+    assert top.index("ir-flow") < top.index("play-steps") < top.index("lede-claim")
