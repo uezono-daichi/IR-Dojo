@@ -33,6 +33,7 @@ from irdojo.schema import (
     ActionType,
     Scenario,
     briefing_assets,
+    complexity_raw,
     occurrence_split,
     possibility_leaks,
 )
@@ -1742,6 +1743,12 @@ def main() -> int:
     best, _ids, _ = retrospective.minimal_path(sc)
     print(f"  最短経路 {best}分 / 折れ点 {accel.threshold_minutes if accel else '—'}分"
           f" / 出来事 {len(sc.timeline)}件 / アクション {len(sc.actions)}個")
+    # **複雑度はここが住処である**（SPEC 3.12）。画面からは外した —
+    # 同梱シナリオが全部 3 に落ちるので、学習者が選ぶ役には立たない。
+    # 作者には効く。raw を添えるのは、★が変わらないまま中身が
+    # 重くなっていくのを見るためで、丸めた数字だけでは分からない
+    print(f"  複雑度 ★{sc.complexity}（raw {complexity_raw(sc):.2f}"
+          f" / 3.0 で丸め）— 執筆ガイド 8.1 の規模は ★2〜3 に収まる")
 
     print("\n■ プレイ像ごとの実測")
     pols = [p.id for p in sc.policies]

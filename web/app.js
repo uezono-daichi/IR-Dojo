@@ -330,12 +330,12 @@ function renderTopScenarios() {
     card.setAttribute('data-scenario', sc.id);
     card.setAttribute('tabindex', '0');
     // **入口の札は題だけを出す。** ここでの札の役目は「何が入っているか」を
-    // 一目で見せることであって、絞り込みではない。タグも複雑度も選ぶための
-    // 道具なので、選択画面の札に置く。
+    // 一目で見せることであって、絞り込みではない。選ぶための道具は
+    // 選ぶ画面に置く。
     // 5本目で、タグの行が 1280×720 の入口を 37px 溢れさせた。行を減らして
-    // 収めたが、今度は横が 5列に割れて題が3文字で切れた — 複雑度の星が
+    // 収めたが、今度は横が 5列に割れて題が3文字で切れた — 脇に置いた文字が
     // 題と幅を取り合うため。**札が細くなるほど、先に消えるのは題ではない。**
-    fillScenarioCard(card, sc, { tags: false, complexity: false });
+    fillScenarioCard(card, sc, { compact: true });
     function go() { toSelect(sc); }
     card.addEventListener('click', go);
     card.addEventListener('keydown', function (e) {
@@ -403,17 +403,35 @@ function showListError(err) {
    別々に書くと片方だけが古い並びのまま残る — 凡例の手書きモックが
    3フェーズのまま腐ったのと同じ壊れ方をする（SPEC 7.6.7）。 */
 function fillScenarioCard(card, sc, opts) {
+  var compact = !!(opts && opts.compact);
   var head = el('div', 'card-head');
   head.appendChild(el('div', 'card-title', sc.title));
-  if (!opts || opts.complexity !== false) {
-    head.appendChild(el('div', 'dim',
-      '複雑度 ' + '★'.repeat(sc.complexity) + '☆'.repeat(5 - sc.complexity)));
+  if (!compact) {
+    head.appendChild(el('div', 'dim', '約' + sc.estimated_play_minutes + '分'));
   }
   card.appendChild(head);
-  if (!opts || opts.tags !== false) {
-    card.appendChild(el('div', 'faint',
-      sc.tags.join(' / ') + '\u3000約' + sc.estimated_play_minutes + '分'));
-  }
+  if (compact) { return card; }
+
+  /* **選ぶときに効くのは「どれだけ難しいか」ではなく「どの綱引きか」。**
+     ここには複雑度（★1〜5）を出していた。あれはローダが内容から算出する
+     正しい数字だが、同梱5本すべてが 3 に落ちる（raw 8.86〜9.92）。
+     執筆ガイド（SPEC 8.1）が誤導2〜3・critical論点2〜3 を薦めており、
+     その範囲は複雑度の定義域の一点だからである。**壊れているのではなく、
+     定数なので絞り込みに使えない。** 数字は設計の道具として残し
+     （`balance.py` が出す）、画面からは外した。SPEC 3.12。
+
+     代わりに出すのは、その演習が持つ3つの方針の名前。
+     **この製品の主張そのものが、ここに出ている** — 「安全最優先／生産継続
+     最優先／証拠保全最優先」と「立証可能性最優先／早期封じ込め最優先／
+     就業関係への配慮最優先」は、違う綱引きを練習することを一目で言う。
+     漏洩にもならない。**方針はこの札のすぐ下で自分で選ぶもの**であって、
+     盤面の真相ではない。 */
+  var pol = el('div', 'card-policies');
+  sc.policies.forEach(function (p) {
+    pol.appendChild(el('span', 'pchip', p.label));
+  });
+  card.appendChild(pol);
+  card.appendChild(el('div', 'faint', sc.tags.join(' / ')));
   return card;
 }
 
