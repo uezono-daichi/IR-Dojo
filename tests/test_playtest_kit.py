@@ -231,3 +231,84 @@ def test_the_report_resolves_names_at_read_time():
     assert "action_label" not in Move.model_fields, "記録に名前を書き写している"
     src = (ROOT / "tools" / "playtest_report.py").read_text("utf-8")
     assert "def labels_for" in src, "読むときに名前を引いていない"
+
+
+# ── クローンして遊んでもらう（7.5.7） ──────────────
+
+
+def _truth_tokens() -> set[str]:
+    """同梱シナリオの真相の語。**これが書いてある場所は、遊ぶ前に開けない。**"""
+    from irdojo.loader import list_scenarios
+
+    out: set[str] = set()
+    for sc in list_scenarios():
+        gt = sc.world.ground_truth
+        out |= set(gt.compromised) | set(gt.persistence) | {gt.patient_zero}
+        out |= {e.id for e in sc.evidence if e.misleading}
+    return {t for t in out if t and len(t) >= 4}
+
+
+SCAN_SKIP = {".git", ".venv", "dist", "__pycache__", ".pytest_cache",
+             "node_modules", ".irdojo", "results"}
+
+
+def _paths_that_tell_the_answer() -> set[str]:
+    """答えが出る最上位の場所を、実際に走査して求める。
+
+    **手で並べない。** 並べると、新しく足した場所が黙って外れる。
+    """
+    tokens = _truth_tokens()
+    found: set[str] = set()
+    for entry in sorted(ROOT.iterdir()):
+        if entry.name in SCAN_SKIP or entry.name.startswith(".playtest"):
+            continue
+        if entry.name.startswith(".") and entry.is_dir() and entry.name != ".claude":
+            continue
+        files = [entry] if entry.is_file() else [
+            f for f in entry.rglob("*") if f.is_file()
+        ]
+        for f in files:
+            if set(f.parts) & SCAN_SKIP:
+                continue
+            try:
+                text = f.read_text("utf-8", errors="ignore")
+            except OSError:
+                continue
+            if any(t in text for t in tokens):
+                found.add(entry.name)
+                break
+    return found
+
+
+def test_the_readme_names_every_place_that_tells_the_answer():
+    """**遊ぶ人を招くなら、開いてはいけない場所を全部名指しする**（SPEC 7.5.7）。
+
+    リポジトリに招待して遊んでもらう形では、真相は技術では閉じられない。
+    閉じられないものは、はっきり頼むしかない。**頼む先が1つでも漏れたら、
+    そこだけ静かに開かれる。**
+
+    並べるのは走査の結果であって、手書きの一覧ではない。
+    答えの出る場所を新しく足したら、この検査が落ちる。
+    """
+    readme = (ROOT / "README.md").read_text("utf-8")
+    warning = readme[readme.index("遊ぶ前に読まないでください"):]
+    warning = warning[: warning.index("## 1. 動かす")]
+
+    for name in sorted(_paths_that_tell_the_answer()):
+        assert name in warning, (
+            f"README が {name} を名指ししていない（ここに答えが出る）"
+        )
+    # 履歴も。HEAD から消しても、過去のコミットには残る
+    assert "git log" in warning, "履歴に答えが残っていることを言っていない"
+
+
+def test_the_debug_output_is_not_tracked():
+    """検証の出力を追跡しないこと。
+
+    実際に踏んだ: `.playtest/` は無視していたが `.playtest-stuck/` と `.pt/`
+    は追跡されたままで、**講評のテキストごと 143 ファイル**入っていた。
+    名前を1つずつ足す形にしていたのが原因なので、`*` で受ける。
+    """
+    ignore = (ROOT / ".gitignore").read_text("utf-8")
+    assert ".playtest*/" in ignore, "検証の出力先を名前ごとに足している"
+    assert ".pt/" in ignore

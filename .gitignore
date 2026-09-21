@@ -16,8 +16,12 @@ results/
 .claude/scratch/
 
 # ブラウザ検証（node_modules と撮ったもの）
+# **その場で作った出力先も全部。** `.playtest-stuck` と `.pt` が
+# 追跡されたまま入っていた（講評のテキストごと143ファイル）。
+# 検証の出力には真相が写るので、名前を1つずつ足す形にしない
 node_modules/
-.playtest/
+.playtest*/
+.pt/
 
 # エージェント用の作業ツリー（本体ではない）
 .claude/worktrees/
