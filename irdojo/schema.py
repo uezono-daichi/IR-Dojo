@@ -92,13 +92,52 @@ class Asset(Strict):
     business_impact_per_hour: float = Field(default=0.0, ge=0.0)
 
 
+class Spread(Strict):
+    """演習中に侵害が1つ増える出来事（SPEC 5.2 / v1.48）。
+
+    1本目・2本目の `ground_truth` は執筆時に固定で、`timeline` は圧力しか
+    運ばなかった。**この形だけが、真実そのものを動かす。**
+
+    配布の仕組みを攻撃者が握っている盤面では、学習者が調べている間も
+    配られ続ける。時間が経つほど `compromised` が増え、
+    `assessment_recall` と `containment_completeness` の**分母が動く**。
+
+    `unless_contained` が要である。**学習者の不作為が原因で広がる形にする** —
+    配り元を止めてあれば、その窓では何も配られない。
+    防げない拡散を書いてはいけない（遅い学習者が自分の判断と無関係に
+    不正解にされるのは、教材ではなく罰である）。ローダが、
+    その窓までに配り元を止めきれない盤面を拒否する。
+
+    `reveals` は**起きて初めて取れるようになる資料**である。これが無いと、
+    窓の後に判定した学習者は「増えた1台」を名指しする手段を持たないまま
+    再現率だけを落とす — それも防げない罰にあたる。逆に、起きる前から
+    その資料が取れてしまうと、盤面はまだ起きていないことを配ることになる。
+    """
+
+    id: str
+    to: str                          # 新たに侵害される資産
+    at_minutes: int = Field(gt=0)    # 配られる窓（開始からの分）
+    # ここに挙げた資産を**全部**止めてあれば、この窓では何も起きない。
+    # 空にはできない（防ぎようのない拡散になる）
+    unless_contained: list[str]
+    # 起きて初めて取れるようになる資料。起きなければ永久に取れない
+    reveals: list[str] = []
+
+
 class GroundTruth(Strict):
-    """学習者には最後まで見えない。採点にのみ使う（SPEC 3.2）。"""
+    """学習者には最後まで見えない。採点にのみ使う（SPEC 3.2）。
+
+    `compromised` は**開始時点**の侵害資産である。`spreads` を持つ盤面では、
+    演習中にここへ資産が足される（SPEC 5.2）。採点が見る集合は
+    `engine.compromised_now` / `engine.effective_truth` が組む。
+    """
 
     patient_zero: str
     compromised: list[str]
     persistence: list[str] = []
     innocent: list[str] = []
+    # 演習中に侵害が増える窓。省略可（1本目・2本目は 0件）
+    spreads: list[Spread] = []
     attack_narrative: str = ""
 
 
@@ -786,6 +825,29 @@ def names_asset(text: str, asset: "Asset") -> str:
     return ""
 
 
+def spread_targets(sc: "Scenario") -> set[str]:
+    """演習中に侵害されうる資産（SPEC 5.2）。
+
+    **開始時点では侵害されていないが、答えの一部ではある。** だから
+    漏洩検査では `compromised` と同じ扱いにし（名指しを禁じる）、
+    囮の数え方（`_reject_eradication_that_maps_persistence`）では
+    無実の側に数えない — 数えると「取り除く手が無実にも届いている」の
+    要件を、いずれ侵害される資産で満たせてしまう。
+    """
+    return {sp.to for sp in sc.world.ground_truth.spreads}
+
+
+def answer_assets(sc: "Scenario") -> set[str]:
+    """名指しを禁じる資産の集合（漏洩検査の共通部品）。
+
+    `compromised ∪ {patient_zero} ∪ persistence ∪ 拡散先`。
+    3箇所（論点・アクション・出来事）で同じ集合を使う。
+    **3箇所に同じ式を書かない** — 拡散先を足した日に、2箇所だけ直る。
+    """
+    gt = sc.world.ground_truth
+    return set(gt.compromised) | {gt.patient_zero} | set(gt.persistence) | spread_targets(sc)
+
+
 def briefing_assets(sc: "Scenario") -> set[str]:
     """meta.briefing が既に名指ししている資産の id。
 
@@ -943,6 +1005,7 @@ def _validate_scenario(sc: "Scenario") -> None:
                 f"{p.id}: normalization に無い帰結指標に重みがあります: {sorted(unknown)}"
             )
 
+    _validate_spreads(sc)
     _reject_toothless_constraints(sc)
     _reject_toothless_secures(sc)
     _reject_prerequisite_action_cycle(sc)
@@ -971,6 +1034,131 @@ def _validate_scenario(sc: "Scenario") -> None:
 
     # 被害モデルの params
     _validate_damage_params(sc.damage)
+
+
+def _validate_spreads(sc: "Scenario") -> None:
+    """演習中に侵害が増える窓を検査する（SPEC 5.2 / v1.48）。
+
+    **この形は、盤面の真実そのものを動かす。** だから他のどの検査よりも
+    「守りようのない要求」を作りやすい。禁じるのは7つ。
+
+    1. 参照が壊れている（未定義の資産・証拠）
+    2. 拡散先が最初から侵害されている／無実だと宣言されている／
+       `patient_zero` である。どれも「増える」と両立しない
+    3. 同じ資産が2つの窓で侵害される。1度侵害されたものは二度目が無い
+    4. `unless_contained` が空。**防ぎようのない拡散は罰である**
+    5. `unless_contained` に `compromised` 以外の資産がある。
+       侵害されていない資産を止めることが配布を止める、という盤面は
+       「止める理由が無い手を押させる」ことになる
+    6. **その窓までに配り元を止めきれない。** 盤面にある最も安い止め方を
+       並べても `at_minutes` に間に合わないなら、それは学習者の不作為では
+       なく物理法則である（ここが見るのは下限だけで、「巧いプレイなら
+       間に合う」は `tools/balance.py` が実測する）
+    7. `reveals` が空／その資産を指していない／論点や棄却に使われている。
+
+       空を禁じるのは、窓の後に判定した学習者が**増えた1台を名指しする
+       手段を持たない**まま再現率だけを落とすからである。防げない拡散を
+       禁じたのと同じ理由が、事実認識の側にもそのまま要る。
+
+       論点と棄却に使えないのは逆向きの理由で、**拡散を防いだ学習者だけが
+       解けない論点**が生まれるからである。うまくやった人が罰される。
+    """
+    gt = sc.world.ground_truth
+    if not gt.spreads:
+        return
+
+    asset_ids = {a.id for a in sc.world.assets}
+    ev_ids = {e.id for e in sc.evidence}
+    by_ev = sc.evidence_by_id
+    compromised = set(gt.compromised)
+    innocent = set(gt.innocent)
+
+    _reject_duplicates("拡散", [sp.id for sp in gt.spreads])
+    seen: set[str] = set()
+
+    # 資産ごとの最安の止め方。6 の下限に使う
+    cheapest: dict[str, int] = {}
+    for a in sc.actions:
+        if a.type != ActionType.CONTAIN:
+            continue
+        for t in a.targets:
+            if t not in cheapest or a.cost_minutes < cheapest[t]:
+                cheapest[t] = a.cost_minutes
+
+    resolving = {e for q in sc.open_questions for e in q.resolved_by}
+    refuting = {r for e in sc.evidence for r in e.refuted_by}
+
+    for sp in gt.spreads:
+        if sp.to not in asset_ids:
+            raise ValueError(f"{sp.id}: 未定義の資産 {sp.to}")
+        if sp.to in compromised:
+            raise ValueError(
+                f"{sp.id}: 拡散先 {sp.to} は開始時点で既に compromised です"
+            )
+        if sp.to in innocent:
+            raise ValueError(
+                f"{sp.id}: 拡散先 {sp.to} が innocent に書かれています。"
+                "演習中に侵害される資産は、無関係ではありません"
+            )
+        if sp.to == gt.patient_zero:
+            raise ValueError(f"{sp.id}: 拡散先が patient_zero です")
+        if sp.to in seen:
+            raise ValueError(f"{sp.id}: 拡散先 {sp.to} が2度侵害されています")
+        seen.add(sp.to)
+
+        if not sp.unless_contained:
+            raise ValueError(
+                f"{sp.id}: unless_contained が空です。"
+                "防ぎようのない拡散は、教材ではなく罰です"
+            )
+        stray = sorted(set(sp.unless_contained) - compromised)
+        if stray:
+            raise ValueError(
+                f"{sp.id}: unless_contained に侵害されていない資産があります: {stray}。"
+                "止める理由の無い手を押さないと防げない、という盤面になります"
+            )
+        floor = 0
+        for src in set(sp.unless_contained):
+            if src not in cheapest:
+                raise ValueError(f"{sp.id}: {src} を止める手が盤面にありません")
+            floor += cheapest[src]
+        if sp.at_minutes <= floor:
+            raise ValueError(
+                f"{sp.id}: {sp.at_minutes}分 までに配り元を止めきれません"
+                f"（最も安い止め方でも {floor}分 かかります）。"
+                "学習者の不作為ではなく、盤面の物理法則で起きる拡散です"
+            )
+
+        if not sp.reveals:
+            raise ValueError(
+                f"{sp.id}: reveals が空です。起きたことを知る資料が無いと、"
+                "窓の後に判定した学習者は増えた資産を名指しできないまま"
+                "再現率だけを落とします"
+            )
+        for eid in sp.reveals:
+            if eid not in ev_ids:
+                raise ValueError(f"{sp.id}: 未定義の証拠 {eid}")
+            ev = by_ev[eid]
+            if ev.misleading:
+                raise ValueError(
+                    f"{sp.id}: reveals に誤導証拠 {eid} があります。"
+                    "起きたことを知らせる資料は、誤導ではありません"
+                )
+            if sp.to not in ev.points_to:
+                raise ValueError(
+                    f"{sp.id}: reveals の {eid} が拡散先 {sp.to} を points_to に"
+                    "持っていません（名指しの裏付けにならない資料です）"
+                )
+            if eid in resolving:
+                raise ValueError(
+                    f"{sp.id}: reveals の {eid} が論点の解消に使われています。"
+                    "拡散を防いだ学習者だけが解けない論点になります"
+                )
+            if eid in refuting:
+                raise ValueError(
+                    f"{sp.id}: reveals の {eid} が誤導の棄却に使われています。"
+                    "拡散を防いだ学習者だけが畳めない誤導になります"
+                )
 
 
 def _reject_assets_no_action_can_touch(sc: "Scenario") -> None:
@@ -1090,16 +1278,15 @@ def _reject_timeline_that_names_assets(sc: "Scenario") -> None:
     「証拠にしない」という形式的な意味しか持っていなかった。
 
     アクションと違い、出来事には `targets` が無い — 自分が触る資産という
-    逃げ道が無いので、禁じるのは `compromised ∪ {patient_zero} ∪ persistence`
-    のすべてである。ブリーフィングが既に名指しした資産だけが書ける
+    逃げ道が無いので、禁じるのは
+    `compromised ∪ {patient_zero} ∪ persistence ∪ 拡散先` のすべてである
+    （`answer_assets`）。ブリーフィングが既に名指しした資産だけが書ける
     （他の検査と同じ免除規則）。
 
     **innocent は禁じない。** 無関係な資産の名前が出来事に出るのは誤導で
     あって漏洩ではない。むしろ出来事に誤導を載せるのは正当な設計である。
     """
-    gt = sc.world.ground_truth
-    secret = set(gt.compromised) | {gt.patient_zero} | set(gt.persistence)
-    secret -= briefing_assets(sc)
+    secret = answer_assets(sc) - briefing_assets(sc)
     by_id = sc.asset_by_id
 
     for ev in sc.timeline:
@@ -1207,9 +1394,7 @@ def _reject_questions_that_name_the_truth(sc: "Scenario") -> None:
     この検査は ground_truth を見るので作者にしか回らない。PlayerView は
     通らない（そちらには ground_truth が無い）。
     """
-    gt = sc.world.ground_truth
-    secret = set(gt.compromised) | {gt.patient_zero} | set(gt.persistence)
-    secret -= briefing_assets(sc)
+    secret = answer_assets(sc) - briefing_assets(sc)
     by_id = sc.asset_by_id
 
     for q in sc.open_questions:
@@ -1256,9 +1441,7 @@ def _reject_actions_that_name_other_assets(sc: "Scenario") -> None:
     書けば依然としてヒントである。保証するのは
     「自分が触らない資産の名前は出ない」までで、そこから先は書き手の仕事。
     """
-    gt = sc.world.ground_truth
-    secret = set(gt.compromised) | {gt.patient_zero} | set(gt.persistence)
-    secret -= briefing_assets(sc)
+    secret = answer_assets(sc) - briefing_assets(sc)
     by_id = sc.asset_by_id
 
     for act in sc.actions:
@@ -1933,10 +2116,13 @@ def _reject_unsatisfiable_capture_requirement(sc: "Scenario") -> None:
             if tags & set(a.tags)
             for asset in a.investigates
         }
-        missing = [a for a in sc.world.ground_truth.compromised if a not in covered]
+        # **拡散先も数える**（v1.48）。窓を跨いだプレイはその資産も
+        # 止めることになるので、採取の手が無いとその方針では必ず違反する
+        need = list(sc.world.ground_truth.compromised) + sorted(spread_targets(sc))
+        missing = [a for a in need if a not in covered]
         if missing:
             raise ValueError(
-                f"{p.id}: 揮発性証拠を取る手が無い侵害資産があります: {sorted(missing)}。"
+                f"{p.id}: 揮発性証拠を取る手が無い侵害資産があります: {sorted(set(missing))}。"
                 f"タグ {sorted(tags)} を持ち、その資産を investigates する"
                 "アクションが要る（この方針では止めれば必ず違反になる）"
             )
@@ -1960,10 +2146,14 @@ def _reject_uncontainable_compromise(sc: "Scenario") -> None:
         if a.type == ActionType.CONTAIN
         for t in a.targets
     }
-    missing = [a for a in sc.world.ground_truth.compromised if a not in targeted]
+    # **拡散先も数える**（v1.48）。窓を跨いだプレイでは、その資産が
+    # `compromised` に入る＝完全度の分母に入る。止める手が無いと、
+    # 遅れたプレイは何をしても完全度 1.0 に届かない
+    need = list(sc.world.ground_truth.compromised) + sorted(spread_targets(sc))
+    missing = [a for a in need if a not in targeted]
     if missing:
         raise ValueError(
-            f"直接止める手が無い侵害資産があります: {sorted(missing)}。"
+            f"直接止める手が無い侵害資産があります: {sorted(set(missing))}。"
             "封じ込めは依存連鎖しないため（6.3）、上流を止めても代わりにならない"
         )
 
@@ -2028,7 +2218,9 @@ def _reject_eradication_that_maps_persistence(sc: "Scenario") -> None:
     （`_reject_actions_that_name_other_assets` の「全員を名指し」と同じ理屈）。
     """
     gt = sc.world.ground_truth
-    secret = set(gt.compromised) | {gt.patient_zero}
+    # 拡散先は「まだ侵害されていない」が無実でもない。囮には数えない —
+    # 数えると、いずれ侵害される資産への手で囮の要件を満たせてしまう
+    secret = set(gt.compromised) | {gt.patient_zero} | spread_targets(sc)
     outsiders = {a.id for a in sc.world.assets} - secret
     if not outsiders:
         return

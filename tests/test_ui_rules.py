@@ -642,7 +642,11 @@ def test_the_entrance_and_the_list_share_one_card_builder(app_js):
     for fn in ("renderScenarioList", "renderTopScenarios"):
         part = body[body.index("function " + fn):]
         part = part[: part.index("\nfunction ")]
-        assert "fillScenarioCard(card, sc)" in part, f"{fn} が札を自前で組んでいる"
+        # 呼び方は `(card, sc)` と `(card, sc, opts)` の2通りある。
+        # **見ているのは引数ではなく、札を組む場所がここに無いこと。**
+        # 入口は題だけを出すので第3引数で行を落とすが、落とす判断は
+        # 組み立て側にあり、呼ぶ側は相変わらず何も書いていない。
+        assert "fillScenarioCard(card, sc" in part, f"{fn} が札を自前で組んでいる"
         assert "card-title" not in part, f"{fn} が札の中身を自前で書いている"
 
 

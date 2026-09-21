@@ -41,6 +41,13 @@ class AssessmentSnapshot(BaseModel):
     assessed_assets: list[str]
     unresolved_critical: list[str]
     obtained_evidence: list[str]
+    # **その瞬間に侵害されていた資産**（SPEC 5.2 / v1.48）。
+    # 拡散を持つ盤面では真実そのものが動くので、「判定した時点では
+    # 正しかった」を言うには、手元の証拠だけでなく世界の側も
+    # 凍らせておく必要がある。講評が「判定時点では N 台、
+    # 終了時点では M 台」と言えるのはこの欄があるからである。
+    # 拡散の無い盤面では compromised と同じ値が入る
+    compromised: list[str] = []
 
 
 class GameState(BaseModel):
@@ -68,6 +75,12 @@ class GameState(BaseModel):
     lost_evidence: list[str] = []
     resolved_questions: list[str] = []
     assessment: list[str] = []
+    # **直近の宣言の時点で侵害されていた資産**（SPEC 6.2 / v1.48）。
+    # 適合率と再現率はここを分母・照合先にする。被疑判定は対応フェーズ中も
+    # 出し直せる（3.6）ので、出し直した時点の世界と突き合わせる —
+    # 拡散に気づいて名指しを足した学習者が、そのせいで適合率を落とすのは
+    # 「気づいたことへの罰」になる。拡散の無い盤面では compromised と同値
+    assessment_compromised: list[str] = []
     assessment_snapshot: AssessmentSnapshot | None = None
     # 封じ込めた資産 → その時刻（分）。**直接 targets だけ。依存連鎖しない。**
     # 「どの資産で攻撃が止まるか」の答え。dc01 の電源を落としても
@@ -96,6 +109,12 @@ class GameState(BaseModel):
     # ビューには出さない — プレイ中に「今のは外れだった」と告げるのと同じになる
     investigation_minutes: int = 0
     misled_follow_minutes: int = 0
+    # 演習中に侵害された資産 → その時刻（分）。SPEC 5.2 の `spreads`。
+    # **真実が動くのはここだけである。** compromised は開始時点の集合で、
+    # 採点が見る集合は `compromised_now` がこの2つから組む
+    spread_at: dict[str, int] = {}
+    spreads_fired: list[str] = []      # 実際に配られた窓
+    spreads_averted: list[str] = []    # 配り元が止まっていて何も起きなかった窓
     fired_events: list[str] = []      # 発生済みの時間経過イベント
     # 先手を打って起きなくしたもの。既に起きた分には効かない
     prevented_events: list[str] = []
@@ -323,6 +342,50 @@ class Player(Protocol):
     def choose(self, view: PlayerView) -> Decision: ...
 
 
+# ─────────── 動く真実（SPEC 5.2 / v1.48） ───────────
+
+
+def compromised_now(scenario: Scenario, state: GameState) -> list[str]:
+    """いま侵害されている資産。開始時点の集合に、演習中に増えた分を足す。
+
+    **並びは資産一覧の順にする。** 講評が「N 台 → M 台」と並べる場所なので、
+    増えた分が末尾に固まっていると、どれが増えたのかを順序から読めてしまう。
+    """
+    base = list(scenario.world.ground_truth.compromised)
+    if not state.spread_at:
+        return base
+    both = set(base) | set(state.spread_at)
+    return [a.id for a in scenario.world.assets if a.id in both]
+
+
+def effective_truth(scenario: Scenario, state: GameState):
+    """被害モデルへ渡す ground_truth。侵害の広さだけを今の値に差し替える。
+
+    **`damage` の関数の形は変えない。** あちらは「真実を1つ受け取って
+    係数を返す」だけの純関数で、そこに演習の状態を持ち込むと、
+    盤面に拡散が無いときの挙動まで新しい経路を通ることになる。
+    """
+    gt = scenario.world.ground_truth
+    if not state.spread_at:
+        return gt
+    return gt.model_copy(update={"compromised": compromised_now(scenario, state)})
+
+
+def withheld_evidence(scenario: Scenario, state: GameState) -> set[str]:
+    """まだ起きていないので、取りに行っても出てこない資料（SPEC 5.2）。
+
+    拡散が起きて初めて実在する資料である。起きる前に渡すと、盤面は
+    **まだ起きていないことを配る**ことになる。防がれた窓の分は永久に
+    ここへ残る（起きなかったのだから、どこにも記録は無い）。
+    """
+    return {
+        eid
+        for sp in scenario.world.ground_truth.spreads
+        if sp.id not in state.spreads_fired
+        for eid in sp.reveals
+    }
+
+
 def _unlocked_by(action: Action, obtained: set[str], executed: set[str]) -> bool:
     """その手が今、一覧に出るか。
 
@@ -497,17 +560,48 @@ class Engine:
                 st.destroyed_by_world[eid] = ev.id
                 if eid not in st.obtained_evidence:
                     st.lost_evidence.append(eid)
-        increments = damage_mod.accrue(
-            self.scenario.damage,
-            self.scenario.world.ground_truth,
-            st.contained_at.keys(),
-            st.eradicated_at.keys(),
-            start,
-            end,
-        )
-        for inc in increments:
-            st.accumulated_damage += inc
-            st.damage_history.append(st.accumulated_damage)
+        def _accrue(a: int, b: int) -> None:
+            for inc in damage_mod.accrue(
+                self.scenario.damage,
+                effective_truth(self.scenario, st),
+                st.contained_at.keys(),
+                st.eradicated_at.keys(),
+                a,
+                b,
+            ):
+                st.accumulated_damage += inc
+                st.damage_history.append(st.accumulated_damage)
+
+        # 拡散（SPEC 5.2）。**配る窓は、時計を進めた区間の中で通り過ぎる。**
+        # 配り元が既に止まっていれば、その窓では何も起きない。
+        # 止め終わったのが窓より後なら間に合っていない — 連絡（5.6.1）と
+        # 同じで、効くのは打ち終わった時刻からである。
+        #
+        # **学習者には何も告げない**（原則5）。盤が動いたことは、あとで
+        # 資料を引き直したときに初めて分かる。ここで知らせると、
+        # 待っているだけで答えの一部が届くことになる（5.10 と同じ理由）。
+        #
+        # 被害の積分は窓で切る。区間の頭から終わりまでを新しい広さで
+        # 数えると、まだ配られていない時間まで拡散の分を払わせることになる。
+        cursor = start
+        for sp in sorted(
+            (
+                sp
+                for sp in self.scenario.world.ground_truth.spreads
+                if start < sp.at_minutes <= end
+                and sp.id not in st.spreads_fired
+                and sp.id not in st.spreads_averted
+            ),
+            key=lambda sp: sp.at_minutes,
+        ):
+            _accrue(cursor, sp.at_minutes)
+            cursor = sp.at_minutes
+            if set(sp.unless_contained) <= set(st.contained_at):
+                st.spreads_averted.append(sp.id)
+                continue
+            st.spreads_fired.append(sp.id)
+            st.spread_at.setdefault(sp.to, sp.at_minutes)
+        _accrue(cursor, end)
         st.elapsed_minutes = end
 
         # 解放前のアクション数。何が増えたかを学習者に返すため
@@ -515,7 +609,10 @@ class Engine:
 
         # 4. 証拠の開示
         revealed: list[str] = []
+        withheld = withheld_evidence(self.scenario, st)
         for eid in action.yields:
+            if eid in withheld:
+                continue  # まだ起きていないので、そこには何も無い（SPEC 5.2）
             if eid in st.destroyed_evidence:
                 continue  # 既に失われたものは出てこない
             if eid not in st.obtained_evidence:
@@ -697,6 +794,10 @@ class Engine:
         seen: set[str] = set()
         cleaned = [a for a in assessment if not (a in seen or seen.add(a))]
         self.state.assessment = cleaned
+        # 突き合わせる相手は、**その瞬間の世界**である（SPEC 6.2 / v1.48）。
+        # 出し直すたびに更新する — 拡散に気づいて名指しを足した学習者が、
+        # そのせいで適合率を落とすのは、気づいたことへの罰になる
+        self.state.assessment_compromised = compromised_now(self.scenario, self.state)
 
         if self.state.assessment_snapshot is None:
             # 宣言時点のスナップショットが採点の基準点になる（SPEC 3.6）
@@ -707,6 +808,7 @@ class Engine:
                     self.scenario, self.state.obtained_evidence
                 ),
                 obtained_evidence=list(self.state.obtained_evidence),
+                compromised=list(self.state.assessment_compromised),
             )
             # 宣言を要求したフェーズへそのまま進む
             nxt = self._next_phase()

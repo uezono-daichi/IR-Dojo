@@ -329,7 +329,13 @@ function renderTopScenarios() {
     card.setAttribute('role', 'button');
     card.setAttribute('data-scenario', sc.id);
     card.setAttribute('tabindex', '0');
-    fillScenarioCard(card, sc);
+    // **入口の札は題だけを出す。** ここでの札の役目は「何が入っているか」を
+    // 一目で見せることであって、絞り込みではない。タグも複雑度も選ぶための
+    // 道具なので、選択画面の札に置く。
+    // 5本目で、タグの行が 1280×720 の入口を 37px 溢れさせた。行を減らして
+    // 収めたが、今度は横が 5列に割れて題が3文字で切れた — 複雑度の星が
+    // 題と幅を取り合うため。**札が細くなるほど、先に消えるのは題ではない。**
+    fillScenarioCard(card, sc, { tags: false, complexity: false });
     function go() { toSelect(sc); }
     card.addEventListener('click', go);
     card.addEventListener('keydown', function (e) {
@@ -396,14 +402,18 @@ function showListError(err) {
 
    別々に書くと片方だけが古い並びのまま残る — 凡例の手書きモックが
    3フェーズのまま腐ったのと同じ壊れ方をする（SPEC 7.6.7）。 */
-function fillScenarioCard(card, sc) {
+function fillScenarioCard(card, sc, opts) {
   var head = el('div', 'card-head');
   head.appendChild(el('div', 'card-title', sc.title));
-  head.appendChild(el('div', 'dim',
-    '複雑度 ' + '★'.repeat(sc.complexity) + '☆'.repeat(5 - sc.complexity)));
+  if (!opts || opts.complexity !== false) {
+    head.appendChild(el('div', 'dim',
+      '複雑度 ' + '★'.repeat(sc.complexity) + '☆'.repeat(5 - sc.complexity)));
+  }
   card.appendChild(head);
-  card.appendChild(el('div', 'faint',
-    sc.tags.join(' / ') + '\u3000約' + sc.estimated_play_minutes + '分'));
+  if (!opts || opts.tags !== false) {
+    card.appendChild(el('div', 'faint',
+      sc.tags.join(' / ') + '\u3000約' + sc.estimated_play_minutes + '分'));
+  }
   return card;
 }
 
@@ -2327,6 +2337,9 @@ function blockTruth(rep) {
     b.appendChild(g);
   }
 
+  var sp = blockSpread(rep);
+  if (sp) { b.appendChild(sp); }
+
   var cr = blockContainment(rep);
   if (cr) { b.appendChild(cr); }
 
@@ -2345,6 +2358,54 @@ function blockTruth(rep) {
     b.appendChild(ul);
   }
   return b;
+}
+
+// 真実が動いたことの開示（SPEC 5.2 / 7.6.13）。
+// **プレイ中は一言も告げない。** 配られたことは学習者に見えていないので、
+// その場で言えば損失の予告になる（原則5）。ここが唯一の開示の場である。
+//
+// 数字を2つ並べる理由: 事実認識層は判定時点の広さで、封じ込めの完全度は
+// 終了時点の広さで採点する。言わないと、再現率 100% と完全度 67% が
+// 同じ画面に並んでいる理由がどこにも書かれていないことになる。
+function blockSpread(rep) {
+  var s = rep.spread;
+  if (!s || !s.steps.length) { return null; }
+  var moved = s.at_finish > s.at_decision;
+
+  var box = el('div', moved ? 'note-warn' : 'note');
+  box.appendChild(el('h3', null, '調べている間に、盤面がどう動いたか'));
+
+  var g = el('div', 'summary-grid');
+  g.appendChild(el('div', 'k', 'あなたが判定した時点（' + s.decided_at_minute + '分）'));
+  g.appendChild(el('div', 'v', s.at_decision + '台　' + s.decision_labels.join('、')));
+  g.appendChild(el('div', 'k', '演習を終えた時点'));
+  g.appendChild(el('div', 'v', s.at_finish + '台　' + s.finish_labels.join('、')));
+  box.appendChild(g);
+
+  s.steps.forEach(function (st) {
+    var line = el('p', st.happened ? null : 'dim');
+    if (st.happened) {
+      line.appendChild(document.createTextNode(
+        st.at_minute + '分、' + st.label + 'へ配られました。' +
+        st.source_labels.join('、') + 'を止めてあれば、この配信は走っていません。' +
+        (st.stopped_at === null
+          ? '演習の終わりまで止まっていませんでした。'
+          : '止め終わったのは ' + st.stopped_at + '分で、' +
+            (st.stopped_at - st.at_minute) + '分 遅れていました。')));
+    } else {
+      line.appendChild(document.createTextNode(
+        st.at_minute + '分の配信は走りませんでした。' +
+        st.source_labels.join('、') + 'が既に止まっていたためです。'));
+    }
+    box.appendChild(line);
+  });
+
+  if (moved) {
+    box.appendChild(el('p', 'faint',
+      '被疑判定は、宣言した時点の盤面と突き合わせて採点しています。' +
+      'そのときの名指しが正しかったかと、最後まで止めきれたかは別の問いです。'));
+  }
+  return box;
 }
 
 // 封じ込めの答え合わせ（SPEC 5.8 / 7.6.13）。

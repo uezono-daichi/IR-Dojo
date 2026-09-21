@@ -14,7 +14,7 @@ from .. import damage as damage_mod
 from .. import records as records_mod
 from .. import retrospective as retro_mod
 from .. import scoring as scoring_mod
-from ..engine import GameState
+from ..engine import GameState, compromised_now, effective_truth
 from ..schema import Scenario
 
 # ⑥ に出す履歴の件数。全件は records_total で数だけ伝える
@@ -51,6 +51,38 @@ class TruthReveal(BaseModel):
     patient_zero: str
     persistence: list[str]
     misleading_evidence: list[str]  # 事後に色分けするため
+
+
+class SpreadStep(BaseModel):
+    """演習中に配られた（あるいは配られずに済んだ）窓1つ（SPEC 5.2 / 7.6.13）。
+
+    **プレイ中は一言も告げない。** 盤が動いたことを学習者は見ていないので、
+    その場で言えば損失の予告になる（原則5）。ここが唯一の開示の場である。
+    """
+
+    asset: str
+    label: str
+    at_minute: int
+    happened: bool                # 実際に配られたか
+    source_labels: list[str]      # 止めてあれば防げた資産
+    stopped_at: int | None        # その配り元を止め終わった時刻（間に合わなかった分も出す）
+
+
+class SpreadReview(BaseModel):
+    """真実が動いたことの開示（SPEC 5.2 / 7.6.13）。
+
+    「あなたが判定した時点では N 台、終了時点では M 台」を言う。
+    事実認識層は判定時点の N で採点し、封じ込めの完全度は終了時点の M で
+    採点する — **数字が2つあることを言わないと、講評の中で
+    再現率 100% と完全度 67% が同居する理由が読めない。**
+    """
+
+    at_decision: int
+    at_finish: int
+    decision_labels: list[str]
+    finish_labels: list[str]
+    decided_at_minute: int
+    steps: list[SpreadStep]
 
 
 class ContainmentReview(BaseModel):
@@ -282,6 +314,8 @@ class Report(BaseModel):
     truth: TruthReveal | None
     # 封じ込めの答え合わせ。reveal_ground_truth が false なら出さない
     containment: ContainmentReview | None
+    # 真実が動いた盤面でだけ出す。動かない盤面では None（SPEC 5.2）
+    spread: SpreadReview | None
     key_lessons: list[str]
     replay_suggestions: list[dict[str, str]]
     damage_history: list[float]
@@ -332,10 +366,15 @@ def build(
     truth = None
     if scenario.debrief.reveal_ground_truth:
         gt = scenario.world.ground_truth
+        # **このプレイで実際に侵害されていた資産**（v1.48）。真実が動く盤面では
+        # 開始時点の集合を出すと、すぐ下の「終えた時点 4台」と食い違って見える。
+        # どちらも本当のことなので、片方だけを「実際に」と呼んではいけない —
+        # 何台になったかはこのプレイの帰結であり、増えた理由は次の節が言う
+        ended = compromised_now(scenario, state)
         truth = TruthReveal(
             attack_narrative=gt.attack_narrative,
-            compromised=list(gt.compromised),
-            compromised_labels=[_label(assets, a) for a in gt.compromised],
+            compromised=list(ended),
+            compromised_labels=[_label(assets, a) for a in ended],
             innocent=list(gt.innocent),
             innocent_labels=[_label(assets, a) for a in gt.innocent],
             patient_zero=gt.patient_zero,
@@ -535,6 +574,7 @@ def build(
         retrospective=retro,
         truth=truth,
         containment=_containment_review(state, scenario) if truth else None,
+        spread=_spread_review(state, scenario) if truth else None,
         key_lessons=list(scenario.debrief.key_lessons),
         replay_suggestions=[
             {
@@ -559,6 +599,49 @@ def build(
     )
 
 
+def _spread_review(state: GameState, scenario: Scenario) -> SpreadReview | None:
+    """真実が動いたことを開示する（SPEC 5.2）。
+
+    **拡散の無い盤面では None を返す。** 動かない盤面に「判定時点 3台／
+    終了時点 3台」と出しても、読み手には何の話か分からない。
+    """
+    gt = scenario.world.ground_truth
+    if not gt.spreads:
+        return None
+
+    assets = scenario.asset_by_id
+    snap = state.assessment_snapshot
+    at_decision = list(snap.compromised) if snap else list(gt.compromised)
+    at_finish = compromised_now(scenario, state)
+
+    steps: list[SpreadStep] = []
+    for sp in gt.spreads:
+        if sp.id not in state.spreads_fired and sp.id not in state.spreads_averted:
+            continue      # その窓が来る前に手を止めた。起きなかった話はしない
+        stopped = [state.contained_at[a] for a in sp.unless_contained
+                   if a in state.contained_at]
+        steps.append(
+            SpreadStep(
+                asset=sp.to,
+                label=_label(assets, sp.to),
+                at_minute=sp.at_minutes,
+                happened=(sp.id in state.spreads_fired),
+                source_labels=[_label(assets, a) for a in sp.unless_contained],
+                stopped_at=max(stopped) if len(stopped) == len(set(sp.unless_contained))
+                else None,
+            )
+        )
+
+    return SpreadReview(
+        at_decision=len(at_decision),
+        at_finish=len(at_finish),
+        decision_labels=[_label(assets, a) for a in at_decision],
+        finish_labels=[_label(assets, a) for a in at_finish],
+        decided_at_minute=snap.at_minute if snap else 0,
+        steps=steps,
+    )
+
+
 def _containment_review(
     state: GameState, scenario: Scenario
 ) -> ContainmentReview:
@@ -567,12 +650,15 @@ def _containment_review(
     `ground_truth` を読むので、**講評の経路にしか置けない。**
     プレイ中のどのレスポンスにもこの形は現れない。
     """
-    gt = scenario.world.ground_truth
+    gt = effective_truth(scenario, state)
     effect = scenario.damage.containment_effect
     assets = scenario.asset_by_id
 
     contained = set(state.contained_at)
     purged = set(state.eradicated_at)
+    # **終了時点の広さで答え合わせする**（SPEC 5.2）。演習中に配られた先は、
+    # 止めるべきものとしてここに並ぶ。判定時点の広さで見ると、
+    # 「全部止めた」と書いてあるのに被害が緩まない講評になる
     compromised = list(gt.compromised)
     persistence = list(gt.persistence)
 

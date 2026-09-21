@@ -1,0 +1,1930 @@
+schema_version: "0.4"
+
+meta:
+  id: insider-exfil-suspicion-01
+  title: "最終出社まで十日"
+  version: "1.0.0"
+  author: "IR Dojo"
+  license: "CC-BY-4.0"
+  estimated_play_minutes: 10
+  language: ja
+  # 既定は立証可能性最優先。この盤面の中心は「止めるのを遅らせることが
+  # 正解になりうる」で、それが最も強く出るのがこの方針である（SPEC 5.3）
+  default_policy: provability
+  default_assist_level: assisted
+  briefing: |
+    9/16 09:20、持ち出し検知の仕組みから警告が1件。
+    部門の共有領域で、直近8日のうち2晩に、業務アカウント
+    u317@example.com が 2,148 件の資料を参照している。
+
+    このアカウントの利用者は 9/30 付で退職が決まっており、最終出社は 9/26。
+    転職先は同業だと本人が申告している。
+
+    人事と法務からは、先に2つ言われている。
+      「本人に伝わった時点から先のことは、こちらでは押さえられません」
+      「疑いの段階で就業を一方的に止めることは、こちらが持ちません」
+
+    あなたは情報セキュリティ担当として対応にあたる。
+    現時点の一次情報は、この警告1件だけである。
+  tags: [insider, data-exfiltration, provability, misleading-evidence]
+
+world:
+  assets:
+    # 依存の根。ここを締めると部門全体が止まる（SPEC 7.6.7 の構成図の根）
+    - id: dirsvc
+      label: "社内ディレクトリ"
+      aliases: ["dir.example.com"]
+      criticality: critical
+      depends_on: []
+      business_impact_per_hour: 85
+
+    # 読まれた側。**乗っ取られてはいない。** 権限は正規のまま、
+    # 見える範囲がそのまま読まれた（SPEC 8.6 の「どちらにも書けない」状態）
+    - id: share-sales
+      label: "共有ストレージ 営業企画領域"
+      aliases: ["営業企画領域", "fs-sales"]
+      criticality: high
+      depends_on: [dirsvc]
+      business_impact_per_hour: 48
+
+    - id: ws-317
+      label: "退職予定者の業務端末"
+      criticality: medium
+      depends_on: [dirsvc]
+      # 端末を1台止める代価は、盤面の物語で決める（SPEC 5.2）。
+      # ここには引き継ぎ中の案件がそのまま載っているので、止めれば
+      # 後任への受け渡しが止まる。一律に小さく置くと、誤導に乗って
+      # 無関係な端末を止めた代価が方針適合層に一度も現れない
+      business_impact_per_hour: 30
+
+    - id: ws-224
+      label: "営業企画部の同僚端末"
+      criticality: medium
+      depends_on: [dirsvc]
+      business_impact_per_hour: 26
+
+    - id: acct-317
+      label: "退職予定者の業務アカウント"
+      # 記録の中では利用者名がそのまま呼び名になる。
+      # ブリーフィングが名指ししている唯一の資産でもある
+      aliases: ["u317@example.com", "u317"]
+      criticality: low
+      depends_on: [dirsvc]
+      business_impact_per_hour: 5
+
+    - id: phone-317
+      label: "社給携帯"
+      aliases: ["PHN-317"]
+      criticality: low
+      depends_on: [dirsvc]
+      business_impact_per_hour: 4
+
+    # 会社の管理下に無い資産。止めることも、取り除くことも、
+    # 相手（事業者と本人）の手続きを通してしか届かない
+    - id: store-personal
+      label: "私物の外部保管"
+      aliases: ["外部保管サービス", "stor.example.net"]
+      criticality: low
+      depends_on: []
+      business_impact_per_hour: 2
+
+  ground_truth:
+    patient_zero: ws-317
+    compromised: [ws-317, acct-317, store-personal]
+    persistence: [ws-317, store-personal]
+    innocent: [ws-224, phone-317]
+    attack_narrative: |
+      9/8 22:07 と 9/12 21:28 の2晩、営業企画部の担当者が自席の業務端末 WS-317 から、
+      共有ストレージの営業企画領域にある価格表・見積・取引先一覧を一括で取得した。
+      権限は正規のもので、破られたものは何も無い。見えていた範囲が、そのまま読まれた。
+
+      持ち出しは社内回線を通っていない。端末の内蔵回線（携帯網）へ手動で切り替え、
+      ブラウザから私物の外部保管 stor.example.net へ直接アップロードしている。
+      境界のプロキシには、この 2晩ぶんの送信が1バイトも載らない。
+
+      端末には、その外部保管の同期クライアントと、保存されたままの資格情報が残っている。
+      外部保管の側には、上がった 2,1xx オブジェクトと、社外へ配れる共有リンクが1本生きている。
+      止めただけでは、どちらも元に戻らない。
+
+      同僚端末 WS-224 の 9/9 の一括取得は、部門の作業依頼 WO-2026-0412 によるものである。
+      期末の提案雛形を各自の端末へ落とす手順が配られており、部門12名が同じ動きをしている。
+      取得先は雛形の置き場だけで、価格表にも取引先一覧にも触れていない。
+
+      社給携帯 PHN-317 の 5月の通信量は、全社に配られた写真移行ツールの一括転送による。
+      展開は 5/11〜5/22、最終利用も 5/22 で、以後の月間は 2〜4 GB に戻っている。
+
+      本人が持ち出しを知られたと分かった時点で、外部保管の中身は消え、
+      端末は「返却前の初期化」という正規の手続きで消える。どちらも誰も咎められない。
+      この盤面で失われるものは、すべて正規の手続きと善意によって失われる。
+
+policies:
+  # ── この盤面の中心。**止めるのを遅らせることが正解になりうる。**
+  # 1本目・2本目では「証拠保全最優先」が周知を歓迎する側だった。
+  # ここでは逆で、全社への周知は本人に届く。周知を禁じるのは
+  # 就業関係の方針のほうで、この方針は周知を歓迎する側に残る —
+  # つまり**同じ型の手が、盤面をまたいで向きを変えている**（SPEC 5.6.1）
+  - id: provability
+    label: "立証可能性最優先"
+    briefing: |
+      法的手続きと対外的な説明に耐える形で事実を確定することを最優先とする。
+      業務影響および封じ込めの速さは二次的な考慮事項とする。
+
+      止める資産ごとに、その資産の状態を先に保全すること。
+      別の資産で保全できていることは、この要件を満たさない。
+
+      本人への接触は、こちらの手が届く範囲の外に記録を追い出す。
+      聴取は、押さえるものを押さえ終えてからでなければ行わないこと。
+
+      元の状態へ戻す作業は、戻す前の状態を控えてから行うこと。
+    weights:
+      evidence_preserved:       0.45
+      containment_completeness: 0.30
+      total_damage:             0.20
+      business_impact:          0.05
+    constraints:
+      # `require_before` ではなく `require_capture_of_target`（SPEC 5.3 / v1.40）。
+      # 前者は盤面のどこか1つで満たせるので、端末を保全しただけで
+      # 私物の外部保管を止めてよくなる ＝ この方針が事実上無料になる
+      - type: require_capture_of_target
+        action_type: contain
+        prerequisite_tags: [forensic_capture]
+        message: "止める資産の状態を、止める前に保全していません"
+      # **この盤面の題材そのもの。** 聴取は 30分の調査アクションだが、
+      # この方針の下では「押してはいけない手」になる。
+      # 就業関係への配慮の下では、逆に押さないことが説明できなくなる
+      - type: forbid_action
+        action_ids: [act_interview_subject]
+        message: "押さえる前の接触は、こちらの手が届く範囲の外に記録を追い出します"
+      - type: forbid_action
+        action_ids: [act_purge_and_suspend]
+        message: "初期化と停止の要請は、証明に要る状態をまとめて消します"
+      # **控えを取らずに戻す手も、この方針では取れない。** これが無いと
+      # 立証可能性と就業関係が同じ組に着地し、3方針あっても盤面が
+      # 答えられるのは2通りになる（SPEC 5.3 / 8.3 の「複製された方針」）
+      - type: forbid_action
+        action_ids: [act_remove_in_place]
+        message: "戻す前の状態を控えていません。外した後の状態は残りません"
+
+  - id: rapid_containment
+    label: "早期封じ込め最優先"
+    briefing: |
+      渡る量をこれ以上増やさないことを最優先とする。
+      証拠保全および業務影響は二次的な考慮事項とする。
+
+      止めるべきものは、根拠が固まる前でも止めてよい。
+      立会いや控えを待つ形の措置は取らないこと。待っている間も渡り続ける。
+      通り道を塞ぐだけで凌がず、手元に残っている状態ごと落とすこと。
+      資格情報を入れ替えても、いま開いている画面と保存された鍵は落ちない。
+      止めるならサインインごと止めること。
+    weights:
+      total_damage:             0.50
+      containment_completeness: 0.30
+      business_impact:          0.10
+      evidence_preserved:       0.10
+    constraints:
+      # 立会いを取り付けるまでの 45分も、控えを取る 60分も、渡り続ける時間である。
+      # 就業関係にとって最良の手と、立証可能性にとって最良の手が、
+      # どちらもこの方針では違反になる（SPEC 5.6 / 3つの締め方に3つの方針）
+      - type: forbid_action
+        action_ids: [act_remove_in_place]
+        message: "立会いを待つ間も渡り続けます。この方針では待たずに落とすこと"
+      - type: forbid_action
+        action_ids: [act_preserve_then_remove]
+        message: "控えを取る間も渡り続けます。この方針では書き出しを待たずに落とすこと"
+      # 入れ替えでは、いま開いている画面と端末に保存された鍵はそのまま生きる。
+      # 就業関係への配慮にとって最良の手（本人が仕事を続けられる締め方）が、
+      # この方針では違反になる
+      - type: forbid_action
+        action_ids: [act_reset_acct_317]
+        message: "入れ替えでは、いま開いている画面と保存された鍵は落ちません"
+
+  - id: employment_care
+    label: "就業関係への配慮最優先"
+    briefing: |
+      対象者はまだ疑いの段階であり、就業の継続を一方的に断つことは避ける。
+      業務が止まる形の措置は最終手段とし、部門の仕事を止めないこと。
+
+      本人の業務を止める措置（サインインの停止、貸与品の取り上げ）は取らないこと。
+      部門全体に調査を知らせる形の連絡も取らないこと。特定の個人が読み取れる。
+
+      対象者の機器・アカウントと、依存の根にあたる仕組みを止める場合は、
+      それを示す材料を手元に持っていること。
+    weights:
+      business_impact:          0.40
+      containment_completeness: 0.25
+      total_damage:             0.20
+      evidence_preserved:       0.15
+    constraints:
+      - type: forbid_containment_without_evidence
+        assets: [dirsvc, ws-317, store-personal]
+        message: "材料なしに止めることは、疑いだけで不利益を与えることになります"
+      # **1本目の「業務継続最優先が周知を禁じる」と同じ位置にある制約だが、
+      # 理由が違う。** 業務が止まるからではなく、部門全体への連絡が
+      # 特定の個人を事実上名指しするからである（SPEC 5.6.1 の費用の付け方）
+      - type: forbid_action
+        action_ids: [act_preservation_notice]
+        message: "部門全体への保全の連絡は、疑われている個人を事実上名指しします"
+      - type: forbid_action
+        action_ids: [act_seize_ws317]
+        message: "貸与品の取り上げは、疑いの段階で就業を断つことと同じです"
+      - type: forbid_action
+        action_ids: [act_disable_acct_317]
+        message: "サインインの停止は、疑いの段階で就業を断つことと同じです"
+
+evidence:
+  - id: ev_001
+    points_to: [acct-317]
+    misleading: false
+    plausibility: high
+    volatile: false
+    occurred_at: "2026-09-12 21:04"
+    summary: "9/8 と 9/12 の夜に、u317@example.com が価格表と取引先一覧を合わせて 2,148 件参照している"
+    reading: |
+      持ち出し検知の明細は「検知時刻 / 対象 / 規則 / 内訳」の順に並ぶ。
+
+      検知時刻は、規則に合致したと判定された時刻である。日次のバッチで
+      遡って検知する構成では、事象そのものの時刻は内訳の側にしか出ない。
+
+      規則 R-014 は、一定時間内の参照件数と、参照先に付いた機微区分の
+      2つが同時に条件を満たしたときに発報する。件数だけでも、区分だけでも
+      発報しない。しきい値は部門ごとに違う。
+
+      共有ストレージの監査が記録するのは「誰が何を開いたか」までである。
+      開いた後にその中身がどこへ行ったかは、別の帳簿の話になる。
+    possibilities:
+      - |-
+        退職を前に、引き継ぎの資料を手元へまとめた。参照先の区分で分かれる
+      - |-
+        部門で配られた手順に沿って、全員が同じ動きをした。他の人にも同じ形が出るかで分かれる
+      - |-
+        見えている範囲を、社外へ渡す目的で一度に取った。取った後の動きで分かれる
+    content: |
+      # 持ち出し検知 (DLP) アラート明細   ALERT-2026-0916-003
+
+        検知時刻   : 2026-09-16T09:18:40Z   (日次バッチによる遡及検知)
+        対象利用者 : u317@example.com
+        対象領域   : \\fs-sales\sales-plan
+        規則       : R-014「短時間の大量参照（機微区分を含む）」
+
+        内訳
+          2026-09-08 22:07 - 22:41   1,204 件   /sales-plan/pricing/
+          2026-09-12 21:04 - 21:53     944 件   /sales-plan/accounts/
+          合計 2,148 件 / 3.9 GB
+
+        同一規則の直近90日の発報 : 7 件（うち同一部門 4 件）
+
+        集計対象 : 共有ストレージの監査イベントのうち、規則に合致した参照
+        非対象   : 参照の後に何が行われたか、端末の内側で起きたこと
+
+  - id: ev_002
+    points_to: [acct-317]
+    misleading: false
+    plausibility: high
+    volatile: false
+    summary: "参照先は価格表と取引先一覧に偏っていて、雛形の置き場には一度も入っていない"
+    reading: |
+      共有ストレージの監査集計は、アカウント別の件数と、操作の種別で並ぶ。
+
+        FileAccessed   開いた・読み出した
+        FileModified   書き換えた
+        FileDeleted    消した
+
+      更新が 0 件の大量参照は、読み出しだけが行われたことを表す。
+      持ち出しでも、正規の資料収集でも、同じ形で記録される。
+
+      フォルダに付いた機微区分は、置かれている資料の扱いの重さを表す。
+      区分 2 は、社外へ出すときに承認が要るものを指す。
+
+      集計は期間全体の合計で、1件ごとの時刻は明細を引き直さないと出ない。
+    possibilities:
+      - |-
+        引き継ぎの範囲が、たまたま重い区分に寄っていた。依頼の記録と突き合わせて分かれる
+      - |-
+        部門の手順が指している置き場と、参照先がずれている。手順の側を見れば分かれる
+      - |-
+        社外へ出して価値のあるものだけを選んで取った。取った後の動きで分かれる
+    content: |
+      # 共有ストレージ 監査イベント集計 (2026-09-01 - 2026-09-16)
+      # 対象領域: \\fs-sales\sales-plan
+
+        アカウント別 上位
+          u317@example.com   2,148 件   Accessed 2,148 / Modified 0 / Deleted 0
+          u224@example.com   1,902 件   Accessed 1,902 / Modified 0 / Deleted 0
+          u108@example.com     311 件
+          その他 9 名        1,657 件
+
+        u317@example.com の内訳（フォルダ別）
+          /sales-plan/pricing/     1,204 件   価格表・原価表     機微区分 2
+          /sales-plan/accounts/      944 件   取引先一覧・与信   機微区分 2
+          /sales-plan/templates/       0 件   提案雛形           機微区分 0
+
+        集計対象 : 共有ストレージが記録した参照・更新・削除のイベント
+        非対象   : 参照した端末の識別、参照した後の複製先
+
+  - id: ev_003
+    points_to: []
+    clears: [store-personal]
+    misleading: true
+    plausibility: high
+    volatile: false
+    summary: "私物の外部保管 stor.example.net への送信は、期間を通して 8.4 MB しかない"
+    reading: |
+      宛先別の集計は「送信バイト / 受信バイト / 要求数」で並ぶ。
+
+      送信が大きい通信と受信が大きい通信では用途が違う。前者は外へ置く形、
+      後者は外から取る形になる。要求数だけでは向きが決まらない。
+
+      分類の欄は、この製品が宛先に付けている業種の札である。
+      札が付いていることと、その宛先が使われたかどうかは別の話になる。
+
+      収集範囲の欄は、この集計がどの経路の通信を数えたかを表す。
+      境界のプロキシは、そこを通った要求しか数えられない。
+    possibilities:
+      - |-
+        この宛先へは何も出ていない。端末の側に残る跡を見れば分かれる
+      - |-
+        出てはいるが、ここを通らない道から出たので数に載っていない
+      - |-
+        出てはいるが、集計の例外に入っていて宛先の行から落ちている
+    content: |
+      # 境界プロキシ 宛先別 送信量集計 (2026-09-01 - 2026-09-16)
+      # 対象: 営業企画部に貸与された端末 12 台
+
+        宛先                  送信        受信       要求数
+        sync.example.com      365 GB      12 GB      1,840,112
+        mail.example.com       88 GB      41 GB        402,551
+        crm.example.org        12 GB      77 GB        118,904
+        stor.example.net      8.4 MB     210 MB          1,377   分類: オンライン保管
+        news.example.org      1.1 MB     3.4 GB         44,209
+
+        stor.example.net の内訳
+          送信の最大 1 件 : 1.2 MB      送信を伴う要求 : 41
+
+        収集範囲 : 社内の有線・無線から境界プロキシを経由した要求
+        非対象   : 端末の内蔵回線（携帯網）から直接出た通信、社外での利用、
+                   プロキシの例外一覧に載っている宛先
+    refuted_by: [ev_004]
+
+  - id: ev_004
+    points_to: [store-personal]
+    misleading: false
+    plausibility: high
+    volatile: false
+    occurred_at: "2026-09-12 21:44"
+    summary: "外部保管サービスの側には 2,131 件・14.6 GB が上がっていて、社外へ配れる共有リンクが1本生きている"
+    reading: |
+      事業者からの開示は「契約者の識別 / 操作の記録 / 発信元」で構成される。
+
+      操作の記録の Upload は、その時刻に受け付けが完了した件数を表す。
+      受け付け側の時計なので、送り出した端末の時計とは数秒ずれる。
+
+      発信元の欄に並ぶアドレスは、要求がどの回線から届いたかを表す。
+      割り当て事業者の欄が「移動体通信」であれば、携帯の回線から届いている。
+
+      共有リンクの状態が active のものは、その URL を知っていれば
+      契約者以外でも開ける。開かれた回数は別の帳簿になる。
+    possibilities:
+      - |-
+        契約者が自分の資料を自分のために置いた。置かれたものの中身で分かれる
+      - |-
+        会社の資料が、会社の外へ渡せる形で置かれた。配れる口があるかで分かれる
+      - |-
+        置いたのは別の人で、契約者の口を借りただけ。届いた回線の側で分かれる
+    content: |
+      # 保全・開示要請 IR-0916-02 / stor.example.net 事業者回答
+      # 区分: 外部保管サービス（個人契約）
+
+        契約者識別 : 当社ドメインの個人用アドレスではなく、一般の受信箱
+        保全適用   : 2026-09-16T14:02Z （以後、契約者側からの削除は保留される）
+
+        Upload 記録（直近30日）
+          2026-09-08T22:15:31Z - 22:49:02Z    1,188 件    6.2 GB
+          2026-09-12T21:44:10Z - 22:07:55Z      943 件    8.4 GB
+          合計 2,131 件 / 14.6 GB
+
+        発信元
+          198.51.100.66     割り当て事業者: 移動体通信      要求 2,104
+          198.51.100.71     割り当て事業者: 移動体通信      要求   27
+
+        共有リンク
+          /s/7f2a91   state=active   作成 2026-09-12T22:11Z   期限なし   閲覧 0
+
+        開示範囲 : 事業者が保持している操作の記録と発信元
+        非対象   : 置かれたものの中身、契約者が別の端末で行った操作
+
+  - id: ev_005
+    points_to: [ws-317]
+    misleading: false
+    plausibility: high
+    volatile: false
+    occurred_at: "2026-09-12 21:38"
+    summary: "2晩とも、社内回線を切って内蔵回線へ切り替えた記録が WS-317 に残っている"
+    reading: |
+      接続プロファイルの履歴は、その端末がどの経路で外へ出ていたかを表す。
+
+        Corp-Wired / Corp-WiFi   社内の回線。境界のプロキシを通る
+        WWAN                     端末に内蔵された携帯回線。境界を通らない
+
+      切り替えは利用者の操作でも、電波の状況による自動でも起こる。
+      操作種別の欄が manual であれば、人が画面から切り替えている。
+
+      導入済みアプリケーションの一覧は、登録された時刻と発行元を持つ。
+      登録されていることと、使われたことは別の帳簿になる。
+
+      資産管理エージェントの外部記憶装置の記録は、エージェントが動いていて
+      かつサーバへ転送できた分だけを数える。
+    possibilities:
+      - |-
+        電波の具合で経路が切り替わり、たまたま時刻が重なった。切り替えの種別で分かれる
+      - |-
+        社内の回線が重いので、大きなものを外へ出す前に自分で切り替えた。行き先で分かれる
+      - |-
+        境界の記録に残らない道を選んで外へ出した。その道の先の帳簿を見れば分かれる
+    content: |
+      # WS-317  端末トリアージ（取得 2026-09-16T11:02Z）
+
+        接続プロファイルの履歴
+          2026-09-08T22:11:44Z  Corp-WiFi        -> Disconnected
+          2026-09-08T22:12:02Z  WWAN (内蔵回線)  -> Connected     APN=lte.example.net
+          2026-09-08T22:52:19Z  WWAN             -> Disconnected
+          2026-09-12T21:38:07Z  Corp-Wired       -> Disconnected  (ケーブル抜去)
+          2026-09-12T21:38:55Z  WWAN (内蔵回線)  -> Connected
+          2026-09-12T22:09:41Z  WWAN             -> Disconnected
+          切り替えの操作種別 : いずれも manual
+
+        導入済みアプリケーション（登録日順・末尾3件）
+          proposal-kit 2.9.0    登録 2026-07-02   発行元 社内配布
+          pdfjoin 1.4.3         登録 2026-08-14   発行元 社内配布
+          stor-desktop 4.2.1    登録 2026-08-29   発行元 stor.example.net
+
+        外部記憶装置の接続（資産管理エージェントの記録）
+          期間中 0 件
+
+        取得範囲 : ディスクに残るイベントログ・アプリ登録・接続プロファイル
+        非対象   : メモリ上にだけあるもの、記録を残さない手動の操作
+
+  - id: ev_006
+    points_to: [ws-317]
+    misleading: false
+    plausibility: high
+    volatile: false
+    occurred_at: "2026-09-08 22:15"
+    summary: "WS-317 のブラウザから stor.example.net へ、2晩で 2,131 ファイルが送信されている"
+    reading: |
+      ブラウザの保存領域は、履歴・ジャーナル・資格情報ストアの3つに分かれる。
+
+        form_submit   画面上の送信操作。files の欄は同時に添えた件数
+        navigate      画面の移動だけ。送信は伴わない
+
+      資格情報ストアの「保存あり」は、次に同じ画面を開いたときに
+      入力なしで入れる状態を指す。最終更新は保存し直した時刻である。
+
+      ジャーナルは端末の時計で書かれる。外の受け付け側の時計とは
+      数秒ずれることがある。
+
+      プライベートウィンドウでの操作は、この領域には何も書かれない。
+    possibilities:
+      - |-
+        画面から送ったのは本人ではなく、開いたままの画面を別の人が使った
+      - |-
+        送ったのは本人だが、行き先は会社が認めた保管先だった。申請の記録で分かれる
+      - |-
+        送ったのは本人で、行き先は会社の管理の外にある。受け取り側の記録で分かれる
+    content: |
+      # WS-317  ブラウザ保存領域の解析（既定プロファイル / 取得 2026-09-16T11:47Z）
+
+        送信ジャーナル
+          2026-09-08T22:15:12Z  form_submit  stor.example.net/u/   files=1188
+          2026-09-12T21:44:02Z  form_submit  stor.example.net/u/   files=943
+          同期間の他の form_submit : 6 件（社内の申請系 5 / 経費 1）
+
+        資格情報ストア
+          stor.example.net        利用者名 保存あり   最終更新 2026-09-08T22:09Z
+          crm.example.org         利用者名 保存あり   最終更新 2026-04-11T09:20Z
+
+        履歴（stor.example.net 配下・抜粋）
+          2026-09-12T22:11:35Z    共有リンクの管理画面
+          2026-09-12T22:12:08Z    共有リンクの管理画面（複製）
+
+        取得範囲 : 既定プロファイル配下の履歴・ジャーナル・資格情報ストア
+        非対象   : プライベートウィンドウでの操作、別プロファイル、
+                   削除の後に上書きされた領域
+
+  - id: ev_007
+    points_to: [ws-317]
+    misleading: false
+    plausibility: high
+    volatile: true
+    summary: "いまも同期の常駐が動いていて、期限が12月までの更新トークンをメモリに持っている"
+    reading: |
+      稼働中の一覧は、保全した時点のプロセス・ハンドル・ソケットを並べる。
+
+      「起動から」の欄は、そのプロセスが動き続けている長さである。
+      再起動を挟むと 0 に戻るので、直近の再起動より長い値は出ない。
+
+      待ち行列が 0 件であることは、送るものが残っていない状態を表す。
+      送り終えた後でも、送るものが最初から無くても、同じ 0 になる。
+
+      更新トークンは、利用者が画面にいなくてもその常駐が動き続けるための鍵で、
+      期限までは何度でも新しい接続を作れる。ディスク上の設定を消しても、
+      メモリに載っているものはその場では消えない。
+    possibilities:
+      - |-
+        置いた後の片付けが済んでいて、動いているのは器だけになっている
+      - |-
+        まだ送るものが残っていて、待ち行列が空くたびに次を拾いに行く
+      - |-
+        器も鍵も生きていて、外から新しい要求を受け取れる状態のまま残る
+    content: |
+      # WS-317  稼働中の状態（保全イメージからの一覧 / 取得 2026-09-16T11:22Z）
+
+        プロセス
+          PID 4812  stor-desktop.exe   起動から 71:24:06   親 explorer.exe
+          PID 4870  stor-sync.exe      起動から 71:24:04   親 stor-desktop.exe
+          PID 2208  proposal-kit.exe   起動から 06:11:40   親 explorer.exe
+
+        stor-sync.exe が開いているもの
+          待ち行列のフォルダ                    待ち行列 0 件
+          ハンドル 214 / ソケット 3
+
+        確立中の接続
+          192.0.2.44:443    ESTABLISHED   保持 00:41:12   プロセス stor-sync.exe
+
+        メモリ上の資格情報の断片
+          更新トークン 1 件   発行元 stor.example.net   期限 2026-12-07
+
+        取得範囲 : 取得した時点のプロセス・ハンドル・ソケット・資格情報の断片
+        非対象   : 取得より前に終了したプロセス、ディスクに書かれていない設定
+
+  - id: ev_008
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "メールでの持ち出しにあたるものは、社外宛ての送信にも転送規則にも見つからなかった"
+    reading: |
+      メッセージ追跡の1行は「時刻 / 差出人 / 宛先 / 件名 / 添付 / 結果」で並ぶ。
+
+      添付の欄は、実際に相手へ渡ったバイト数である。本文中のリンクは
+      ここには出ない。リンクで渡す形は、この帳簿では小さいまま記録される。
+
+      自動転送の規則は、サーバ側に保存されていれば一覧に出る。
+      端末の側だけに作った規則は、ここには載らない。
+
+      集計対象の欄は、この照会がどの範囲の送受信を数えたかを表す。
+      規則の追加と削除は、同じ帳簿の別の系統に記録される。
+    possibilities:
+      - |-
+        この経路は使われていない。外へ出したのなら別の経路が要る
+      - |-
+        使われてはいるが、渡し方が添付ではないのでこの欄には出ない
+      - |-
+        使われてはいるが、送った後に規則ごと片付けられて残っていない
+    content: |
+      # メッセージ追跡 (u317@example.com / 2026-08-17 - 2026-09-16)
+
+        送受信 総件数 : 1,904
+        社外宛て送信  : 118 件
+          うち添付あり : 12 件   添付の最大 : 2.1 MB   合計 : 8.8 MB
+          うち本文に外部のリンクを含む : 3 件（すべて社内の申請系）
+
+        自動転送の規則（サーバ側に保存されているもの）
+          登録 0 件     直近90日の追加・削除 0 件
+
+        直近90日の受信のうち、社外から当人宛て : 402 件
+
+        集計対象 : 追跡ログに残る送受信と、サーバ側に保存された転送規則
+        非対象   : 端末の側にだけ作られた規則、送信の本文そのもの、
+                   下書きのまま送られなかったもの
+
+  - id: ev_009
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "系統ごとに残る長さが違い、サインインの記録は 30日で落ちていく"
+    reading: |
+      書き出しの目録は「系統 / 範囲 / 件数 / 保持」で並ぶ。
+
+      保持の欄は、その系統がテナント側に残っている長さである。
+      同じ出来事でも、どの系統に載るかで残っている期間が違う。
+
+      書き出し先の「書き換え不可」は、写した後の分がテナント側の
+      保持期間の影響を受けなくなることを表す。写す前に落ちた日は戻らない。
+
+      ハッシュの照合は、写したものと元が同じであることを後から示すための
+      手続きで、中身が何であるかについては何も言わない。
+    possibilities:
+      - |-
+        押さえる範囲は押さえてあり、ここから先は中身を読む作業になる
+      - |-
+        押さえたのは保持の内側だけで、外側にあった日は初めから入らない
+      - |-
+        落ちるのが早い系統から先に読まないと、読む前に消える順になる
+    content: |
+      # 保全先への書き出し  JOB-0916-11 (u317@example.com)
+
+        書き出した系統と範囲
+          メッセージ追跡      2026-06-18 - 2026-09-16    1,904 件   保持 90日
+          サインイン          2026-08-17 - 2026-09-16      412 件   保持 30日
+          共有ストレージ監査  2026-06-18 - 2026-09-16   12,088 件   保持 90日
+            対象領域: \\fs-sales\sales-plan 配下すべて
+          端末インベントリ    現在値のみ                     1 件   保持 なし
+
+        ハッシュ   : 全ファイルについて算出済（照合 1 回・相違 0）
+        書き出し先 : 監査用保管（書き換え不可 / 保持 7 年）
+
+        書き出し対象 : 上の系統のうち、この時点でまだ保持の内側にある分
+        非対象       : 保持を過ぎて既に落ちた日の分、端末の内側にある記録
+
+  - id: ev_010
+    points_to: [ws-224]
+    misleading: true
+    plausibility: high
+    volatile: false
+    occurred_at: "2026-09-09 14:22"
+    summary: "同じ週に WS-224 も 1,902 件を一括で取得している"
+    reading: |
+      端末別の並べ直しは、共有ストレージの監査イベントに、端末管理の側が
+      持っている「そのとき誰がどの端末に座っていたか」を突き合わせて作る。
+
+      突き合わせの鍵はサインインの時刻で、同じ時間帯に複数の端末に
+      入っている利用者では、件数が両方に割り振られることがある。
+
+      「一括」の判定は、同一フォルダ配下への連続した参照が 5 分以内に
+      100 件を超えたかどうかで付ける。手で1件ずつ開いた場合は付かない。
+
+      取得先の欄は、その一括の中で最も件数が多かったフォルダを1つだけ出す。
+    possibilities:
+      - |-
+        二人が別の理由でたまたま同じ週に同じことをした。取った先が同じかで分かれる
+      - |-
+        一つの指示が二人に届いていて、どちらもそれに従った。元をたどれば分かれる
+      - |-
+        片方が始めたやり方を、もう片方が見て真似た。始まりの時刻の並びで分かれる
+    content: |
+      # 一括取得の記録（端末別 / 2026-09-01 - 2026-09-16）
+
+        端末      件数     取得先（最多のフォルダ）             一括と判定した回数
+        WS-317   2,148     /sales-plan/pricing/                  2
+        WS-224   1,902     /sales-plan/templates/                1
+        WS-181     644     /sales-plan/templates/                1
+        WS-206     513     /sales-plan/templates/                1
+
+        WS-224 の明細
+          2026-09-09T14:22:05Z - 14:31:48Z   1,902 件   平均 3.3 件/秒
+
+        突き合わせ対象 : 監査イベントと、端末管理が持つ着席の記録
+        非対象         : 端末管理に登録されていない機器、手で1件ずつ開いた参照
+    refuted_by: [ev_014]
+
+  - id: ev_011
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "WS-224 に、外部の保管先へ出す仕掛けも、雛形の外への参照も認められない"
+    reading: |
+      端末トリアージの3つの欄は、それぞれ別のことを見ている。
+
+        導入済みアプリケーション   何が入っているか
+        接続プロファイルの履歴     どの経路で外へ出ていたか
+        送信ジャーナル             画面から何を送ったか
+
+      発行元が「社内配布」のものは、情報システム部の展開で入ったことを表す。
+      利用者が自分で入れたものは、発行元にその配布元が出る。
+
+      履歴の保持は既定のままであれば 90 日で、それより前は残らない。
+      取得範囲の欄は、この照会がどこまでを見たかを表す。
+    possibilities:
+      - |-
+        この端末では、外へ出す動きが起きていない。見ている範囲はここまでになる
+      - |-
+        外へ出してはいるが、この照会の範囲の外にある道を使って出た
+      - |-
+        外へ出してはいるが、残る前に片付けられていて欄に載らない
+    content: |
+      # WS-224  端末トリアージ（取得 2026-09-16T13:40Z）
+
+        導入済みアプリケーション（登録日順・末尾3件）
+          proposal-kit 2.9.0    登録 2026-07-02   発行元 社内配布
+          pdfjoin 1.4.3         登録 2026-08-14   発行元 社内配布
+          fontpack 3.0.1        登録 2026-09-01   発行元 社内配布
+
+        接続プロファイルの履歴（直近30日）
+          Corp-Wired / Corp-WiFi 以外の接続   0 件
+          WWAN の有効化                        0 件
+
+        送信ジャーナル（既定プロファイル / 直近30日）
+          form_submit   14 件（社内の申請系 11 / 経費 2 / 勤怠 1）
+
+        外部記憶装置の接続（資産管理エージェントの記録）
+          期間中 0 件
+
+        取得範囲 : ディスクに残るイベントログ・アプリ登録・接続プロファイル・
+                   既定プロファイルの送信ジャーナル
+        非対象   : メモリ上にだけあるもの、記録を残さない手動の操作、
+                   別プロファイルでの操作
+
+  - id: ev_012
+    points_to: [phone-317]
+    misleading: true
+    plausibility: high
+    volatile: false
+    summary: "PHN-317 の通信量が 5月だけ 41.2 GB と突出していて、その 9 割が上りである"
+    reading: |
+      携帯回線の利用明細は、契約回線ごとの月別の通信量で並ぶ。
+
+      上りは端末から外へ出た量、下りは外から端末へ入った量を表す。
+      上りが大きい月は、その端末から外へ何かを置いた形になる。
+
+      法人一括の契約は、会社が貸与した端末に付いた回線だけを含む。
+      同じ利用者が持つ別の回線は、この明細には出ない。
+
+      日別の内訳は、月の合計を日ごとに割ったもので、何を送ったかは持たない。
+      集計対象の欄は、この明細がどの回線を数えたかを表す。
+    possibilities:
+      - |-
+        その月に大きなものを外へ置いた。置いた中身が何かで分かれる
+      - |-
+        一度きりの入れ替えが走り、以後は元の量に戻った。月ごとの並びで分かれる
+      - |-
+        別の機器の通信がこの回線にまとめて計上された。台帳の側を見れば分かれる
+    content: |
+      # 携帯回線 利用明細（PHN-317 / 月別）
+
+        月         合計       上り       下り
+        2026-04     2.9 GB     0.4 GB     2.5 GB
+        2026-05    41.2 GB    38.7 GB     2.5 GB
+        2026-06     3.4 GB     0.5 GB     2.9 GB
+        2026-07     2.6 GB     0.3 GB     2.3 GB
+        2026-08     3.1 GB     0.4 GB     2.7 GB
+        2026-09     2.8 GB     0.4 GB     2.4 GB   (9/15 まで)
+
+        2026-05 の日別 上位
+          05-14  9.8 GB    05-15  8.1 GB    05-19  7.7 GB    05-21  6.9 GB
+
+        契約     : 法人一括（会社が貸与した端末に付いた回線のみ）
+        集計対象 : 契約回線を通った通信量
+        非対象   : 端末に内蔵された別の回線、社内の無線を通った分、
+                   何を送ったかの中身
+    refuted_by: [ev_013]
+
+  - id: ev_013
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "5月の全社展開で、貸与携帯に写真の移行を行う常駐が配られ、5/22 に配信を止めている"
+    reading: |
+      配布・展開の記録は、申請の番号ごとに「対象 / 期間 / 実施 / 終了処理」を持つ。
+
+      展開期間は、配信が有効だった期間である。その期間に端末が電源の
+      入っていた台数だけ、実際に配られる。
+
+      転送量の欄は、その展開で見込まれた1台あたりの量で、実績ではない。
+
+      終了処理の「配信停止」は、以後の新しい配布が止まることを表す。
+      既に入ったものがどうなるかは、その隣の欄に書かれる。
+
+      貸与品の返却手続きは、人事の退職登録を起点に自動で予約が入る。
+    possibilities:
+      - |-
+        台帳にある展開と、見えている量の時期がそろっている
+      - |-
+        台帳にある展開とは別に、同じ時期に何かが重なって走った
+      - |-
+        台帳には出ない利用者の操作が、同じ時期にたまたま重なった
+    content: |
+      # 情報システム部 配布・展開の記録（直近12か月）
+
+        DEP-2026-0031   写真データの移行を助ける常駐の配布
+          対象       : 全社の貸与携帯 318 台
+          展開期間   : 2026-05-11 - 2026-05-22
+          転送量     : 1 台あたり 12 - 48 GB（移行元の保有量による）
+          終了処理   : 2026-05-22 に配信停止。既に入った常駐は自動で削除
+
+        DEP-2026-0044   提案雛形 2.9.0 の配布
+          対象       : 営業企画部の貸与端末 12 台
+          配布元     : \\fs-sales\sales-plan\templates\
+          展開期間   : 2026-07-02 - 2026-07-03
+
+        貸与品の返却手続き（退職時の標準）
+          回収予約   : 最終出社の 3 営業日前に自動で投入
+          回収当日   : 初期化のうえ在庫へ戻す
+
+        照会対象 : 配布・展開の申請と実施の記録、貸与品手続きの標準
+        非対象   : 展開の後に利用者が自分で入れたもの、部門が個別に入れたもの
+
+  - id: ev_014
+    points_to: []
+    misleading: false
+    plausibility: high
+    volatile: false
+    summary: "部門の作業依頼が、期末の雛形一式を各自の端末へ落とす手順を 12 名に配っている"
+    reading: |
+      作業依頼の記録は「番号 / 依頼元 / 対象者 / 手順 / 対象の置き場」を持つ。
+
+      対象の置き場の欄は、その依頼が触ってよい範囲を1つだけ指す。
+      そこから外れた場所への参照は、この依頼では説明が付かない。
+
+      配布履歴は、依頼に添えられた手順書を誰がいつ開いたかを記録する。
+      開いたことと、手順のとおりに動いたことは別の帳簿になる。
+
+      期末の提案づくりは毎年この時期に立ち、同じ形の依頼が過去にも出ている。
+    possibilities:
+      - |-
+        見えている動きは、この依頼で全部が説明が付く形になっている
+      - |-
+        依頼で説明が付く動きと、そこから外れた動きが混ざっている
+      - |-
+        依頼はあるが、見えている動きはどれもその範囲に入っていない
+    content: |
+      # 部門の作業依頼と配布履歴  WO-2026-0412
+
+        依頼元   : 営業企画部長
+        起票     : 2026-09-05
+        件名     : 上期末 提案雛形の各自展開について
+        対象者   : 営業企画部 12 名（部門の全員）
+        期限     : 2026-09-12
+
+        手順（添付 手順書 v1.2）
+          1. 雛形の置き場を開き、配下を一括で各自の端末へ取得すること
+          2. 取得の対象は次の1か所に限ること
+               \\fs-sales\sales-plan\templates\
+          3. 価格・与信の置き場は今回の対象外。個別の申請で扱うこと
+
+        配布履歴（手順書を開いた記録）
+          12 名 / 12 名   2026-09-05 - 2026-09-08
+
+        照会対象 : 部門が起票した作業依頼と、添付の配布履歴
+        非対象   : 依頼の外で各自が行った作業、口頭での指示
+
+  - id: ev_015
+    points_to: []
+    misleading: false
+    plausibility: medium
+    volatile: false
+    summary: "本人は引き継ぎのためだと説明し、私物の側については契約が個人のものだとして保留した"
+    reading: |
+      聞き取りの記録は、質問と答えをそのまま並べ、こちらの判断は書かない。
+
+      同席者と開始・終了の時刻を残すのは、後からこの場の条件を
+      確かめられるようにするためである。
+
+      提出に応じた範囲と、応じなかった範囲を分けて書く。応じなかったことは
+      それ自体としては何も表さないが、この先どこまで手が届くかは変わる。
+
+      聞き取りは記録に残らないこと（どんな画面が出て、何を押したか）を
+      本人から得る唯一の手段で、ほかの帳簿には代えられない。
+    possibilities:
+      - |-
+        説明のとおりで、見えている動きは引き継ぎの範囲に収まっている
+      - |-
+        説明と見えている動きの間にずれがあり、ずれの側に理由がある
+      - |-
+        説明は事実だが、範囲の取り方がこちらの想定と食い違っている
+    content: |
+      # 聞き取り記録  2026-09-16 15:10 - 15:52
+      # 同席: 人事部 1 名 / 記録: 情報セキュリティ 1 名
+
+        Q. 9/8 と 9/12 の夜の作業について
+        A. 「引き継ぎの資料をまとめていた。後任がすぐ使えるように、
+            価格と取引先の分も手元に置いた」
+
+        Q. 社内の回線を切って内蔵の回線に切り替えた点について
+        A. 「社内の回線が遅くて終わらなかった。急いでいた」
+
+        Q. 外へ置いた先について
+        A. 「個人で契約しているもので、会社の話ではないと思っている。
+            提出や開示には応じられない」
+
+        提出を受けたもの : 貸与の端末（この場で電源を落として預かり）、貸与の携帯
+        応じなかった範囲 : 私物の契約に属するもの全般
+
+        記録対象 : この場で交わした質問と答え、提出の範囲
+        非対象   : 本人がこの場の前後に行ったこと
+
+  - id: ev_016
+    points_to: [acct-317]
+    misleading: false
+    plausibility: high
+    volatile: false
+    occurred_at: "2026-09-12 21:28"
+    summary: "2晩とも、社外の携帯回線からのサインインが WS-317 で成功している"
+    reading: |
+      サインイン記録の読み方。
+
+        ResultCode 0        成功
+        DeviceId            端末管理に登録された機器の識別
+        NetworkType         corp は社内の回線、external は社外の回線
+        RiskLevel           そのサインインに付いた危険度の推定値
+
+      登録済みの機器からのサインインは、社外の回線からでも危険度が上がらない
+      構成になっていることが多い。危険度は場所ではなく、機器と振る舞いで付く。
+
+      この系統の保持は 30 日で、31 日目からは日次の処理で古い日から落ちる。
+      照会できるのは、その時点で残っている範囲だけになる。
+    possibilities:
+      - |-
+        社外から入っているが、これは在宅や移動中の当たり前の働き方である
+      - |-
+        社外から入った時刻が、外へ置いた時刻と重なっているかで見え方が変わる
+      - |-
+        機器は登録済みでも、そのとき操作していた人が同じとは限らない
+    content: |
+      # サインイン記録 (u317@example.com / 保持範囲の全期間)
+
+        期間            : 2026-08-17 - 2026-09-16   (30日保持の残存分)
+        総件数          : 412
+        ResultCode 0    : 411
+        ResultCode 50126:   1   (2026-09-01 08:49)
+
+        NetworkType=external の成功（抜粋）
+          2026-09-08T22:12:40Z   DeviceId=WS-317   RiskLevel=none
+          2026-09-12T21:28:11Z   DeviceId=WS-317   RiskLevel=none
+          2026-09-12T21:39:20Z   DeviceId=WS-317   RiskLevel=none
+          直近30日の external 成功 : 9 件（すべて DeviceId=WS-317）
+
+        DeviceId 別  : WS-317 402 / PHN-317 10
+        RiskLevel    : none 410 / low 2 / medium 0 / high 0
+
+        照会対象 : サインインの成否と、そのときの機器・回線の種別
+        非対象   : 保持 (30日) を過ぎて落ちた日の分、サインインの後の操作
+
+  - id: ev_017
+    points_to: []
+    misleading: false
+    plausibility: low
+    volatile: false
+    summary: "権限グループの構成と、営業企画領域に対する付与には、直近90日で変更がない"
+    reading: |
+      ディレクトリの権限グループは、資料の置き場に対する参照の可否を決める。
+
+      変更履歴は「追加 / 削除 / 権限の付け替え」を1件ずつ記録する。
+      0 件は、この期間にグループの構成が動いていないことを表す。
+
+      置き場に対する付与は、グループ単位と個人単位の2通りがある。
+      個人単位の付与は一覧の下段に別立てで出る。
+
+      照会対象の欄は、この照会がどの範囲の変更を数えたかを表す。
+      グループに入っている人が何を開いたかは、別の帳簿になる。
+    possibilities:
+      - |-
+        見えている参照は、前から持っていた権限の範囲で起きている
+      - |-
+        権限の側は動いていないが、範囲そのものが前から広すぎた
+      - |-
+        この期間の外で付いた権限が、そのまま残って使われている
+    content: |
+      # 社内ディレクトリ 権限グループの変更履歴（直近90日）
+
+        グループ                    メンバー   直近90日の 追加/削除/付け替え
+        sales-plan-members                12          0 / 0 / 0
+        sales-plan-owners                  2          0 / 0 / 0
+        sales-plan-pricing-readers         5          0 / 0 / 0
+
+        \\fs-sales\sales-plan への付与
+          グループ単位 : 上の 3 グループ
+          個人単位     : 0 件
+
+        特権グループ（ディレクトリ管理者）
+          メンバー 3   直近90日の 追加/削除 : 0 / 0
+
+        照会対象 : グループの構成と、置き場に対する付与の変更履歴
+        非対象   : グループに属する人が実際に何を開いたか、
+                   90日より前に行われた変更
+
+open_questions:
+  - id: q_route
+    label: "外へ出る道"
+    question: "参照されたものが社外へ渡ったとすれば、どこを通ったか"
+    resolved_by: [ev_005, ev_006]
+    resolution_mode: any
+    critical: true
+    implication: |
+      道が決まらないままでは、同じ道が他の席にも開いているかを確かめられません。
+      塞ぐ先も、監視を足す先も、ここが決まらないと選べません。
+
+  - id: q_destination
+    label: "渡り先の有無"
+    question: "渡ったとすれば、その置き場はどこで、いま何が残っているか"
+    resolved_by: [ev_004]
+    resolution_mode: any
+    critical: true
+    implication: |
+      置き場が分からないままでは、取り下げを求める相手が決まりません。
+      相手の側の記録は、こちらから申し入れない限り、相手の都合で消えます。
+
+  - id: q_scope
+    label: "参照された範囲"
+    question: "どの区分の資料が、どれだけ参照されたのか"
+    resolved_by: [ev_002]
+    resolution_mode: any
+    critical: true
+    implication: |
+      範囲が分からないままでは、誰に何を知らせるべきかを決められません。
+      取引先への連絡の要否も、報告の書きぶりも、ここが決まらないと定まりません。
+
+  - id: q_remaining
+    label: "入り直せる状態の有無"
+    question: "通り道を塞いだ後も、外から入り直せる状態が残っていないか"
+    resolved_by: [ev_007]
+    resolution_mode: any
+    critical: true
+    implication: |
+      ここを見ないまま通り道だけを塞ぐと、同じ器と鍵がそのまま残ります。
+      取り除くべきものを数え上げるまで、封じ込めたとは言えません。
+
+  - id: q_spread
+    label: "同じ動きの広がり"
+    question: "同じ取り方をしている人が、他にもいるか"
+    resolved_by: [ev_014]
+    resolution_mode: any
+    critical: false
+    implication: |
+      1 人ぶんの対応で終わるかどうかが決まります。
+      部門の運用そのものを見直すべきかの判断にも直結します。
+
+actions:
+  # ── 調査 ──
+  - id: act_dlp_alert_detail
+    label: "持ち出し検知の警告の明細を引く"
+    command: |
+      $ dlpctl alert show ALERT-2026-0916-003 --with-breakdown
+        1 record
+
+      $ dlpctl alert list --rule R-014 --days 90 --group-by department
+        groups : 5
+    group: "全体を横断して見る"
+    phase: investigation
+    type: investigate
+    description: |
+      検知の仕組みが出した警告を、発報の根拠まで開いて読む。
+      どの規則が、どの範囲の、どれだけの操作を数えて発報したかを確認する。
+    cost_minutes: 15
+    investigates: [share-sales, acct-317]
+    yields: [ev_001]
+
+  - id: act_share_access_audit
+    label: "共有ストレージ 営業企画領域のアクセス監査を、アカウント別に洗う"
+    command: |
+      $ fsauditctl summary --share sales-plan --from 2026-09-01 --to 2026-09-16 \
+          --group-by account
+        rows : 12
+
+      $ fsauditctl summary --share sales-plan --account u317@example.com \
+          --group-by folder
+        rows : 6
+    group: "営業企画領域"
+    phase: investigation
+    type: investigate
+    description: |
+      共有ストレージの監査イベントを、アカウント別と、そのフォルダ別に畳む。
+      何をどれだけ開いたか、書き換えや削除が伴っていたかを並べる。
+    cost_minutes: 30
+    investigates: [share-sales]
+    yields: [ev_002]
+
+  - id: act_mail_review
+    label: "退職予定者の業務アカウントの社外宛て送信と転送規則を洗う"
+    command: |
+      $ mailctl trace --sender u317@example.com --from 2026-08-17 --to 2026-09-16 \
+          --recipient-domain '!example.com'
+        events : 118
+
+      $ mailctl rule list --user u317@example.com --scope server
+        rules : 0
+    group: "退職予定者の業務アカウント"
+    phase: investigation
+    type: investigate
+    description: |
+      メッセージ追跡から、当該アカウントの社外宛て送信を抜き出す。
+      あわせてサーバ側に保存された自動転送の規則を一覧する。
+    cost_minutes: 40
+    investigates: [acct-317]
+    yields: [ev_008]
+
+  - id: act_acct_export
+    label: "退職予定者の業務アカウントの記録を、保全先へ書き出す"
+    command: |
+      $ holdctl export start --case IR-0916 --user u317@example.com \
+          --sources trace,signin,fsaudit --sink audit-archive
+        job queued
+      $ holdctl export status --wait
+        completed  (00:22:40)
+      $ holdctl export verify --case IR-0916
+        hash mismatch : 0
+    group: "退職予定者の業務アカウント"
+    phase: investigation
+    type: investigate
+    tags: [forensic_capture]
+    # ゲートを掛けない。ブリーフィングがこのアカウントを名指ししているので、
+    # 最初から押せる。**ここを ev_001 で閉じていた間、立証可能性最優先の
+    # 前提の手は盤面では一度も押せなかった** — minimal_response は
+    # requires_evidence を辿らないので、L の計算だけが成立していた
+    description: |
+      そのアカウントに紐づく帳簿を、保持期間とは別の保管先へ写す。
+      写した後の分は、テナント側の保持期間の影響を受けなくなる。
+      写す前に落ちた日の分は対象にならない。
+    cost_minutes: 20
+    investigates: [acct-317]
+    yields: [ev_009]
+
+  - id: act_signin_review
+    label: "退職予定者の業務アカウントのサインイン記録を照会する"
+    command: |
+      $ idctl signin list --user u317@example.com --all-retained
+        records : 412
+
+      $ idctl signin list --user u317@example.com --network external \
+          --result success
+        records : 9
+    group: "退職予定者の業務アカウント"
+    phase: investigation
+    type: investigate
+    description: |
+      当該アカウントのサインイン記録を、保持されている範囲すべてについて引く。
+      回線の種別、使われた機器、結果コード、危険度の推定値を並べる。
+    cost_minutes: 20
+    investigates: [acct-317]
+    yields: [ev_016]
+
+  - id: act_proxy_egress_summary
+    label: "境界プロキシの宛先別の送信量を集計する"
+    command: |
+      $ proxyctl report egress --group sales-plan-devices \
+          --from 2026-09-01 --to 2026-09-16 --top 20
+        rows : 20
+
+      $ proxyctl report egress --group sales-plan-devices --dest stor.example.net \
+          --detail
+        1 record
+    group: "全体を横断して見る"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_001, ev_002]
+    description: |
+      境界のプロキシが記録した要求を、宛先ごとに送信量で畳んで並べる。
+      オンライン保管に分類されている宛先については内訳も出す。
+    cost_minutes: 20
+    investigates: [store-personal]
+    yields: [ev_003]
+
+  - id: act_ws317_triage
+    label: "退職予定者の業務端末の接続履歴とアプリ登録を調べる"
+    command: |
+      $ edrctl triage --host WS-317 --collect netprofile,appinstall,usb
+        artifacts : 3
+
+      $ edrctl netprofile --host WS-317 --from 2026-09-01
+        events : 22
+    group: "退職予定者の業務端末"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_001, ev_002]
+    description: |
+      その端末のディスクに残っている記録を集めて並べる。
+      どの回線で外へ出ていたか、何が入っているか、外部記憶装置が
+      つながれたことがあるかを確認する。
+    cost_minutes: 30
+    investigates: [ws-317]
+    yields: [ev_005]
+
+  - id: act_ws317_browser
+    label: "退職予定者の業務端末のブラウザ保存領域を解析する"
+    command: |
+      $ browsparse --image ws317.raw --profile default \
+          --emit history,journal,credstore
+        records : 4,118
+
+      $ browsparse --image ws317.raw --profile default --filter form_submit
+        records : 8
+    group: "退職予定者の業務端末"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_005]
+    description: |
+      その端末のブラウザが保存している履歴・送信のジャーナル・資格情報の
+      ストアを取り出して並べる。画面から何を送ったか、どこの資格情報を
+      保存したままにしているかを確認する。
+    cost_minutes: 35
+    investigates: [ws-317]
+    yields: [ev_006]
+
+  - id: act_capture_ws317
+    label: "退職予定者の業務端末の稼働中の状態を、電源を入れたまま保全する"
+    command: |
+      $ liveresp --host WS-317 --acquire memory,handles,sockets --out ws317.lime
+        acquired  (00:18:02)
+      $ liveresp --host WS-317 --seal --case IR-0916
+        sealed
+    group: "退職予定者の業務端末"
+    phase: investigation
+    type: investigate
+    tags: [forensic_capture]
+    requires_evidence: [ev_005, ev_016]
+    description: |
+      その端末を止めずに、いま動いているものをそのまま写し取る。
+      写し取った時点から先は、現場で電源が落ちても、この写しは残る。
+      写すだけの作業なので、読むのは別の手になる。
+    cost_minutes: 20
+    investigates: [ws-317]
+    yields: []
+    secures: [ev_007]
+
+  - id: act_analyze_ws317
+    label: "退職予定者の業務端末の、保全した稼働中の状態を解析する"
+    command: |
+      $ memq -f ws317.lime pslist
+        processes : 88
+      $ memq -f ws317.lime netscan
+        sockets : 31
+      $ memq -f ws317.lime credscan
+        entries : 6
+    group: "退職予定者の業務端末"
+    phase: investigation
+    type: investigate
+    requires_actions: [act_capture_ws317]
+    description: |
+      保全した写しから、プロセス・ハンドル・ソケット・資格情報の断片を
+      取り出して並べる。取っていない写しは読めないので、先に保全が要る。
+    cost_minutes: 25
+    investigates: [ws-317]
+    yields: [ev_007]
+
+  - id: act_provider_disclosure
+    label: "私物の外部保管の事業者へ、法務経由で保全と開示を申し入れる"
+    command: |
+      $ legalreq new --case IR-0916 --counterparty stor.example.net \
+          --type preserve+disclose
+        request IR-0916-02 submitted
+
+      $ legalreq status IR-0916-02 --wait
+        answered  (00:41:55)
+    group: "私物の外部保管"
+    phase: investigation
+    type: investigate
+    tags: [forensic_capture]
+    # 入口は2本（SPEC 8.2 手順6.2）。宛先の側から気づく道（プロキシの集計）と、
+    # 端末の側から気づく道（そこに入っている常駐の発行元）の両方から開く
+    requires_evidence: [ev_003, ev_005]
+    description: |
+      法務を通じて、その保管先の事業者に、対象の契約に属する記録の保全と
+      開示を申し入れる。様式の確認と先方の回答待ちがあるので時間がかかる。
+      先方が保持している操作の記録と発信元までが対象で、置かれたものの
+      中身は対象にならない。
+    cost_minutes: 45
+    investigates: [store-personal]
+    yields: [ev_004]
+
+
+  - id: act_bulk_read_by_device
+    label: "一括取得の記録を、端末別に並べ直す"
+    command: |
+      $ fsauditctl bulk-read --share sales-plan --from 2026-09-01 --to 2026-09-16 \
+          --by-device
+        rows : 4
+
+      $ fsauditctl bulk-read --share sales-plan --by-device --detail --top 2
+        rows : 2
+    group: "全体を横断して見る"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_001, ev_002]
+    description: |
+      共有ストレージの監査イベントに、端末管理が持つ着席の記録を突き合わせ、
+      短時間に固まった参照を端末の側から並べ直す。
+      どの端末から、どの置き場を、どれだけまとめて開いたかを見る。
+    cost_minutes: 25
+    investigates: []
+    yields: [ev_010]
+
+  - id: act_share_handbook
+    label: "共有ストレージ 営業企画領域に出ている部門の作業依頼と配布履歴を確認する"
+    command: |
+      $ fsctl show sales-plan/_dept/WO-2026-0412 --with-attachments
+        1 record
+
+      $ fsctl readlog sales-plan/_dept/WO-2026-0412 --attachment handbook-v1.2
+        readers : 12
+    group: "営業企画領域"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_002, ev_010]
+    description: |
+      その置き場に出ている部門の作業依頼と、添えられた手順書を読む。
+      誰に何が指示され、どの範囲が対象とされていたか、手順書を
+      誰がいつ開いたかを確認する。
+    cost_minutes: 25
+    investigates: [share-sales]
+    yields: [ev_014]
+
+  - id: act_dirsvc_groups
+    label: "社内ディレクトリの権限グループと、置き場への付与の変更履歴を確認する"
+    command: |
+      $ dirctl group list --prefix sales-plan --with-members
+        groups : 3
+
+      $ dirctl acl history --path sales-plan --days 90
+        changes : 0
+      $ dirctl group history --privileged --days 90
+        changes : 0
+    group: "台帳・運用の記録"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_002]
+    description: |
+      資料の置き場に対する参照の可否を決めている側を引く。
+      グループの構成と、置き場への付与が直近で動いていないかを確認する。
+    cost_minutes: 30
+    investigates: [dirsvc]
+    yields: [ev_017]
+
+  - id: act_phone_usage
+    label: "社給携帯の回線利用の明細を、月ごとに引く"
+    command: |
+      $ mobilectl usage --device PHN-317 --months 6 --split updown
+        rows : 6
+
+      $ mobilectl usage --device PHN-317 --month 2026-05 --by-day --top 4
+        rows : 4
+    group: "社給携帯"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_003, ev_016]
+    description: |
+      会社が貸与した携帯に付いた回線の通信量を、月ごとに並べる。
+      上りと下りを分け、突出した月については日ごとの内訳も出す。
+    cost_minutes: 25
+    investigates: [phone-317]
+    yields: [ev_012]
+
+  - id: act_rollout_ledger
+    label: "情報システム部の配布・展開の記録と、貸与品手続きの標準を照会する"
+    command: |
+      $ deployctl list --months 12 --with-termination
+        records : 9
+
+      $ deployctl show DEP-2026-0031
+        1 record
+      $ hrflow show offboarding-standard
+        1 record
+    group: "台帳・運用の記録"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_012]
+    description: |
+      情報システム部が過去に何をどこへ配ったかを、申請と実施の記録から引く。
+      あわせて退職時の貸与品手続きの標準も照会し、いつ何が動くかを確認する。
+    cost_minutes: 20
+    investigates: []
+    yields: [ev_013]
+
+  - id: act_ws224_triage
+    label: "営業企画部の同僚端末の接続履歴とアプリ登録を調べる"
+    command: |
+      $ edrctl triage --host WS-224 --collect netprofile,appinstall,usb
+        artifacts : 3
+
+      $ browsparse --live WS-224 --profile default --filter form_submit
+        records : 14
+    group: "営業企画部の同僚端末"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_010]
+    description: |
+      その端末のディスクに残っている記録を集めて並べる。
+      どの回線で外へ出ていたか、何が入っているか、画面から何を送ったかを
+      確認する。稼働中の端末なので、収集の間は利用者に断りを入れる。
+    cost_minutes: 50
+    investigates: [ws-224]
+    yields: [ev_011]
+  # **この盤面の中心にある排他**（SPEC 3.8）。
+  # 本人に伝われば、会社の手が届かない側の記録は残らない。
+  # 立証可能性最優先では、この手そのものが違反になる（SPEC 5.3）
+  - id: act_interview_subject
+    label: "本人に事情を聴き、貸与品の提出と私物の開示への同意を求める"
+    command: |
+      $ 架電 15:02  内線                       応答あり
+      $ 会議室 B 着席 15:10                    同席 2 名
+      $ 聞き取り 15:10 - 15:52                 記録 4 ページ
+      $ 受領 15:55  貸与品 2 点                封緘
+    group: "本人への接触"
+    phase: investigation
+    type: investigate
+    requires_evidence: [ev_001, ev_005]
+    description: |
+      本人に同席のうえで事情を聴き、記録に残らないこと（どんな画面が出て、
+      何を押したか）を本人から得る。あわせて貸与品をその場で電源ごと預かり、
+      私物の側の開示への同意を求める。
+      同意が得られない範囲には、この先こちらの手は届かなくなる。
+    cost_minutes: 35
+    investigates: [acct-317, ws-317]
+    yields: [ev_015]
+    destroys: [ev_004, ev_007]
+
+  # ── 全体への連絡 ──
+  # 記録が消えるのを止めに行く手（SPEC 5.6.1）。
+  # **1本目と向きが違う。** 1本目では業務継続最優先がこれを禁じた（業務が
+  # 止まるから）。ここで禁じるのは就業関係への配慮で、理由は
+  # 「部門全体への連絡が、疑われている個人を事実上名指しする」である
+  - id: act_preservation_notice
+    label: "部門長・人事・法務へ保全を依頼し、手続きの自動進行を止める"
+    command: |
+      $ noticectl send --template ir-preserve --to dept-head,hr,legal
+        delivered: 3 recipients
+
+      $ holdctl hold apply --case IR-0916 --scope dept:sales-plan --period 2026-06-18..now
+        hold applied
+      $ hrflow suspend --flow offboarding --reason ir-hold
+        1 flow suspended
+      $ legalreq prefile --case IR-0916 --type preserve
+        prefiled
+    group: "全体への指示"
+    phase: investigation
+    type: communicate
+    description: |
+      部門長・人事・法務に、調査期間中は記録と機器の状態をそのままにする
+      よう依頼し、対象期間の帳簿に保全を掛ける。退職手続きの自動進行と
+      貸与品の回収予約もいったん止め、関係先への保全の申し入れを先に出す。
+      調査そのものは1ミリも進まない。
+    cost_minutes: 20
+    prevents: [tl_patch_reboot, tl_mailbox_move, tl_device_return,
+               tl_share_rollup, tl_legal_window]
+
+  # ── 封じ込め・対応 ──
+  # 通り道だけを塞ぐ手。資産はそのまま動き続けるので、稼働中の記録は残る。
+  # 手元に残っている器と鍵は、そのまま残る
+  - id: act_block_egress_ws317
+    label: "退職予定者の業務端末の外向きの通信を、端末管理の側から止める"
+    command: |
+      $ mdmctl policy apply --host WS-317 --profile egress-deny --wwan off
+        applied
+      $ mdmctl policy show --host WS-317
+        egress : deny   social/storage/webmail
+        wwan   : disabled
+        端末は動いたまま、業務の画面もそのまま使える。
+    group: "通り道だけを塞ぐ"
+    phase: response
+    type: contain
+    description: |
+      その端末の外向きの通信を、端末管理の側から一括で拒否する。
+      内蔵の回線も無効にする。端末は動き続け、社内の業務はそのまま続く。
+      入っているものも、保存されているものも、そのまま残る。
+    cost_minutes: 20
+    targets: [ws-317]
+    investigates: []
+    side_effects:
+      business_impact: false
+
+  - id: act_block_store_egress
+    label: "私物の外部保管への通信を、全社の境界で遮断する"
+    command: |
+      $ proxyctl rule add --dest stor.example.net --action deny --scope tenant
+        rule added
+      $ proxyctl rule test --dest stor.example.net
+        evaluated : deny
+        社内の回線を通らない経路には効かない。
+    group: "通り道だけを塞ぐ"
+    phase: response
+    type: contain
+    description: |
+      その保管先への通信を、全社の境界で拒否する。社内の回線を通る要求は
+      止まる。会社の管理下にない回線を通る要求には届かない。
+      置かれているものは、そのまま置かれたままになる。
+    cost_minutes: 15
+    targets: [store-personal]
+    investigates: []
+    side_effects:
+      business_impact: false
+
+  - id: act_block_phone_egress
+    label: "社給携帯の外部との通信を、端末管理の側から止める"
+    command: |
+      $ mdmctl policy apply --device PHN-317 --profile egress-deny
+        applied
+      $ mdmctl policy show --device PHN-317
+        egress : deny
+        通話と社内のメールを除き、この端末からの外部との通信は止まる。
+    group: "通り道だけを塞ぐ"
+    phase: response
+    type: contain
+    description: |
+      その携帯の外部との通信を、端末管理の側から拒否する。
+      通話と社内のメール以外は使えなくなる。
+    cost_minutes: 15
+    targets: [phone-317]
+    investigates: []
+    side_effects:
+      business_impact: true
+
+  # 業務から降ろす手。ホストは動き続ける版と、電源ごと落とす版
+  - id: act_quarantine_ws317
+    label: "退職予定者の業務端末を検疫ネットワークへ移し、業務での利用を止める"
+    command: |
+      $ nacctl move --host WS-317 --vlan quarantine
+        moved
+      $ nacctl show --host WS-317
+        vlan  : quarantine
+        state : powered on
+        電源は入ったまま。業務の画面には入れない。
+    group: "業務から降ろす"
+    phase: response
+    type: contain
+    description: |
+      その端末を検疫のネットワークへ移し、業務では使えない状態にする。
+      電源は入ったままなので、動いているものは動き続ける。
+      利用者はこの端末で仕事ができなくなる。
+    cost_minutes: 15
+    targets: [ws-317]
+    investigates: []
+    side_effects:
+      business_impact: true
+
+  - id: act_seize_ws317
+    label: "退職予定者の業務端末を回収し、電源を落として封緘する"
+    command: |
+      $ 回収 立会 2 名                        受領
+      $ shutdown 実施                          powered off
+      $ 封緘 SEAL-0916-1                       記録
+    group: "業務から降ろす"
+    phase: response
+    type: contain
+    description: |
+      その端末を現物で回収し、電源を落として封をする。
+      ディスクはそのまま保たれる。電源が入っている間しか見られないものは、
+      この作業で見られなくなる。利用者はこの端末を返すことになる。
+    cost_minutes: 25
+    targets: [ws-317]
+    investigates: []
+    destroys: [ev_007]
+    side_effects:
+      business_impact: true
+
+  # 利用者の側で締める手。本人が続けられる版と、本人も止まる版
+  - id: act_reset_acct_317
+    label: "退職予定者の業務アカウントの資格情報を入れ替え、多要素認証を登録し直す"
+    command: |
+      $ idctl user reset-credential --user u317@example.com --require-change
+        credential reset
+      $ idctl user mfa reset --user u317@example.com
+        methods cleared : 2
+        本人が再登録すれば、引き継ぎの作業はそのまま続けられる。
+    group: "利用者の側で締める"
+    phase: response
+    type: contain
+    description: |
+      そのアカウントのパスワードを再設定し、多要素認証の登録をやり直させる。
+      本人は再登録の後、そのまま業務を続けられる。
+    cost_minutes: 25
+    targets: [acct-317]
+    investigates: []
+    side_effects:
+      business_impact: false
+
+  - id: act_disable_acct_317
+    label: "退職予定者の業務アカウントをサインインできない状態にする"
+    command: |
+      $ idctl user block-signin --user u317@example.com
+        accountEnabled : false
+        本人は自分の画面にも入れなくなる。
+    group: "利用者の側で締める"
+    phase: response
+    type: contain
+    description: |
+      そのアカウントのサインインを止める。本人は業務に使えなくなる。
+      引き継ぎの作業もその時点で止まる。
+    cost_minutes: 10
+    targets: [acct-317]
+    investigates: []
+    side_effects:
+      business_impact: true
+
+  - id: act_restrict_dirsvc
+    label: "社内ディレクトリで、部門全員の社外からの利用を止める"
+    command: |
+      $ dirctl ca policy create --name deny-external-sales --group sales-plan-members \
+          --network external --grant block
+        policy created
+      $ dirctl ca policy simulate --group sales-plan-members --network external
+        evaluated : blocked
+        部門 12 名の社外からの作業が止まる。
+    group: "部門全体を締める"
+    phase: response
+    type: contain
+    description: |
+      部門に属する全員について、社外の回線からの利用を拒否する。
+      在宅と外出先の作業は、部門全体で止まる。
+    cost_minutes: 20
+    targets: [dirsvc]
+    investigates: []
+    side_effects:
+      business_impact: true
+
+  # 3つの締め方。**止めることと、残っているものを取り除くことは別の作業である。**
+  # 通り道を塞いでも、器と鍵はそのまま残るので、塞ぎ方を戻せば元へ戻る。
+  # この 3 つと囮の 1 つだけが `eradicates` を持ち、5.8 の減衰を
+  # on_partial から on_correct_containment へ動かす。
+  #
+  # **対ではなく3つ置いてある。** 業務／記録の2軸を張るには手が2つでは足りず、
+  # 「業務も記録も守る手」が1つあると2方針がそこへ相乗りする（SPEC 8.1）
+  - id: act_remove_in_place
+    label: "本人の立会いのもとで、退職予定者の業務端末と私物の外部保管を元の状態へ戻す"
+    command: |
+      $ 立会 1 名                              着席
+      $ mdmctl app remove --host WS-317 --app stor-desktop --purge-credentials
+        removed
+      $ legalreq takedown IR-0916-03 --counterparty stor.example.net --consented
+        acknowledged
+        利用者はこの端末で仕事を続けられる。
+    group: "元の状態に戻す"
+    phase: response
+    type: contain
+    description: |
+      本人に立ち会ってもらい、その端末に入っている同期の常駐と、
+      保存されている資格情報を外す。あわせて本人の同意のもとで、
+      保管先に置かれた当該の領域の取り下げを確認する。
+      端末はそのまま使えるので、引き継ぎの作業は止まらない。
+      立会いの都合を付けるぶん時間がかかり、外した後の状態は残らない。
+    cost_minutes: 45
+    targets: [ws-317, store-personal]
+    eradicates: [ws-317, store-personal]
+    investigates: []
+    destroys: [ev_007]
+    side_effects:
+      business_impact: false
+
+  - id: act_preserve_then_remove
+    label: "控えを取ったうえで、退職予定者の業務端末と私物の外部保管を元の状態へ戻す"
+    command: |
+      $ imagectl acquire --host WS-317 --mode full --out ws317-full.e01
+        acquired  (00:52:18)
+      $ legalreq preserve-copy IR-0916-04 --counterparty stor.example.net
+        copy received
+      $ mdmctl app remove --host WS-317 --app stor-desktop --purge-credentials
+        removed
+        控えを取っている間、この端末は業務から降りたままになる。
+    group: "元の状態に戻す"
+    phase: response
+    type: contain
+    description: |
+      先に端末の全体像と、保管先に置かれたものの控えを取り、それから
+      同期の常駐と資格情報、置かれた領域を外す。
+      控えを取っている間、この端末は業務から降りたままになる。
+      2 系統をそれぞれ書き出すので時間がかかる。
+    cost_minutes: 50
+    targets: [ws-317, store-personal]
+    eradicates: [ws-317, store-personal]
+    investigates: []
+    destroys: []
+    side_effects:
+      business_impact: true
+
+  - id: act_purge_and_suspend
+    label: "退職予定者の業務端末を初期化し、私物の外部保管の事業者へ停止を要請する"
+    command: |
+      $ mdmctl wipe --host WS-317 --mode full
+        wipe queued
+        wipe completed
+      $ legalreq suspend IR-0916-05 --counterparty stor.example.net
+        acknowledged
+        初期化した後の端末からは、何も読み出せない。
+    group: "元の状態に戻す"
+    phase: response
+    type: contain
+    description: |
+      その端末を遠隔から初期化し、あわせて保管先の事業者へ当該の契約の
+      停止を要請する。管理の画面から投げるだけで終わる。
+      初期化した後の端末からは、何も読み出せない。
+    cost_minutes: 20
+    targets: [ws-317, store-personal]
+    eradicates: [ws-317, store-personal]
+    investigates: []
+    destroys: [ev_006, ev_007]
+    side_effects:
+      business_impact: true
+
+  # **囮**（SPEC 5.6 / v1.45）。`eradicates` を持つ手が上の3つだけだと、
+  # この束を開くだけで「取り除くものが残っているのはどれか」が読める —
+  # ground_truth.persistence の写しになる。
+  # 誤導 ev_010 に乗れば、この端末にも同じ処置をしたくなる。
+  # 30 分と、同僚の 1 日が返ってこない
+  - id: act_reimage_ws224
+    label: "営業企画部の同僚端末を初期化して配り直す"
+    command: |
+      $ mdmctl wipe --host WS-224 --mode full
+        wipe queued
+        wipe completed
+      $ provisionctl enroll --host WS-224 --profile sales-plan
+        enrolled
+        受け渡しまで、この利用者は貸出機で作業することになる。
+    group: "元の状態に戻す"
+    phase: response
+    type: contain
+    description: |
+      その端末を初期化し、標準の構成で作り直して配り直す。
+      受け渡しが済むまで、その利用者は貸出機で作業することになる。
+    cost_minutes: 30
+    targets: [ws-224]
+    eradicates: [ws-224]
+    investigates: []
+    destroys: []
+    side_effects:
+      business_impact: true
+
+phases:
+  - id: investigation
+    label: "調査"
+    advance_label: "対応フェーズに移る"
+
+  - id: response
+    label: "封じ込め・対応"
+    advance_label: null
+    requires_assessment: true
+
+# 時間が経つと向こうから入ってくること（SPEC 5.10）。
+# **この盤面では、消すのは攻撃者でも自分でもなく、退職の手続きである。**
+# 回収予約も、月次の更新も、保持期間のパージも、四半期の棚卸しも、
+# どれも設定どおりに正しく動いているだけで、誰も咎められない。
+# 先に保全を掛けた場合だけ、落ちるはずだったものが残る。
+timeline:
+  - id: tl_accel
+    at_minutes: 230
+    label: "人事から連絡"
+    text: |
+      「対象者から、最終出社を前倒ししたいという申し出がありました。
+        席の整理も始めているようです。こちらで止められる話ではありません。」
+    heralds: acceleration
+
+  - id: tl_patch_reboot
+    at_minutes: 270
+    label: "端末運用チームから連絡"
+    text: |
+      「月次の更新の適用が回ってきて、対象の機器で再起動が入りました。
+        配信の予定どおりの動作です。」
+    destroys: [ev_007]
+    averted_label: "端末運用チームから連絡"
+    averted_text: |
+      「月次の更新が回ってきましたが、保全の指定が入っていたので
+        適用の対象から外れました。そのままにしてあります。」
+
+  - id: tl_mailbox_move
+    at_minutes: 300
+    label: "メール運用チームから連絡"
+    text: |
+      「退職の手続きの標準どおり、対象者の分を共有の保管先へ移す処理が
+        走りました。容量を空けるための定例の扱いです。」
+    destroys: [ev_008]
+    averted_label: "メール運用チームから連絡"
+    averted_text: |
+      「移す処理が走るところでしたが、手続きの一時停止が掛かっていたので
+        対象から外れました。そのまま置いてあります。」
+
+  - id: tl_device_return
+    at_minutes: 335
+    label: "総務から連絡"
+    text: |
+      「退職の手続きが前倒しになったので、返却予定の機器の回収と
+        初期化の予約が、今日の分に入りました。標準の手順どおりです。」
+    destroys: [ev_006]
+    averted_label: "総務から連絡"
+    averted_text: |
+      「回収と初期化の予約が入るところでしたが、手続きの一時停止が
+        掛かっていたので、予約は取り消されました。」
+
+  - id: tl_share_rollup
+    at_minutes: 370
+    label: "共有ストレージ運用から連絡"
+    text: |
+      「四半期の棚卸しで、監査の明細を集約した形へ畳む処理が動きました。
+        保管の容量を抑えるための定例の処理です。」
+    destroys: [ev_002]
+    averted_label: "共有ストレージ運用から連絡"
+    averted_text: |
+      「四半期の棚卸しの処理が動くところでしたが、保全の指定が
+        入っていたので対象から外しました。明細はそのままです。」
+
+  - id: tl_legal_window
+    at_minutes: 410
+    label: "法務から連絡"
+    text: |
+      「外の窓口へ出す申し入れの様式が、今日の受付分から変わりました。
+        切り替えの間は新しい受付が止まります。再開の見込みは聞けていません。」
+    destroys: [ev_004]
+    averted_label: "法務から連絡"
+    averted_text: |
+      「様式が変わって新しい受付は止まりましたが、先に出しておいた分は
+        受理済みの扱いになりました。こちらの分はそのまま進みます。」
+
+damage:
+  model: exponential
+  params:
+    base: 300.0
+    rate: 0.15
+  acceleration:
+    # 折れ点は「巧いプレイの長さ」L の 1.1〜1.3 倍（SPEC 8.2 手順7）。
+    # L は方針ごとに違い、最も高くつくのは立証可能性最優先である。
+    # 判断に到達するまで 150分 ＋ 止める資産ごとの保全 20分 ＋
+    # この方針で違反にならない最安の封じ込め 60分 ＝ 230分。
+    # 260/230 = 1.13 倍
+    threshold_minutes: 260
+    multiplier: 2.5
+  containment_effect:
+    on_correct_containment: 0.2
+    on_partial: 0.6
+    on_incorrect: 1.0
+
+scoring:
+  fact_layer:
+    metrics:
+      - id: assessment_precision
+        label: "被疑判定の適合率"
+        direction: higher_is_better
+      - id: assessment_recall
+        label: "被疑判定の再現率"
+        direction: higher_is_better
+      - id: assessment_support
+        label: "名指しの裏付け"
+        direction: higher_is_better
+      - id: unresolved_questions
+        label: "未解消論点を抱えたままの判断"
+        label_good: "論点を解消してからの判断"
+        direction: lower_is_better
+    weights:
+      assessment_precision:  0.20
+      assessment_recall:     0.20
+      assessment_support:    0.20
+      # critical 論点が4つあるので 5段階の階段になる。1論点 = 10 fact点
+      unresolved_questions:  0.40
+
+  policy_layer:
+    constraint_penalty: 0.15
+
+  consequence_layer:
+    display_only:
+      - elapsed_minutes
+      - total_damage
+      - business_impact
+      - evidence_preserved
+      - containment_completeness
+    business_impact_horizon_minutes: 480
+    normalization:
+      total_damage:             { worst: 18000, best: 0 }
+      business_impact:          { worst: 2200,  best: 0 }
+      evidence_preserved:       { worst: 0.706, best: 1.0 }
+      containment_completeness: { worst: 0.0,   best: 1.0 }
+
+  composite:
+    method: weighted_sum
+    fact_weight: 0.7
+
+retrospective:
+  minimal_path:
+    compute: true
+    label: "事後的に見た最短経路"
+    disclaimer: |
+      これは答えを知った上で算出した参照値です。
+      実際の対応では、外れを引くことは避けられません。
+      この差分は無駄ではなく、不確実性の代価です。
+  counterfactuals:
+    compute: true
+  unresolved_review:
+    compute: true
+
+debrief:
+  reveal_ground_truth: true
+  misleading_explanations:
+    ev_010: |
+      同僚端末 WS-224 の 9/9 の一括取得は、部門の作業依頼 WO-2026-0412 の
+      とおりに行われたものです。手順書は 12 名全員が開いており、
+      取得先はいずれも雛形の置き場だけでした。
+      同じ週に同じ形の動きが2つ出たのは、2 人が同じ指示を受けていたからです。
+      相関は伝播ではありません。
+    ev_012: |
+      社給携帯 PHN-317 の 5月の 41.2 GB は、全社へ配られた写真移行の常駐
+      (DEP-2026-0031) による一括転送です。展開は 5/11 から 5/22 まで、
+      配信停止と同時に常駐も消えています。6月以降は 2〜4 GB に戻っています。
+      「見つかった」ことと「いま起きている」ことは別です。
+    ev_003: |
+      境界プロキシの集計は、社内の有線・無線を通った要求しか数えません。
+      2 晩とも、端末の内蔵回線へ手動で切り替えてから送られているので、
+      この集計には 1 バイトも載りません。
+      収集範囲の欄は、その内蔵回線を非対象として平文で書いていました。
+      ログに無いことと、事象が無かったことは別です。
+  key_lessons:
+    - "封じ込めが早いほど良い、とは限らない。本人に伝わった時点から先は、会社の手が届く範囲の外にあるものが残らない。止める順番が、後から何を言えるかを決める。"
+    - "全社や部門への連絡は、この盤面では本人にも届く。同じ「保全の周知」という手が、記録を守る手にも、相手に知らせる手にもなる。どちらとして働くかは盤面が決める。"
+    - "境界の記録は、境界を通ったものしか持たない。端末に内蔵された回線は境界を通らない。収集範囲の欄は、その端末が白いことではなく、この道具が何を数えていないかを言っている。"
+    - "同じ週に同じ形の動きが2つ出ることは、片方がもう片方の原因であることを意味しない。配られた指示が1つあれば、12 人が同じ動きをする。"
+    - "通り道を塞いでも、端末に残った常駐と、外に残った置き場は元に戻らない。取り除くところまで行かないと、塞ぎ方を戻した瞬間に元へ戻る。"
+    - "疑いの段階で名指しすることには値段が付いている。無関係な端末を初期化して配り直せば、その人の 1 日と、会社の信用が返ってこない。"
+  replay_suggestions:
+    - policy: rapid_containment
+      hint: |
+        同じ状況を「早期封じ込め最優先」で解くと、立会いも控えも待てません。
+        同じ行動列でも評価が変わることを確かめてください。
+    - policy: employment_care
+      hint: |
+        「就業関係への配慮最優先」では、部門全体への保全の連絡も、
+        サインインの停止も取れません。何が残るかを確かめてください。

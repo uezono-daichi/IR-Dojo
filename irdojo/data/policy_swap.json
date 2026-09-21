@@ -1,6 +1,43 @@
 {
-  "fingerprint": "d1faffb2b125e5d9e2bfbde4ced80e570830dcda0f77d7f8c6f1cfe405b77ef5",
+  "fingerprint": "4d3e2aa7a5124392e3c155bd7b786f43e43b33f1cc02d5dff6807564083e4cf0",
   "scenarios": [
+    {
+      "scenario_id": "insider-exfil-suspicion-01",
+      "policy_ids": [
+        "provability",
+        "rapid_containment",
+        "employment_care"
+      ],
+      "rows": [
+        {
+          "label": "Aの対応",
+          "policy_id": "provability",
+          "scores": {
+            "provability": 98,
+            "rapid_containment": 87,
+            "employment_care": 97
+          }
+        },
+        {
+          "label": "Bの対応",
+          "policy_id": "rapid_containment",
+          "scores": {
+            "provability": 88,
+            "rapid_containment": 95,
+            "employment_care": 92
+          }
+        },
+        {
+          "label": "Cの対応",
+          "policy_id": "employment_care",
+          "scores": {
+            "provability": 90,
+            "rapid_containment": 88,
+            "employment_care": 98
+          }
+        }
+      ]
+    },
     {
       "scenario_id": "oauth-consent-abuse-01",
       "policy_ids": [
@@ -39,6 +76,43 @@
       ]
     },
     {
+      "scenario_id": "ot-line-logic-tamper-01",
+      "policy_ids": [
+        "safety_first",
+        "production_continuity",
+        "evidence_preservation"
+      ],
+      "rows": [
+        {
+          "label": "Aの対応",
+          "policy_id": "safety_first",
+          "scores": {
+            "safety_first": 93,
+            "production_continuity": 92,
+            "evidence_preservation": 87
+          }
+        },
+        {
+          "label": "Bの対応",
+          "policy_id": "production_continuity",
+          "scores": {
+            "safety_first": 77,
+            "production_continuity": 98,
+            "evidence_preservation": 90
+          }
+        },
+        {
+          "label": "Cの対応",
+          "policy_id": "evidence_preservation",
+          "scores": {
+            "safety_first": 76,
+            "production_continuity": 93,
+            "evidence_preservation": 97
+          }
+        }
+      ]
+    },
+    {
       "scenario_id": "ransomware-initial-response-01",
       "policy_ids": [
         "business_continuity",
@@ -71,6 +145,43 @@
             "business_continuity": 92,
             "evidence_preservation": 85,
             "damage_minimization": 94
+          }
+        }
+      ]
+    },
+    {
+      "scenario_id": "software-distribution-spread-01",
+      "policy_ids": [
+        "business_continuity",
+        "evidence_preservation",
+        "spread_containment"
+      ],
+      "rows": [
+        {
+          "label": "Aの対応",
+          "policy_id": "business_continuity",
+          "scores": {
+            "business_continuity": 98,
+            "evidence_preservation": 90,
+            "spread_containment": 89
+          }
+        },
+        {
+          "label": "Bの対応",
+          "policy_id": "evidence_preservation",
+          "scores": {
+            "business_continuity": 94,
+            "evidence_preservation": 98,
+            "spread_containment": 88
+          }
+        },
+        {
+          "label": "Cの対応",
+          "policy_id": "spread_containment",
+          "scores": {
+            "business_continuity": 91,
+            "evidence_preservation": 80,
+            "spread_containment": 93
           }
         }
       ]
