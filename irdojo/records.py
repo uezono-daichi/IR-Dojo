@@ -29,6 +29,29 @@ def results_dir() -> Path:
     return home() / "results"
 
 
+class Move(BaseModel):
+    """1手ぶんの足あと（SPEC 7.5.4）。
+
+    **盤面の時刻と、実際にかかった秒の両方を残す。** 前者は採点に効く
+    （どれだけ「演習内の時間」を使ったか）。後者は採点に一切効かないが、
+    **どこで手が止まったかはここにしか出ない。**
+
+    テストプレイで知りたいのは点数ではなく「どこで詰まったか」で、
+    それは結果だけを保存していた頃の記録には残っていなかった。
+
+    **`ground_truth` は入らない。** 入るのは学習者が自分で押したものと、
+    その時点で自分が見ていた盤面の時刻だけである（7.7.5）。
+    """
+
+    n: int                      # 何手目か（1 から）
+    kind: str                   # action | advance_phase | declare_assessment | finish
+    action_id: str | None = None   # kind == "action" のときだけ
+    phase: str                  # その手を押した時点のフェーズ
+    at_minute: int              # 押す前の盤面時刻
+    cost_minutes: int           # その手で進んだ盤面時刻
+    think_seconds: float        # 前の手からの**実時間**。採点には使わない
+
+
 class Record(BaseModel):
     schema_version: str = RECORD_SCHEMA_VERSION
     scenario_id: str
@@ -54,6 +77,18 @@ class Record(BaseModel):
     assessment: list[str]
     unresolved_at_decision: list[str]
     constraint_violations: int
+
+    # ── ここから下は採点に一切効かない。**どこで詰まったかを見るためだけ**にある
+    # （SPEC 7.5.4）。古い記録には無いので、既定値を持たせて読めるようにしておく
+    moves: list[Move] = []
+    # ブリーフィングを開いてから「対応を開始」を押すまでの実秒。
+    # **読ませすぎていないかは、ここでしか分からない**
+    #
+    # **完走したかは記録に書かない。** 記録は `finish` を押した回にしか
+    # 作られないので、書けば必ず True になる。常に True の欄は
+    # 「全員が完走した」と読まれる — 途中でやめた回は**記録そのものが無い**
+    # ことを、集計の側（`tools/playtest_report.py`）が言う
+    briefing_seconds: float | None = None
 
     # ground_truth は含めない（SPEC 7.7.5）
 

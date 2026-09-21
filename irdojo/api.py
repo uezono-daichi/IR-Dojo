@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,25 @@ app = FastAPI(title="IR Dojo", docs_url=None, redoc_url=None, openapi_url=None)
 # セッションはメモリ上のみ（SPEC 7.6.3）
 _SESSIONS: dict[str, Engine] = {}
 MAX_SESSIONS = 32
+
+# ── 実時間の足あと（SPEC 7.5.4）
+#
+# **エンジンは実時間を知らない。** 知る必要が無く、知ると `balance.py` の
+# 何千回の模擬プレイまで時計を持つことになる。実時間を測れるのは、
+# 人が本当に押している API の層だけである。
+#
+# ここに溜まるのは学習者が自分で押したものだけで、`ground_truth` は入らない。
+# 採点にも講評にも使われず、**記録に書き残すためだけ**にある。
+_MOVES: dict[str, list[records_mod.Move]] = {}
+_OPENED: dict[str, float] = {}   # ブリーフィングを渡した時刻
+_MARKS: dict[str, float] = {}    # 直前の手の時刻（初手はブリーフィングを閉じた時刻）
+_BRIEFING: dict[str, float] = {}  # ブリーフィングを読んでいた秒数
+
+
+def _forget(sid: str) -> None:
+    """セッションと一緒に足あとも捨てる。**溜め続けない。**"""
+    for store in (_MOVES, _OPENED, _MARKS, _BRIEFING):
+        store.pop(sid, None)
 
 
 # ─────────── リクエスト / レスポンス ───────────
@@ -175,10 +195,15 @@ def create_session(body: NewSession) -> dict[str, Any]:
 
     if len(_SESSIONS) >= MAX_SESSIONS:
         # 単独プレイ前提。古いものから落として青天井の滞留を防ぐ
+        _forget(next(iter(_SESSIONS)))
         _SESSIONS.pop(next(iter(_SESSIONS)))
 
     sid = uuid.uuid4().hex
     _SESSIONS[sid] = engine
+    now = time.monotonic()
+    _MOVES[sid] = []
+    _OPENED[sid] = now
+    _MARKS[sid] = now
     return {
         "session_id": sid,
         "title": sc.meta.title,
@@ -198,6 +223,54 @@ def create_session(body: NewSession) -> dict[str, Any]:
     }
 
 
+def _log_move(
+    sid: str,
+    engine: Engine,
+    body: Decision,
+    phase: str,
+    minute: int,
+    *,
+    blocked: bool = False,
+) -> None:
+    """1手ぶんの足あとを残す（SPEC 7.5.4）。
+
+    **失敗しても遊びを止めない。** 足あとは採点にも講評にも効かないので、
+    ここで例外を上げて手が通らなくなるほうが害が大きい。
+    """
+    log = _MOVES.get(sid)
+    if log is None:
+        return
+    now = time.monotonic()
+    log.append(
+        records_mod.Move(
+            n=len(log) + 1,
+            kind=(body.kind + "_blocked") if blocked else body.kind,
+            action_id=body.action_id if body.kind == "action" else None,
+            phase=phase,
+            at_minute=minute,
+            cost_minutes=engine.state.elapsed_minutes - minute,
+            think_seconds=round(now - _MARKS.get(sid, now), 1),
+        )
+    )
+    _MARKS[sid] = now
+
+
+@app.post("/api/session/{sid}/begin")
+def begin(sid: str) -> dict[str, bool]:
+    """ブリーフィングを閉じた、という合図だけを受ける（SPEC 7.5.4）。
+
+    **盤面は1つも動かない。** 受け取るのは時刻だけで、
+    ここから先の「手が止まった秒」が、ブリーフィングを読んでいた時間と
+    混ざらなくなる。**読ませすぎていないかは、この差でしか分からない。**
+    """
+    _get(sid)  # 知らないセッションには答えない
+    now = time.monotonic()
+    if sid in _OPENED and sid not in _BRIEFING:
+        _BRIEFING[sid] = round(now - _OPENED[sid], 1)
+    _MARKS[sid] = now
+    return {"ok": True}
+
+
 @app.post("/api/session/{sid}/decide")
 def decide(sid: str, body: Decision) -> dict[str, Any]:
     engine = _get(sid)
@@ -206,9 +279,16 @@ def decide(sid: str, body: Decision) -> dict[str, Any]:
         if body.kind == "action"
         else None
     )
+    # **押す前**の盤面を控える。押した後では、その手が何分進めたか言えない
+    before_phase = engine.state.current_phase
+    before_minute = engine.state.elapsed_minutes
     try:
         outcome = engine.decide(body)
     except AssessmentRequired:
+        # **断られた手も足あとに残す。** 「被疑判定を出す前に進もうとした」は
+        # 盤面を1つも動かさないが、規則が伝わっていなかったという意味では
+        # 通った手より強い合図である（SPEC 7.5.4）
+        _log_move(sid, engine, body, before_phase, before_minute, blocked=True)
         return {
             "needs_assessment": True,
             "view": engine.view(),
@@ -226,6 +306,8 @@ def decide(sid: str, body: Decision) -> dict[str, Any]:
         }
     except InvalidDecision as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    _log_move(sid, engine, body, before_phase, before_minute)
 
     by_id = engine.scenario.evidence_by_id
     profile = engine.profile
@@ -333,7 +415,12 @@ _REPORTS: dict[str, report_json.Report] = {}
 def _report_cache(sid: str, engine: Engine) -> report_json.Report:
     """記録の保存は1セッションにつき1回だけ行う。"""
     if sid not in _REPORTS:
-        _REPORTS[sid] = report_json.build(engine.state, engine.scenario)
+        _REPORTS[sid] = report_json.build(
+            engine.state,
+            engine.scenario,
+            moves=_MOVES.get(sid),
+            briefing_seconds=_BRIEFING.get(sid),
+        )
     return _REPORTS[sid]
 
 

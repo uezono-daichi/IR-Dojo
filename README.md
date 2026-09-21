@@ -147,6 +147,8 @@ python tools/balance.py <シナリオID>     # 同梱のどれでも
 python tools/balance.py --json           # 機械可読（落ちた項目があれば終了コード 1）
 npm install
 node tools/playtest.mjs --dpr 2 --scenario <シナリオID>   # 実際に遊ぶ＋スクショ
+python tools/playtest_report.py                          # 人に遊んでもらった記録を読む
+python tools/make_tester_zip.py                          # テスト配布用の zip を作る
 node tools/playtest.mjs --dpr 2 --assist hard            # hard は画面の作りが一番変わる
 ```
 

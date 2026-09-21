@@ -957,3 +957,22 @@ def test_the_playtest_opens_the_fold_before_reading_the_sample(playtest_mjs):
     assert playtest_mjs.index("brief-legend-fold") < playtest_mjs.index(
         "legendSample('#brief-mini')"
     ), "見本を読んだ後に畳みを開いている"
+
+
+def test_the_screen_calls_begin_with_the_session_it_has(app_js):
+    """画面が `begin` を**存在する名前**で呼ぶこと（SPEC 7.5.4）。
+
+    実際に踏んだ: `S.sid` と書いた。そんな欄は無いので URL は
+    `/api/session/undefined/begin` になり、サーバは 404 を返していた。
+    **Python の検査は全部通っていた** — あちらは API を直に叩くので、
+    画面の配線を1行も通らない。拾ったのは `playtest.mjs` である。
+
+    ここで見るのは、セッション id を指す名前が画面の中で1つであること。
+    """
+    body = strip_comments(app_js)
+    used = set(re.findall(r"'/api/session/' \+ (S\.\w+)", body))
+    assert used, "セッションの呼び出しが見つからない"
+    assert len(used) == 1, f"セッション id の呼び名が割れている: {sorted(used)}"
+    name = used.pop().split(".", 1)[1]
+    assert re.search(rf"S\.{name}\s*=", body), f"S.{name} に代入している場所が無い"
+    assert "/begin'" in body, "ブリーフィングを閉じた合図を送っていない"

@@ -1710,7 +1710,11 @@ def emit_swap() -> int:
             ],
         ))
         print(f"  {sc.meta.id}: {len(out[-1].rows)}×{len(order)}")
-    data = swap_data.SwapFile(fingerprint=swap_data.fingerprint(), scenarios=out)
+    data = swap_data.SwapFile(
+        fingerprint=swap_data.fingerprint(),
+        generator=swap_data.generator_digest(),
+        scenarios=out,
+    )
     swap_data.DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
     swap_data.DATA_FILE.write_text(
         json.dumps(data.model_dump(), ensure_ascii=False, indent=2) + "\n",
