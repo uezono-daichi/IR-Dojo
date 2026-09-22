@@ -1,0 +1,546 @@
+schema_version: "0.4"
+
+# ─────────────────────────────────────────────────────────
+# 練習の盤面 その1 — 遊び方を覚える（SPEC 3.13）
+#
+# **ここで教えるのは操作であって、判断ではない。**
+# 判断の練習は tutorial-02 が受け持つ。
+#
+# 盤面は意図的に小さい。資産3つ・証拠5つ・手6つ。
+# 迷う余地を残すと、操作を覚える前に判断で詰まる。
+# ただし**盤面としては本物である** — 誤導が1つあり、名指しを間違えれば
+# 点は下がる。偽の盤面で操作だけ覚えても、本番で同じ画面に見えない。
+# ─────────────────────────────────────────────────────────
+
+meta:
+  id: tutorial-01-how-to-play
+  title: 遊び方を覚える
+  version: "1.0.0"
+  author: IR Dojo
+  license: CC-BY-4.0
+  estimated_play_minutes: 5
+  language: ja
+  tutorial: true
+  default_policy: evidence_first
+  default_assist_level: assisted
+  tags: [tutorial, how-to-play]
+  briefing: |
+    10:05、監視の仕組みから警告が1件。
+    営業部のある端末で、見慣れない実行ファイルが起動した。
+    どの端末かは、警告の明細を開くまで分からない。
+
+    あなたは情報システム部の担当として対応にあたる。
+    拠点の管理対象は3台。現時点の一次情報は、この警告1件だけである。
+
+    この演習は、操作を覚えるための練習です。
+    画面の左に案内が出るので、そのとおりに進めてください。
+
+world:
+  assets:
+    - id: dir-01
+      label: 社内ディレクトリ
+      criticality: critical
+      depends_on: []
+      business_impact_per_hour: 120
+    - id: file-01
+      label: 共有ファイルサーバ
+      criticality: high
+      depends_on: [dir-01]
+      business_impact_per_hour: 60
+    - id: pc-01
+      label: 営業部の端末
+      criticality: medium
+      depends_on: [dir-01]
+      business_impact_per_hour: 10
+
+  ground_truth:
+    patient_zero: pc-01
+    compromised: [pc-01]
+    persistence: []
+    innocent: [file-01, dir-01]
+    attack_narrative: |
+      10:01、pc-01 の利用者が受信した添付を開き、実行ファイルが起動した。
+      外部の1宛先へ短い通信が出ているが、他の端末へは広がっていない。
+      同じ時間帯に file-01 で保守の再起動があり、無関係に記録が残っている。
+
+policies:
+  - id: evidence_first
+    label: 証拠保全最優先
+    briefing: |
+      事実を確定できる形で残すことを最優先とする。
+      止める前に、その資産の状態を先に控えること。
+    weights:
+      evidence_preserved: 0.45
+      containment_completeness: 0.25
+      total_damage: 0.2
+      business_impact: 0.1
+    constraints:
+      - type: forbid_containment_without_evidence
+        assets: [dir-01, file-01]
+        message: 根拠を示せないまま基幹資産を止めることは方針違反です
+
+  - id: containment_first
+    label: 早期封じ込め最優先
+    briefing: |
+      広がりを止めることを最優先とする。
+      証拠は取れる範囲で取ればよい。
+    weights:
+      containment_completeness: 0.45
+      total_damage: 0.3
+      business_impact: 0.15
+      evidence_preserved: 0.1
+    constraints:
+      - type: forbid_containment_without_evidence
+        assets: [dir-01]
+        message: 根拠を示せないままディレクトリを止めることは方針違反です
+
+evidence:
+  - id: ev_alert
+    points_to: [pc-01]
+    plausibility: high
+    occurred_at: "2026-05-12 10:01"
+    summary: pc-01 で、利用者の操作から続けて未知の実行ファイルが起動している
+    reading: |
+      起動時刻・実行ファイルの置き場所・起動した利用者を確認する。
+      親になっているプロセスまで辿ると、何をきっかけに走ったかが読める。
+      同じものが他の端末でも起動しているかは、この記録だけでは分からない。
+    content: |
+      # 端末の実行記録    pc-01
+      # 収集範囲: pc-01 のみ / 当日 00:00-11:00 / 非対象: 他の2台
+      2026-05-12T10:01:44Z  process_start  C:\Users\Public\update_check.exe
+                            parent : outlook.exe
+                            user   : sales03
+      2026-05-12T10:01:47Z  network_connect  198.51.100.24:443
+      2026-05-12T10:02:10Z  process_exit   code 0
+
+  - id: ev_proxy
+    points_to: [pc-01]
+    plausibility: high
+    occurred_at: "2026-05-12 10:01"
+    summary: 外へ出た通信は pc-01 からの1宛先だけで、他の端末からは出ていない
+    reading: |
+      宛先ごとに送信量を畳んで並べる。端末を1台に絞らず、
+      拠点全体を同じ条件で並べ直すのが要点である。
+      普段から出ている宛先と、今日だけ出ている宛先を分けて見る。
+    content: |
+      # 境界プロキシ 宛先別
+      # 集計対象: 拠点の全3台 / 当日 00:00-11:00 / 非対象: 社内間の通信
+      198.51.100.24     pc-01    requests 3    bytes_out 1,204   first 10:01
+      updates.example   pc-01    requests 41   bytes_out 98,220  first 08:30
+      updates.example   file-01  requests 12   bytes_out 20,110  first 08:31
+      updates.example   dir-01   requests 9    bytes_out 14,002  first 08:30
+
+  - id: ev_file_reboot
+    points_to: [file-01]
+    misleading: true
+    plausibility: medium
+    refuted_by: [ev_maint_ledger]
+    refutation_mode: any
+    occurred_at: "2026-05-12 10:03"
+    summary: file-01 が、警告とほぼ同じ時刻に停止して起動し直している
+    reading: |
+      停止と起動の記録を、その日の作業台帳と突き合わせる。
+      計画されたものか、何かに反応したものかは、この記録だけでは分かれない。
+      理由の欄は書いた側の申告なので、別の資料で裏を取る。
+    content: |
+      # システムイベント    file-01
+      # 収集範囲: file-01 のみ / 当日 00:00-11:00 / 非対象: 他の2台
+      2026-05-12T10:03:02Z  shutdown  reason: planned   initiator: service
+      2026-05-12T10:06:58Z  boot      uptime reset
+      2026-05-12T10:07:40Z  service_start  ファイル共有
+
+  - id: ev_maint_ledger
+    points_to: []
+    plausibility: high
+    summary: その停止は計画された定例作業で、今回の警告とは無関係である
+    reading: |
+      台帳は平常時の姿を教える。いつもそうなのか、今日だけかが分かる。
+      承認者の欄まで見ると、申告だけの記録かどうかが分かれる。
+      記載が無い場合は、台帳の側が更新されていない可能性も残る。
+    content: |
+      # 保守台帳 2026-05-12
+      # 照会対象: 当日の全作業 / 非対象: 翌日以降の予定
+      10:00-10:10  file-01  月次の計画再起動   承認: 運用課   実施: 自動
+      13:00-13:30  dir-01   証明書の入れ替え   承認: 運用課   実施: 手動
+      （過去6か月、毎月12日の同時刻に同じ作業が記載されている）
+
+  - id: ev_dir_auth
+    points_to: []
+    plausibility: low
+    summary: ディレクトリの認証に、平常時と比べて目立つ変化は見当たらない
+    reading: |
+      認証の失敗数を、直近7日の同じ時刻と比べる。
+      成功のほうも見る。失敗が増えないまま成功だけが増える形もある。
+      所在地の欄が無い環境では、この集計だけで入られ方は分からない。
+    content: |
+      # 認証集計    dir-01
+      # 集計対象: dir-01 の認証のみ / 当日 00:00-11:00 / 非対象: 端末側のログオン
+      2026-05-12 10:00-11:00   success 128   failure 2
+      7日平均（同時刻）        success 131   failure 3
+      新規の所在地からの成功   0 件
+
+open_questions:
+  - id: q_scope
+    label: 広がりの有無
+    question: 同じ実行ファイルが、他の端末でも起動しているか
+    critical: true
+    resolved_by: [ev_proxy]
+    resolution_mode: any
+    implication: |
+      未解消のまま止めても、同じものが動いている端末が残ります。
+      1台だけを止めて終えると、翌日に同じ警告が別の端末から出ます。
+
+  - id: q_outside
+    label: 外へ出た通信
+    question: 外部へ出た通信があるとすれば、どこへ、どれだけか
+    critical: false
+    resolved_by: [ev_proxy]
+    resolution_mode: any
+    implication: |
+      分からないままだと、何が外へ渡ったかを後から説明できません。
+
+actions:
+  - id: act_read_alert
+    label: 警告の明細を引く
+    type: investigate
+    phase: investigation
+    cost_minutes: 10
+    group: 警告を調べる
+    command: |
+      $ alertctl show --id ALERT-2026-0512-018 --with-process-tree
+        1 record   (00:00:12)
+
+      $ alertctl list --rule R-props --days 7 --group-by host
+        hosts : 1
+    description: |
+      監視が出した警告を、発報の根拠まで開いて読む。
+      何が、いつ、どの利用者の下で起動したかを確認する。
+    yields: [ev_alert]
+
+  - id: act_proxy_summary
+    label: 境界の通信を宛先別に集計する
+    type: investigate
+    phase: investigation
+    cost_minutes: 15
+    group: 境界を調べる
+    investigates: [pc-01, file-01, dir-01]
+    command: |
+      $ proxyq summarize --site all --since 2026-05-12T00:00Z --group-by dest,host
+        scanned 41,208 requests   dests 4   hosts 3   (00:01:40)
+    description: |
+      境界のプロキシが記録した要求を、宛先ごとに送信量で畳んで並べる。
+    yields: [ev_proxy]
+
+  - id: act_file_events
+    label: file-01 のシステムイベントを読む
+    type: investigate
+    phase: investigation
+    cost_minutes: 10
+    group: file-01 を調べる
+    investigates: [file-01]
+    command: |
+      $ evtq fetch --host file-01 --channel System --since 2026-05-12T00:00Z
+        1,204 events   filtered 3   (00:00:48)
+    description: |
+      サーバのシステムイベントを、当日の時間帯で抜き出す。
+    yields: [ev_file_reboot]
+
+  - id: act_maint_ledger
+    label: file-01 を含む、その日の保守台帳を確認する
+    type: investigate
+    phase: investigation
+    cost_minutes: 5
+    group: file-01 を調べる
+    investigates: [file-01]
+    command: |
+      $ opsledger show --date 2026-05-12 --all
+        2 entries   (00:00:05)
+
+      $ opsledger history --host file-01 --months 6
+        6 entries
+    description: |
+      運用課が持つ当日の作業台帳を確認する。
+      予定されていた作業と、その時間帯を読む。
+    yields: [ev_maint_ledger]
+
+  - id: act_dir_auth
+    label: dir-01 の認証集計を引く
+    type: investigate
+    phase: investigation
+    cost_minutes: 10
+    group: dir-01 を調べる
+    investigates: [dir-01]
+    command: |
+      $ authq summarize --host dir-01 --since 2026-05-12T00:00Z --baseline 7d
+        buckets 11   compared 7   (00:00:31)
+    description: |
+      認証の成否を時間帯ごとに畳み、直近7日の同じ時刻と並べる。
+    yields: [ev_dir_auth]
+
+  - id: act_lock_dir
+    label: ディレクトリの認証を一時的に止める
+    type: contain
+    phase: response
+    cost_minutes: 20
+    group: 止める
+    targets: [dir-01]
+    command: |
+      $ dirctl auth disable --host dir-01 --scope all
+        applied   active tickets revoked 1,044   (00:02:41)
+    description: |
+      ディレクトリの認証を止める。止めている間、全員がどこにも入れない。
+    side_effects:
+      business_impact: true
+
+  - id: act_isolate_pc
+    label: pc-01 をネットワークから隔離する
+    type: contain
+    phase: response
+    cost_minutes: 10
+    group: 止める
+    targets: [pc-01]
+    command: |
+      $ netctl isolate --host pc-01 --allow mgmt
+        applied   sessions dropped 4   (00:00:22)
+    description: |
+      端末の通信を遮断する。端末そのものは動いたままにする。
+    side_effects:
+      business_impact: true
+
+  - id: act_rebuild_file
+    label: file-01 を標準構成に戻す
+    type: contain
+    phase: response
+    cost_minutes: 30
+    group: 取り除く
+    targets: [file-01]
+    eradicates: [file-01]
+    command: |
+      $ baseline restore --host file-01 --scope autorun,services
+        2 entries reverted   baseline matched 38   (00:04:10)
+
+      $ baseline verify --host file-01 --deep
+        scanned 402,118 objects   (00:21:04)
+    description: |
+      サーバの自動実行まわりの登録を、管理の標準構成と突き合わせて戻す。
+      サービスは動いたままで、利用者の作業も止まらない。
+    side_effects:
+      business_impact: false
+
+  - id: act_rebuild_pc
+    label: pc-01 を標準構成に戻す
+    type: contain
+    phase: response
+    cost_minutes: 25
+    group: 取り除く
+    targets: [pc-01]
+    eradicates: [pc-01]
+    command: |
+      $ baseline restore --host pc-01 --scope autorun,tasks
+        1 entry reverted   baseline matched 27   (00:03:30)
+
+      $ baseline verify --host pc-01 --deep
+        scanned 188,402 objects   (00:17:12)
+    description: |
+      端末の自動実行まわりの登録を、管理の標準構成と突き合わせて戻す。
+      端末は動いたままで、利用者の作業も止まらない。
+    side_effects:
+      business_impact: false
+
+  - id: act_stop_file
+    label: 共有ファイルサーバを停止する
+    type: contain
+    phase: response
+    cost_minutes: 15
+    group: 止める
+    targets: [file-01]
+    command: |
+      $ svcctl stop --host file-01 --service fileshare --wait
+        stopped   open handles closed 212   (00:01:55)
+    description: |
+      サーバを停止する。停止中は共有領域を誰も使えない。
+    side_effects:
+      business_impact: true
+
+phases:
+  - id: investigation
+    label: 調査
+    advance_label: 対応フェーズに移る
+  - id: response
+    label: 封じ込め・対応
+    advance_label: null
+    requires_assessment: true
+
+damage:
+  model: exponential
+  params:
+    base: 120.0
+    rate: 0.12
+  acceleration:
+    threshold_minutes: 90
+    multiplier: 2.0
+  containment_effect:
+    on_correct_containment: 0.2
+    on_partial: 0.6
+    on_incorrect: 1.0
+
+scoring:
+  fact_layer:
+    metrics:
+      - id: assessment_precision
+        label: 被疑判定の適合率
+        direction: higher_is_better
+      - id: assessment_recall
+        label: 被疑判定の再現率
+        direction: higher_is_better
+      - id: assessment_support
+        label: 名指しの裏付け
+        direction: higher_is_better
+      - id: unresolved_questions
+        label: 未解消論点を抱えたままの判断
+        label_good: 論点を解消してからの判断
+        direction: lower_is_better
+    weights:
+      assessment_precision: 0.2
+      assessment_recall: 0.2
+      assessment_support: 0.2
+      unresolved_questions: 0.4
+  policy_layer:
+    constraint_penalty: 0.15
+  consequence_layer:
+    display_only:
+      - elapsed_minutes
+      - total_damage
+      - business_impact
+      - evidence_preserved
+      - containment_completeness
+    business_impact_horizon_minutes: 480
+    normalization:
+      total_damage:
+        worst: 4200
+        best: 0
+      business_impact:
+        worst: 560
+        best: 0
+      evidence_preserved:
+        worst: 0.8
+        best: 1.0
+      containment_completeness:
+        worst: 0.0
+        best: 1.0
+  composite:
+    method: weighted_sum
+    fact_weight: 0.7
+
+# ─────────────────────────────────────────────────────────
+# 案内（SPEC 3.13）
+#
+# **書いてあるのは手順と理由で、答えではない。**
+# 「この端末が侵害されています」は1段も書いていない。
+# 答えはふつうの演習と同じく、講評で初めて出る（SPEC 5.9）。
+#
+# 手を名指しする段には `caveat` が要る（ローダが強制する）。
+# 「まずこうしましょう」と言う以上、**それが唯一の正解ではないこと**を
+# 同じ画面で言わないと、この製品の主張と正面から衝突する。
+# ─────────────────────────────────────────────────────────
+
+tutorial:
+  - id: t01_strip
+    points_at: ".strip-stats"
+    body: |
+      ようこそ。この演習で**あなたがすることは3つだけ**です。
+      **調べる → 侵害された資産を名指しする → 止める。**
+
+      まず画面の見方から。光っている左上の3つが**帰結**です。
+      経過時間・累積被害・業務影響が出ています。
+
+      **ここは採点されません。** 出しているのは「あなたの対応が
+      何をもたらしたか」で、その良し悪しは方針によって変わるからです。
+
+  - id: t02_questions
+    points_at: "#questions-panel"
+    body: |
+      右上が**未解消の論点**です。
+      「まだ説明がついていない問い」が並んでいます。
+
+      抱えたまま先へ進むこともできます。ただし
+      **その状態で決めたことは記録され、採点されます。**
+      ここが、この演習がいちばん重く見ているところです。
+
+  - id: t03_first_move
+    expect_action: act_read_alert
+    caveat: |
+      これが唯一の始め方ではありません。先に境界の通信から見る人もいます。
+      **押す順番は、方針と、何を失いたくないかで変わります。**
+    body: |
+      では1手目。右のアクション欄から
+      **警告の明細を引いて**ください。
+
+      監視から来た一次情報は「未知の実行ファイルが起動した」だけです。
+      **報告は観測ではありません。** 何が・いつ・どの利用者の下で起きたかを、
+      発報の根拠まで開いて自分で確かめるところから始めます。
+
+      押すと**仮想の時計が進みます**（実際に待つわけではありません）。
+      調べるのはタダではない、というのがこの演習の前提です。
+
+  - id: t04_result
+    points_at: "#result-area"
+    body: |
+      左に結果が出ました。**流したコマンドと、その出力**がそのまま置いてあります。
+
+      出力の下に「分かったこと」として証拠が積まれます。
+      番号（`ev_...`）が付いているものが、後で名指しの根拠になります。
+
+      **上の論点を見てください。** 1つ説明がついたかもしれません。
+
+  - id: t05_spread
+    expect_action: act_proxy_summary
+    caveat: |
+      通信から見るのが常に正しいわけではありません。
+      端末が手元にあるなら、先に端末の中を見たほうが早いこともあります。
+    body: |
+      次に**広がり**を見ます。1台で済んでいるのか、他にも同じことが
+      起きているのか。これが分からないうちに止めると、
+      止めた翌日に同じ警告が別の端末から出ます。
+
+      **境界の通信を宛先別に集計**してください。
+      1台ぶんではなく、拠点全体を同じ条件で並べ直すのが要点です。
+
+  - id: t06_noise
+    body: |
+      ここで1つ覚えてください。
+
+      **時間帯が近いだけの記録が混ざっています。**
+      同じ時刻に起きたことが、同じ原因とは限りません。
+      それを確かめる一番安い方法は、**平常時の姿と比べる**ことです。
+      台帳や設定を見れば「いつもそうなのか、今日だけか」が分かります。
+
+      余裕があれば、右の `file-01 を調べる` の2つを両方押してみてください。
+      片方だけ押して決めると、何が起きるかが分かります。
+
+  - id: t07_declare
+    expect_kind: declare_assessment
+    body: |
+      調査はこれくらいにして、**名指し**に進みます。
+
+      下の **対応フェーズに移る** を押してください。
+      押すと、先に**被疑判定**を訊かれます。
+      **攻撃者の行為として説明できる資産はどれか**を、
+      いまの根拠で選ぶところです。「怪しい」ではなく
+      「観測された事実で説明がつくか」で決めます。
+
+      **迷ったら、根拠を挙げられるものだけを選んでください。**
+      当てずっぽうで数を増やすと適合率が下がり、
+      取りこぼすと再現率が下がります。両方が別々に測られます。
+
+  - id: t08_finish
+    expect_kind: finish
+    body: |
+      ここからが**封じ込め・対応**です。右のアクションが入れ替わりました。
+
+      止める手を打ってもいいですし、**何も止めずに終えることもできます。**
+      どちらが正しいかは、上に出ている方針が決めます。
+
+      終わったら下の **対応を終了する** を押してください。
+      **講評はそこで初めて出ます。** 何が本当に侵害されていたか、
+      何を見落としたか、何を失ったかが、全部そこに出ます。

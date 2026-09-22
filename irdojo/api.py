@@ -76,6 +76,7 @@ class ScenarioBrief(BaseModel):
     id: str
     title: str
     complexity: int
+    tutorial: bool
     estimated_play_minutes: int
     tags: list[str]
     policies: list[PolicyBrief]
@@ -93,6 +94,7 @@ def get_scenarios() -> list[ScenarioBrief]:
             id=sc.meta.id,
             title=sc.meta.title,
             complexity=sc.complexity,
+            tutorial=sc.meta.tutorial,
             estimated_play_minutes=sc.meta.estimated_play_minutes,
             tags=list(sc.meta.tags),
             policies=[PolicyBrief(id=p.id, label=p.label) for p in sc.policies],
@@ -210,6 +212,19 @@ def create_session(body: NewSession) -> dict[str, Any]:
         "briefing": sc.meta.briefing,
         "policy_label": engine.policy.label,
         "policy_briefing": engine.policy.briefing,
+        # 案内（SPEC 3.13）。**書いてあるのは手順と理由で、答えではない。**
+        # 練習の盤面にしか付かない
+        "tutorial": [
+            {
+                "id": s.id,
+                "body": s.body,
+                "expect_action": s.expect_action,
+                "expect_kind": s.expect_kind,
+                "caveat": s.caveat,
+                "points_at": s.points_at,
+            }
+            for s in sc.tutorial
+        ],
         # 演習の段取り。答えではなく規則なので、始める前に開示する
         "phases": [
             {

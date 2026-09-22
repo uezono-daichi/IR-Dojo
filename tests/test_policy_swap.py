@@ -62,6 +62,11 @@ def test_the_stored_matrix_is_what_the_engine_scores_today(stored, balance):
     """
     saved = {s.scenario_id: s for s in stored.scenarios}
     for sc in list_scenarios():
+        # 練習の盤面は入口の表に入らない（SPEC 3.13）。
+        # 案内どおりに1本道を歩く盤面は、「方針を差し替えると最善が
+        # 入れ替わる」の証拠にならない
+        if sc.meta.tutorial:
+            continue
         assert sc.meta.id in saved, f"{sc.meta.id} の表が生成物に無い"
         fresh = balance.policy_swap(sc)
         row = saved[sc.meta.id]
@@ -77,9 +82,13 @@ def test_every_bundled_scenario_has_a_row(stored):
     足したまま焼き直さないと、入口は**前からある盤面の表**を
     出し続ける。指紋はシナリオを含むので実際には表ごと消えるが、
     消えた理由がこれであることを名指しで言えるようにしておく。
+
+    **練習の盤面は入らない**（SPEC 3.13）。入口の表は「方針を差し替えると
+    最善が入れ替わる」を見せるもので、案内どおりに1本道を歩く盤面は
+    その主張の証拠にならない。
     """
     assert {s.scenario_id for s in stored.scenarios} == {
-        sc.meta.id for sc in list_scenarios()
+        sc.meta.id for sc in list_scenarios() if not sc.meta.tutorial
     }
 
 

@@ -1,0 +1,774 @@
+schema_version: "0.4"
+
+# ─────────────────────────────────────────────────────────
+# 練習の盤面 その2 — はじめてのインシデント対応（SPEC 3.13）
+#
+# **教科書として書いてある。** 何をすればいいのか全く分からない人が、
+# 案内どおりに歩くだけで、インシデント対応の考え方を一通り追体験できること。
+#
+# 教えるのは次の5つ。どれも**方法**であって、この盤面の答えではない。
+#   1. 一次情報は報告であって観測ではない
+#   2. 平常時の姿と比べる（いつもそうなのか、今日だけか）
+#   3. 時刻の近さは関係の証明にならない
+#   4. 説明できていないことを残したまま決めない
+#   5. 止める順番と、そのとき失うもの
+#
+# **盤面は本物である。** 誤導が2つあり、片方は1つの証拠では棄却できない。
+# 案内を読まずに歩けば、ふつうに間違える。
+# ─────────────────────────────────────────────────────────
+
+meta:
+  id: tutorial-02-first-response
+  title: はじめてのインシデント対応
+  version: "1.0.0"
+  author: IR Dojo
+  license: CC-BY-4.0
+  estimated_play_minutes: 15
+  language: ja
+  tutorial: true
+  default_policy: evidence_first
+  default_assist_level: assisted
+  tags: [tutorial, phishing, identity]
+  briefing: |
+    14:20、取引先から連絡が1件。
+    「営業部の山田さんから、見慣れない共有リンクの付いたメールが届いた。
+      本文が短くて不自然なので、念のため確認したい」
+
+    差出人は詐称ではなく、自社のメール基盤から出た本物の送信である。
+    あなたは情報システム部の担当として対応にあたる。
+
+    拠点の管理対象は4つ。現時点の一次情報は、この連絡1件だけである。
+
+    この演習は、考え方を覚えるための練習です。
+    左の案内が、何をなぜするのかを順に説明します。
+
+world:
+  assets:
+    - id: mail-01
+      label: メール基盤
+      criticality: critical
+      depends_on: []
+      business_impact_per_hour: 200
+    - id: share-01
+      label: 共有ストレージ
+      criticality: high
+      depends_on: [mail-01]
+      business_impact_per_hour: 90
+    - id: acct-yamada
+      label: 営業部 山田の業務アカウント
+      # 資料はアドレスでこのアカウントを呼ぶ。宣言しないと、
+      # 盤の言及数を過少に数え、漏洩検査が空振りする
+      aliases: ["yamada@example.co.jp", "yamada"]
+      criticality: medium
+      depends_on: [mail-01]
+      business_impact_per_hour: 15
+    - id: pc-02
+      label: 営業部 山田の業務端末
+      criticality: medium
+      depends_on: [mail-01]
+      business_impact_per_hour: 12
+
+  ground_truth:
+    patient_zero: acct-yamada
+    compromised: [acct-yamada]
+    persistence: [acct-yamada]
+    innocent: [pc-02, share-01, mail-01]
+    attack_narrative: |
+      13:41、山田のアカウントに、国外の1アドレスから正しい資格情報で
+      ログインが成功している。多要素認証は使われていない。
+      14:05、そのアカウントから取引先22件へ同じ本文のメールが送られた。
+      同じ時刻に、サーバ側の自動転送の規則が1件追加されている。
+
+      端末 pc-02 は関係していない。14時台に走った検疫は、
+      3か月前に検知して隔離済みのファイルに対する定例の再スキャンである。
+      共有ストレージの大量ダウンロードは、別部署の月次の棚卸しである。
+
+policies:
+  - id: evidence_first
+    label: 証拠保全最優先
+    briefing: |
+      法的手続きと対外的な説明に耐える形で事実を確定することを最優先とする。
+      止める資産ごとに、その資産の状態を先に保全すること。
+    weights:
+      evidence_preserved: 0.45
+      containment_completeness: 0.25
+      total_damage: 0.2
+      business_impact: 0.1
+    constraints:
+      - type: forbid_containment_without_evidence
+        assets: [mail-01, share-01]
+        message: 根拠を示せないまま基幹資産を止めることは方針違反です
+
+  - id: containment_first
+    label: 早期封じ込め最優先
+    briefing: |
+      広がりを止めることを最優先とする。
+      証拠は取れる範囲で取ればよい。
+    weights:
+      containment_completeness: 0.45
+      total_damage: 0.3
+      business_impact: 0.15
+      evidence_preserved: 0.1
+    constraints:
+      - type: forbid_containment_without_evidence
+        assets: [mail-01]
+        message: 根拠を示せないままメール基盤を止めることは方針違反です
+
+  - id: business_continuity
+    label: 業務継続最優先
+    briefing: |
+      基幹業務の停止は最終手段とする。
+      封じ込めは業務影響を最小化する形で実施すること。
+    weights:
+      business_impact: 0.45
+      total_damage: 0.25
+      containment_completeness: 0.2
+      evidence_preserved: 0.1
+    constraints:
+      - type: forbid_containment_without_evidence
+        assets: [mail-01, share-01]
+        message: 根拠なしに基幹資産を停止することは方針違反です
+
+evidence:
+  - id: ev_sent
+    points_to: [acct-yamada]
+    plausibility: high
+    occurred_at: "2026-07-03 14:05"
+    summary: yamada@example.co.jp から、取引先22件へ同じ本文が一斉に送られている
+    reading: |
+      メール追跡から、当該アカウントの社外宛て送信を時刻順に抜き出す。
+      宛先の数と、本文が同一かどうかを見る。
+      1件なら誤送信、数十件で本文が同じなら別の話になる。
+    content: |
+      # メール追跡    sender: yamada@example.co.jp
+      # 集計対象: 当該アカウントの社外宛てのみ / 当日 / 非対象: 社内宛て
+      2026-07-03T14:05:11Z  recipients 22  subject "共有のご案内"
+      2026-07-03T14:05:12Z  body_hash 9f2c...   (22件すべて同一)
+      2026-07-03T09:40:02Z  recipients 1   subject "見積の件"  body_hash 3a71...
+
+  - id: ev_signin
+    points_to: [acct-yamada]
+    plausibility: high
+    occurred_at: "2026-07-03 13:41"
+    summary: yamada@example.co.jp に、国外から正しい資格情報でのログインが成功している
+    reading: |
+      サインインの記録を、成否・所在地・多要素認証の有無で畳んで並べる。
+      直近30日の同じアカウントの姿と比べる。
+      失敗が増えないまま成功だけが増える形もあるので、成功のほうも見る。
+    content: |
+      # サインイン記録    yamada@example.co.jp
+      # 照会対象: 当該アカウントのみ / 直近30日
+      # 非対象: 他のアカウント、端末側の記録（pc-02 ほか）
+      2026-07-03T13:41:02Z  success  ip 203.0.113.77  (JP外)  mfa: none
+      2026-07-03T09:12:48Z  success  ip 198.51.100.5  (社内)  mfa: none
+      直近30日  社内からの成功 41件 / 国外からの成功 0件 / 失敗 2件
+
+  - id: ev_forward_rule
+    points_to: [acct-yamada]
+    plausibility: high
+    occurred_at: "2026-07-03 14:06"
+    summary: yamada@example.co.jp に、受信を外部へ自動転送する規則が1件追加されている
+    reading: |
+      テナント側に保存された転送規則を一覧し、作成時刻と作成者を見る。
+      端末のメールソフトの設定とは別の場所にあるので、端末を見ても出てこない。
+      控えを残さない設定になっていると、本人の受信箱には何も残らない。
+    content: |
+      # 転送規則    yamada@example.co.jp
+      # 照会対象: テナント側の規則のみ / 非対象: 端末側のクライアント設定
+      rule "bk"   created 2026-07-03T14:06:30Z   by: 当該アカウント
+                  forward_to: <外部アドレス>   keep_copy: false   enabled: true
+      （30日前の一覧にはこの規則は無い）
+
+  - id: ev_pc_scan
+    points_to: [pc-02]
+    misleading: true
+    plausibility: high
+    refuted_by: [ev_pc_quarantine, ev_pc_schedule]
+    refutation_mode: all
+    occurred_at: "2026-07-03 14:12"
+    summary: pc-02 で、同じ時間帯に検疫が走って検知が出ている
+    reading: |
+      pc-02 の検知の記録を、検知時刻・対象・処理結果で並べる。
+      その検知が今日のものか、過去のものの再走査かを分ける。
+      走ったきっかけが定例か手動かも、別の欄を見ないと分からない。
+    content: |
+      # 端末防御    pc-02
+      # 収集範囲: pc-02 のみ / 当日 / 非対象: 他の端末・サーバ
+      2026-07-03T14:12:03Z  scan_start   profile: scheduled
+      2026-07-03T14:12:40Z  detection    file: \Downloads\old_invoice.zip
+      2026-07-03T14:12:41Z  action       no_change  (already contained)
+
+  - id: ev_pc_quarantine
+    points_to: []
+    plausibility: high
+    summary: その検知の対象は、3か月前に隔離済みで処理は変わっていない
+    reading: |
+      pc-02 の隔離台帳を引き、そのファイルを最初に隔離した日を見る。
+      台帳に記載が無い場合は、台帳の側が更新されていない可能性も残る。
+      処理結果の欄まで見ると、今日何かが変わったかどうかが分かれる。
+    content: |
+      # 隔離台帳    pc-02
+      # 照会対象: pc-02 の隔離済み項目 / 非対象: 削除済みの履歴
+      old_invoice.zip   quarantined 2026-04-02   status: contained
+                        last_change 2026-04-02   (当日の変更なし)
+      （同じ端末の隔離済み項目は、他に2件）
+
+  - id: ev_pc_schedule
+    points_to: []
+    plausibility: high
+    summary: pc-02 の検疫は毎月3日の定例として設定されている
+    reading: |
+      pc-02 に配られている検疫の実行設定を読む。
+      定例か、手動か、何かに反応したものかを分ける。
+      全端末に同じ設定が配られているかどうかも、同時に見る。
+      設定が最近変えられていれば、それ自体が見るべきものになる。
+    content: |
+      # 検疫の設定    pc-02
+      # 照会対象: 配布されている実行設定 / 非対象: 利用者の手動実行の履歴
+      scheduled_scan  monthly  day 3  14:12   applies_to: 全端末
+      last_modified   2025-11-04   by: 端末運用チーム
+
+  - id: ev_share_bulk
+    points_to: [share-01]
+    misleading: true
+    plausibility: medium
+    refuted_by: [ev_share_ledger]
+    refutation_mode: any
+    summary: share-01 で、同じ日に一括の大量ダウンロードが記録されている
+    reading: |
+      監査イベントをアカウント別・フォルダ別に畳み、件数と時刻の固まりを見る。
+      どのアカウントが、どの置き場を、どれだけまとめて開いたかを見る。
+      件数だけでは、業務上の作業と区別がつかない。
+    content: |
+      # 監査イベント    share-01
+      # 集計対象: 当日のダウンロードのみ / 非対象: 閲覧のみの操作
+      2026-07-03  keiri07   downloads 1,880   folder /経理/棚卸
+      2026-07-03  yamada    downloads 4       folder /営業/提案
+      2026-07-03        その他12アカウント  downloads 合計 96
+
+  - id: ev_share_ledger
+    points_to: []
+    plausibility: high
+    summary: その一括取得は部門の月次作業で、今回の連絡とは無関係である
+    reading: |
+      その置き場に出ている部門の作業依頼と、添えられた手順書を読む。
+      誰に何が指示され、どの範囲が対象とされていたかを確認する。
+      手順書を誰がいつ開いたかまで見ると、依頼だけが残った形と分かれる。
+    content: |
+      # 作業依頼 2026-07-03
+      # 照会対象: 当該置き場に出ている依頼 / 非対象: 他部門の置き場
+      経理部 月次棚卸し   対象 /経理/棚卸   担当 keiri07   承認 経理課長
+      手順書 v4          開封 2026-07-03T11:02Z  by keiri07
+      （過去6か月、毎月3日に同じ依頼が出ている）
+
+  - id: ev_mail_health
+    points_to: []
+    plausibility: low
+    summary: メール基盤そのものの管理操作に、平常時と比べた変化は見当たらない
+    reading: |
+      管理者操作の監査を、直近30日の同じ曜日と比べる。
+      操作の数だけでなく、誰が操作したかの顔ぶれも見る。
+      基盤側に変化が無いことは、アカウント側の話を打ち消さない。
+    content: |
+      # 管理操作監査    mail-01
+      # 照会対象: テナント管理者の操作のみ
+      # 非対象: 利用者自身の設定変更、端末側の設定（pc-02 ほか）
+      2026-07-03   admin_ops 3   actors 2   (30日平均 4 / actors 2-3)
+      新規の管理者追加 0 件 / 権限付与 0 件
+
+open_questions:
+  - id: q_how
+    label: 入られ方
+    question: そのアカウントに、どうやって入られたか
+    critical: true
+    resolved_by: [ev_signin]
+    resolution_mode: any
+    implication: |
+      分からないまま止めても、同じやり方でもう一度入られます。
+      パスワードを変えるだけで足りるのかどうかが決められません。
+
+  - id: q_left_behind
+    label: 残されたもの
+    question: 入り直せる状態が、どこかに残っていないか
+    critical: true
+    resolved_by: [ev_forward_rule]
+    resolution_mode: any
+    implication: |
+      残っていると、アカウントを止めた後も受信が外へ流れ続けます。
+      止めただけでは終わらない類の残り方があります。
+
+  - id: q_scope
+    label: 及んだ範囲
+    question: 同じことが、他のアカウントや置き場にも及んでいるか
+    critical: false
+    resolved_by: [ev_share_bulk, ev_share_ledger]
+    resolution_mode: any
+    implication: |
+      分からないままだと、1つ止めて終えた翌日に同じ連絡が来ます。
+
+actions:
+  - id: act_mail_trace
+    label: 送信されたメールを追跡する
+    type: investigate
+    phase: investigation
+    cost_minutes: 15
+    group: アカウントを調べる
+    investigates: [acct-yamada]
+    command: |
+      $ mailq trace --sender yamada@example.co.jp --external-only --date 2026-07-03
+        scanned 8,402 messages   matched 23   (00:00:54)
+    description: |
+      メール追跡から、当該アカウントの社外宛て送信を時刻順に抜き出す。
+      宛先の数と、本文が同一かどうかを見る。
+    yields: [ev_sent]
+
+  - id: act_signin_log
+    label: サインインの記録を引く
+    type: investigate
+    phase: investigation
+    cost_minutes: 20
+    group: アカウントを調べる
+    investigates: [acct-yamada]
+    command: |
+      $ idq signin --user yamada@example.co.jp --days 30 --group-by ip,mfa
+        rows 43   buckets 6   (00:01:18)
+    description: |
+      サインインの成否・所在地・多要素認証の有無で畳み、
+      直近30日の同じアカウントの姿と並べる。
+    yields: [ev_signin]
+
+  - id: act_forward_rules
+    label: サーバ側の転送規則を一覧する
+    type: investigate
+    phase: investigation
+    cost_minutes: 15
+    group: アカウントを調べる
+    investigates: [acct-yamada]
+    command: |
+      $ idq rules list --user yamada@example.co.jp --scope tenant
+        rules 1   (00:00:20)
+
+      $ idq rules diff --user yamada@example.co.jp --since 30d
+        added 1   removed 0
+    description: |
+      テナント側に保存された転送規則を一覧し、作成時刻と作成者を見る。
+      端末のメールソフトの設定とは別の場所にある。
+    yields: [ev_forward_rule]
+
+  - id: act_pc_defense
+    label: pc-02 の端末防御の記録を読む
+    type: investigate
+    phase: investigation
+    cost_minutes: 15
+    group: 端末を調べる
+    investigates: [pc-02]
+    command: |
+      $ edrctl events --host pc-02 --since 2026-07-03T00:00Z
+        events 1,880   detections 1   (00:00:41)
+    description: |
+      検知と検疫の記録を、時刻・対象・処理結果で並べる。
+    yields: [ev_pc_scan]
+
+  - id: act_pc_ledger
+    label: 端末の隔離台帳と検疫設定を確認する
+    type: investigate
+    phase: investigation
+    cost_minutes: 10
+    group: 端末を調べる
+    investigates: [pc-02]
+    command: |
+      $ edrctl quarantine list --host pc-02
+        items 3   (00:00:11)
+
+      $ edrctl policy show --host pc-02 --key scheduled_scan
+        1 setting
+    description: |
+      隔離台帳で最初に隔離した日を、実行設定で定例かどうかを確認する。
+    yields: [ev_pc_quarantine, ev_pc_schedule]
+
+  - id: act_share_audit
+    label: 共有ストレージの監査イベントを畳む
+    type: investigate
+    phase: investigation
+    cost_minutes: 20
+    group: 置き場を調べる
+    investigates: [share-01]
+    command: |
+      $ storeq audit --site share-01 --date 2026-07-03 --group-by user,folder
+        events 24,118   users 14   (00:01:36)
+    description: |
+      監査イベントをアカウント別・フォルダ別に畳み、件数と時刻を並べる。
+    yields: [ev_share_bulk]
+
+  - id: act_share_ledger
+    label: その日の部門の作業依頼を確認する
+    type: investigate
+    phase: investigation
+    cost_minutes: 10
+    group: 置き場を調べる
+    investigates: [share-01]
+    command: |
+      $ opsledger show --scope /経理/棚卸 --date 2026-07-03
+        1 request   (00:00:08)
+    description: |
+      その置き場に出ている部門の作業依頼と、添えられた手順書を読む。
+    yields: [ev_share_ledger]
+
+  - id: act_mail_admin_audit
+    label: メール基盤の管理操作監査を引く
+    type: investigate
+    phase: investigation
+    cost_minutes: 15
+    group: メール基盤を調べる
+    investigates: [mail-01]
+    command: |
+      $ mailq admin-audit --days 30 --group-by weekday
+        rows 118   buckets 5   (00:00:49)
+    description: |
+      管理者操作の監査を、直近30日の同じ曜日と並べる。
+    yields: [ev_mail_health]
+
+  - id: act_reset_account
+    label: 山田のアカウントの資格情報を無効化する
+    type: contain
+    phase: response
+    cost_minutes: 10
+    group: 止める
+    targets: [acct-yamada]
+    command: |
+      $ idq revoke --user yamada@example.co.jp --sessions --credentials
+        sessions revoked 6   credential reset required   (00:00:33)
+    description: |
+      資格情報を無効化し、発行済みのセッションを打ち切る。
+      本人は再設定まで業務アカウントを使えない。
+    side_effects:
+      business_impact: true
+
+  - id: act_remove_forward
+    label: 追加された転送規則を削除する
+    type: contain
+    phase: response
+    cost_minutes: 10
+    group: 取り除く
+    targets: [acct-yamada]
+    eradicates: [acct-yamada]
+    command: |
+      $ idq rules remove --user yamada@example.co.jp --rule bk
+        removed 1   (00:00:14)
+    description: |
+      サーバ側に残っている転送規則を消す。
+      アカウントを止めるだけでは、この規則は動いたまま残る。
+
+  # **囮の取り除く手。** 取り除く手が侵害資産にしか無いと、
+  # 手が並んだ時点で「残っているのはこれだ」を配ってしまう（ローダが拒否する）
+  - id: act_rebuild_pc
+    label: pc-02 を標準構成に戻す
+    type: contain
+    phase: response
+    cost_minutes: 40
+    group: 取り除く
+    targets: [pc-02]
+    eradicates: [pc-02]
+    command: |
+      $ baseline restore --host pc-02 --scope autorun,tasks
+        0 entries reverted   baseline matched 31   (00:03:02)
+
+      $ baseline verify --host pc-02 --deep
+        scanned 204,880 objects   (00:24:40)
+    description: |
+      端末の自動実行まわりの登録を、管理の標準構成と突き合わせて戻す。
+      端末は動いたままで、利用者の作業も止まらない。
+    side_effects:
+      business_impact: false
+
+  - id: act_isolate_pc
+    label: pc-02 をネットワークから隔離する
+    type: contain
+    phase: response
+    cost_minutes: 10
+    group: 止める
+    targets: [pc-02]
+    command: |
+      $ netctl isolate --host pc-02 --allow mgmt
+        applied   sessions dropped 2   (00:00:19)
+    description: |
+      端末の通信を遮断する。端末そのものは動いたままにする。
+    side_effects:
+      business_impact: true
+
+  - id: act_stop_share
+    label: 共有ストレージを停止する
+    type: contain
+    phase: response
+    cost_minutes: 20
+    group: 止める
+    targets: [share-01]
+    command: |
+      $ svcctl stop --site share-01 --wait
+        stopped   open handles closed 1,402   (00:02:28)
+    description: |
+      置き場を停止する。停止中は全部門が共有領域を使えない。
+    side_effects:
+      business_impact: true
+
+  - id: act_stop_mail
+    label: メール基盤を停止する
+    type: contain
+    phase: response
+    cost_minutes: 30
+    group: 止める
+    targets: [mail-01]
+    command: |
+      $ mailq flow suspend --scope tenant
+        suspended   queued 3,118   (00:01:12)
+    description: |
+      メールの送受信を止める。止めている間、全社のメールが流れない。
+    side_effects:
+      business_impact: true
+
+phases:
+  - id: investigation
+    label: 調査
+    advance_label: 対応フェーズに移る
+  - id: response
+    label: 封じ込め・対応
+    advance_label: null
+    requires_assessment: true
+
+damage:
+  model: exponential
+  params:
+    base: 180.0
+    rate: 0.13
+  acceleration:
+    threshold_minutes: 150
+    multiplier: 2.0
+  containment_effect:
+    on_correct_containment: 0.2
+    on_partial: 0.6
+    on_incorrect: 1.0
+
+scoring:
+  fact_layer:
+    metrics:
+      - id: assessment_precision
+        label: 被疑判定の適合率
+        direction: higher_is_better
+      - id: assessment_recall
+        label: 被疑判定の再現率
+        direction: higher_is_better
+      - id: assessment_support
+        label: 名指しの裏付け
+        direction: higher_is_better
+      - id: unresolved_questions
+        label: 未解消論点を抱えたままの判断
+        label_good: 論点を解消してからの判断
+        direction: lower_is_better
+    weights:
+      assessment_precision: 0.2
+      assessment_recall: 0.2
+      assessment_support: 0.2
+      unresolved_questions: 0.4
+  policy_layer:
+    constraint_penalty: 0.15
+  consequence_layer:
+    display_only:
+      - elapsed_minutes
+      - total_damage
+      - business_impact
+      - evidence_preserved
+      - containment_completeness
+    business_impact_horizon_minutes: 480
+    normalization:
+      total_damage:
+        worst: 9800
+        best: 0
+      business_impact:
+        worst: 2500
+        best: 0
+      evidence_preserved:
+        worst: 0.8
+        best: 1.0
+      containment_completeness:
+        worst: 0.0
+        best: 1.0
+  composite:
+    method: weighted_sum
+    fact_weight: 0.7
+
+# ─────────────────────────────────────────────────────────
+# 案内（SPEC 3.13）— 教科書としての12段
+#
+# **教えるのは方法であって、この盤面の答えではない。**
+# 「このアカウントが侵害されています」は1段も書いていない。
+# 答えは、ふつうの演習と同じく講評で初めて出る（SPEC 5.9）。
+#
+# 手を名指しする段には `caveat` が付く。「まずこうしましょう」と言う以上、
+# **それが唯一の正解ではないこと**を同じ画面で言う。
+# ─────────────────────────────────────────────────────────
+
+tutorial:
+  - id: s01_what_happened
+    body: |
+      ここからは**考え方**の練習です。操作はもう分かっている前提で進めます。
+
+      いま手元にあるのは、取引先からの連絡1件だけです。
+      「見慣れないメールが届いた。差出人は本物らしい」。
+
+      **これは報告であって、観測ではありません。**
+      対応の最初の仕事は、報告の裏を自分で取ることです。
+      誰かが見たと言っていることと、記録に残っていることは別物です。
+
+  - id: s02_first_trace
+    expect_action: act_mail_trace
+    caveat: |
+      ここから始めるのが唯一の順番ではありません。
+      **先にサインインから見る人もいます。** どちらが良いかは、
+      何を先に失いたくないかで変わります。
+    body: |
+      まず、**言われたことが本当に起きたのか**を確かめます。
+
+      右から **送信されたメールを追跡する** を押してください。
+      取引先1社の話が、何件に送られたのかが分かります。
+      1件なら誤送信かもしれませんし、数十件なら話が変わります。
+
+  - id: s03_how
+    expect_action: act_signin_log
+    caveat: |
+      サインインの記録が常に残っているとは限りません。
+      保持期間を過ぎていれば、**記録そのものが無い**ところから始まります。
+    body: |
+      起きたことは分かりました。次に訊くのは **どうやって** です。
+
+      上の**未解消の論点**を見てください。「入られ方」が残っています。
+      ここが分からないまま止めると、**同じやり方でもう一度入られます。**
+      パスワードを変えるだけで足りるのかどうかも決められません。
+
+      **サインインの記録を引いて**ください。読むときのコツが1つ。
+      成功・失敗の数だけを見ても何も言えません。
+      **直近30日の同じアカウントの姿と比べてください。**
+      「いつもそうなのか、今日だけか」が、いちばん安い判断材料です。
+
+  - id: s04_baseline
+    body: |
+      いま使ったのが、この演習でいちばん効く道具です。
+
+      **平常時の姿と比べる。**
+
+      台帳・設定・過去の集計は、どれも「ふだんはこうだ」を教えてくれます。
+      それと違うことが起きていれば、説明が要る。同じなら、説明は要らない。
+      **高い道具も特別な知識も要りません。**
+
+  - id: s05_left_behind
+    expect_action: act_forward_rules
+    caveat: |
+      規則を消すことが常に先ではありません。**消す前に控える**ほうを
+      選ぶ場合もあります。どちらを取るかは、上に出ている方針が決めます。
+    body: |
+      もう1つの論点が「**残されたもの**」です。
+
+      入られたときに一番やっかいなのは、入った跡そのものではなく、
+      **入り直せる状態が残ること**です。止めたはずなのに情報が流れ続ける、
+      という形で後から出てきます。
+
+      **サーバ側の転送規則を一覧して**ください。
+      端末のメールソフトの設定とは**別の場所**にあります。
+      端末だけを見ていると、ここは最後まで見つかりません。
+
+  - id: s06_noise_intro
+    body: |
+      ここで、上の帯に出ている他の資産に目を向けます。
+
+      同じ日に、端末でも置き場でも何かが起きています。
+      **時間帯が近いものは、同じ出来事の一部に見えます。**
+
+      ですが、**時刻の近さは関係の証明になりません。**
+      同じ時間に起きたことが、同じ原因とは限らない。
+      これは実務でいちばんよく踏む落とし穴です。
+
+  - id: s07_check_pc
+    expect_action: act_pc_defense
+    caveat: |
+      端末から見始める流儀もあります。利用者が手元にいるなら、
+      **話を聞くほうが記録より速い**こともあります。
+    body: |
+      では実際に踏んでみましょう。
+
+      **pc-02 の端末防御の記録を読んで**ください。
+      何かが出てきます。そこで止めずに、次の段を読んでください。
+
+  - id: s08_refute
+    expect_action: act_pc_ledger
+    caveat: |
+      台帳が常に正しいとは限りません。**台帳の側が更新されていない**
+      ことも実務ではあります。そのときは別の裏取りが要ります。
+    body: |
+      出てきたものを、**そのまま信じないでください。**
+
+      検知は「いつのものに対する検知か」を言いません。
+      今日のものかもしれませんし、**過去に処理済みのものの再走査**かもしれません。
+      走ったこと自体も、定例かもしれません。
+
+      **隔離台帳と検疫設定を確認して**ください。
+      s04 の道具をそのまま使います — 平常時の姿と比べる。
+
+      この盤面では、**1つの記録だけでは棄却できません。**
+      「いつのものか」と「なぜ走ったか」の両方が要ります。
+
+  - id: s09_share
+    body: |
+      同じことを、共有ストレージでもやってみてください。
+      右の `置き場を調べる` に2つ手があります。
+
+      **片方だけ押して決めると、何が起きるかが分かります。**
+      もう片方を押すと、見え方が変わるかもしれません。
+
+      押す前に、自分がどう判断したかを覚えておいてください。
+      **それが変わったなら、最初の判断は記録だけで足りていなかった**
+      ということです。
+
+  - id: s10_unresolved
+    body: |
+      名指しに進む前に、**上の論点をもう一度見てください。**
+
+      ●（まだ説明がついていない）が残っていませんか。
+      残したまま進むこともできます。実務でも、全部が分かってから
+      動けることはめったにありません。
+
+      ただしこの演習は、**残したまま決めたことを記録して採点します。**
+      それが「根拠が健全だったか」の中心だからです。
+      分からないことを分からないまま決めるのは、判断として悪くありません。
+      **分からないことに気づかずに決める**のが悪いのです。
+
+  - id: s11_declare
+    expect_kind: declare_assessment
+    body: |
+      下の **対応フェーズに移る** を押して、**被疑判定**を宣言します。
+
+      選ぶ基準は1つだけ。
+      **攻撃者の行為として説明できる事実が、その資産で観測できたか。**
+      「怪しい」「同じ時間に動いた」は基準になりません。
+
+      多く選べば当たる、ではありません。
+      **根拠なく増やすと適合率が下がり、取りこぼすと再現率が下がります。**
+      両方が別々に測られます。
+
+  - id: s12_finish
+    expect_kind: finish
+    body: |
+      最後は**止め方**です。右の手が入れ替わりました。
+
+      順番に意味があります。止めることで**消えるもの**があり、
+      止めても**残るもの**があります。アカウントを止めても、
+      サーバ側に残った規則は動いたままです。
+
+      そして、**どこまでやるのが正しいかは方針が決めます。**
+      上に出ている方針を、もう一度読んでみてください。
+      同じ盤面でも、方針が違えば最善の手は入れ替わります。
+
+      終わったら **対応を終了する** を押してください。
+      **講評で答え合わせです。** 何が本当に起きていたか、
+      どの手がかりが偽物だったか、何を見落としたかが、全部そこに出ます。
+
+      終わったら、**同じ演習を別の方針でもう一度**やってみてください。
+      ここがこの道具の中心です。

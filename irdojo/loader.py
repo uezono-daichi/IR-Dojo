@@ -89,6 +89,11 @@ def list_scenarios() -> list[Scenario]:
             out.append(load_scenario_file(path))
         except ScenarioError as exc:
             _warn(f"読み込みを飛ばしました: {exc}")
+    # **練習の盤面を先頭に。**（SPEC 3.13）
+    # 初めての人が最初に見る場所に、最初にやるものを置く。
+    # ファイル名の並び順に任せると、`tutorial-` は末尾に落ちる。
+    # 練習どうしの順番はファイル名（tutorial-01, tutorial-02）が決める
+    out.sort(key=lambda sc: (not sc.meta.tutorial,))
     return out
 
 

@@ -91,6 +91,31 @@ function prose(host, text, cls) {
   return host;
 }
 
+/* 案内だけの描画。`**ここ**` を太字にする（SPEC 3.13）。
+
+   **innerHTML は使わない**（SPEC 7.7.2）。`<strong>` を作って
+   textContent を入れるだけなので、シナリオの文字列は一度も HTML として
+   解釈されない。使うのはチュートリアルの案内に限る —
+   ふつうの散文（ブリーフィング・方針・証拠）は素のままにしておく。
+   強調できる場所が増えると、書き手が語気で本命を指せるようになる（5.4）。 */
+function emphProse(host, text) {
+  clear(host);
+  if (!text) { return host; }
+  String(text).trim().split(/\n[ \t]*\n/).forEach(function (block) {
+    var folded = foldParagraph(block);
+    if (!folded.text) { return; }
+    var node = el('p');
+    if (folded.pre) { node.style.whiteSpace = 'pre-wrap'; }
+    folded.text.split('**').forEach(function (part, i) {
+      if (!part) { return; }
+      if (i % 2) { node.appendChild(el('strong', null, part)); }
+      else { node.appendChild(document.createTextNode(part)); }
+    });
+    host.appendChild(node);
+  });
+  return host;
+}
+
 function show(screenId) {
   var all = document.querySelectorAll('.screen');
   for (var i = 0; i < all.length; i++) { all[i].classList.remove('active'); }
@@ -406,7 +431,14 @@ function showListError(err) {
 function fillScenarioCard(card, sc, opts) {
   var compact = !!(opts && opts.compact);
   var head = el('div', 'card-head');
-  head.appendChild(el('div', 'card-title', sc.title));
+  var title = el('div', 'card-title', sc.title);
+  if (sc.tutorial) {
+    // **練習の盤面には印を付ける。**（SPEC 3.13）
+    // 付けないと、点が低く出たときに「自分は下手だ」と読まれる。
+    // 案内どおりに歩く盤面は、そもそも競うためのものではない
+    title.insertBefore(el('span', 'card-badge', '練習'), title.firstChild);
+  }
+  head.appendChild(title);
   if (!compact) {
     head.appendChild(el('div', 'dim', '約' + sc.estimated_play_minutes + '分'));
   }
@@ -526,6 +558,9 @@ function startSession() {
   }).then(function (data) {
     S.sessionId = data.session_id;
     S.view = data.view;
+    // 案内（SPEC 3.13）。練習の盤面にしか入っていない
+    S.tutorial = data.tutorial || [];
+    S.tutorAt = 0;
     S.newIds = {};
     S.openIds = {};
     S.incoming = [];
@@ -1056,6 +1091,7 @@ function decide(payload) {
       S.lastOutcome.command = res.command || S.lastOutcome.command;
       S.lastOutcome.running = false;
     }
+    advanceTutorial(payload);
     S.incoming.forEach(function (ev) { ev.fresh = false; });
     (res.events || []).forEach(function (ev) {
       ev.fresh = true;
@@ -1156,6 +1192,7 @@ function renderPlay() {
   if (v.damage_history) { DamageChart.draw(chart, v.damage_history, {}); }
   renderBoard(v);
   renderTimeline($('play-timeline'), v);
+  renderTutorial();
   measureCols();
 }
 
@@ -1178,6 +1215,109 @@ function measureCols() {
   // 下の余白も測る。手で書くと、余白を1回調整した日にまた溢れる
   var pad = parseInt(getComputedStyle(cols.parentNode).paddingBottom, 10) || 0;
   root.style.setProperty('--cols-bottom', pad + 'px');
+}
+
+/* ── チュートリアルの案内（SPEC 3.13 / 7.6.26） ──
+
+   **書いてあるのは手順と理由で、答えではない。** 答えはふつうの演習と
+   同じく講評で初めて出る（5.9）。段の文面も、押してほしい手も、
+   全部シナリオから来る — ここには1文字も書かない。
+
+   **手を名指しする段には必ず「ただし」が付く。** 学習者に「まずこうしましょう」と
+   言う以上、それが唯一の正解ではないことを同じ画面で言わないと、
+   この製品の主張（方針が変われば最善も変わる）と正面から衝突する。
+   欠けている案内はローダが受け付けない（`_reject_broken_tutorial`）。 */
+
+function currentStep() {
+  if (!S.tutorial || !S.tutorial.length) { return null; }
+  return S.tutorial[S.tutorAt] || null;
+}
+
+/* 押した手が、いま待っている段のものだったら次へ進む。
+   **待っていないものを押しても止めない。** 案内は道しるべであって
+   通せんぼではない（寄り道して戻ってきた人を、ここで詰まらせない）。 */
+function advanceTutorial(payload) {
+  var step = currentStep();
+  if (!step || !payload) { return; }
+  var hit = step.expect_action
+    ? (payload.kind === 'action' && payload.action_id === step.expect_action)
+    : (step.expect_kind ? payload.kind === step.expect_kind : false);
+  if (hit) { S.tutorAt += 1; }
+}
+
+function clearPointer() {
+  var marked = document.querySelectorAll('.tutor-point');
+  for (var i = 0; i < marked.length; i++) {
+    marked[i].classList.remove('tutor-point');
+  }
+}
+
+function renderTutorial() {
+  var host = $('tutor-panel');
+  clear(host);
+  clearPointer();
+  var step = currentStep();
+  if (!step) { host.hidden = true; return; }
+  host.hidden = false;
+
+  var head = el('div', 'tutor-head');
+  head.appendChild(el('span', 'tutor-step',
+    (S.tutorAt + 1) + ' / ' + S.tutorial.length));
+  head.appendChild(el('span', null, '練習の案内'));
+  host.appendChild(head);
+
+  var body = el('div', 'tutor-body');
+  emphProse(body, step.body);
+  host.appendChild(body);
+
+  if (step.caveat) {
+    var cav = el('div', 'tutor-caveat');
+    cav.appendChild(el('b', null, 'ただし '));
+    var span = el('span');
+    emphProse(span, step.caveat);
+    cav.appendChild(span);
+    host.appendChild(cav);
+  }
+
+  if (step.expect_action) {
+    // **手の名前は盤面から引く。** 案内に書き写すと、手の文言を直した日に
+    // 案内だけが古い名前を指す（SPEC 7.6.7 と同じ壊れ方）
+    var label = step.expect_action;
+    (S.view.available_actions || []).forEach(function (a) {
+      if (a.id === step.expect_action) { label = a.label; }
+    });
+    var wait = el('div', 'tutor-wait');
+    wait.appendChild(document.createTextNode('右から '));
+    wait.appendChild(el('span', 'what', label));
+    wait.appendChild(document.createTextNode(' を押してください。'));
+    host.appendChild(wait);
+  } else if (step.expect_kind) {
+    var w2 = el('div', 'tutor-wait');
+    w2.appendChild(document.createTextNode(
+      step.expect_kind === 'advance_phase' ? '下の ' :
+      step.expect_kind === 'declare_assessment' ? '下の ' : '下の '));
+    w2.appendChild(el('span', 'what',
+      step.expect_kind === 'advance_phase' ? '対応フェーズに移る' :
+      step.expect_kind === 'declare_assessment' ? '被疑判定を宣言する' :
+      '対応を終了する'));
+    w2.appendChild(document.createTextNode(' を押してください。'));
+    host.appendChild(w2);
+  } else {
+    // 読むだけの段。自分で進める
+    var row = el('div', 'btn-row');
+    var next = el('button', 'primary', '次へ');
+    next.addEventListener('click', function () {
+      S.tutorAt += 1;
+      renderTutorial();
+    });
+    row.appendChild(next);
+    host.appendChild(row);
+  }
+
+  if (step.points_at) {
+    var target = document.querySelector(step.points_at);
+    if (target) { target.classList.add('tutor-point'); }
+  }
 }
 
 /* ── 事件の時計（SPEC 7.6.17） ──

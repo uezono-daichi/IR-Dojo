@@ -494,6 +494,12 @@ def test_the_bend_is_placed_for_the_costliest_policy(balance, any_scenario):
     黙って入ってくる（実際に入っていた。方針ごとの L が 170/170/170 で、
     どの方針を渡しても同じ手を押せば済む＝方針が時間を要求していない）。
     """
+    # **練習の盤面は測らない**（SPEC 3.13）。通らないからではなく、
+    # **測っている対象が違う** — 「網羅は損か」「折れ点を誰かが踏むか」は、
+    # 案内どおりに1本道を歩く盤面では成立しない。`balance.py` も同じ理由で飛ばす。
+    if any_scenario.meta.tutorial:
+        pytest.skip("練習の盤面は設計の均衡を測らない（SPEC 3.13）")
+
     from irdojo import retrospective
 
     sc = any_scenario
@@ -789,6 +795,12 @@ def test_every_bundled_scenario_passes_the_design_checks(balance, any_scenario):
     全部の盤面がその日から拘束される。2本目は周2・周3 を知らない時点で
     校正されていたので、併合した瞬間に「3×3 の入れ替え表」で落ちた。
     """
+    # **練習の盤面は測らない**（SPEC 3.13）。通らないからではなく、
+    # **測っている対象が違う** — 「網羅は損か」「折れ点を誰かが踏むか」は、
+    # 案内どおりに1本道を歩く盤面では成立しない。`balance.py` も同じ理由で飛ばす。
+    if any_scenario.meta.tutorial:
+        pytest.skip("練習の盤面は設計の均衡を測らない（SPEC 3.13）")
+
     sc = any_scenario
     data = balance.report(sc)
     known = KNOWN_GAPS.get(sc.meta.id, set())

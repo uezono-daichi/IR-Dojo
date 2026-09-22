@@ -273,6 +273,10 @@
          アクションが画面外へ押し出される（実測 1266px） -->
     <div class="play-cols">
       <div class="play-result">
+        <!-- チュートリアルの案内（SPEC 3.13 / 7.6.26）。練習の盤面にしか出ない。
+             **中身は手順と理由で、答えではない。** 答えはふつうの演習と同じく
+             講評で初めて出る。組み立ては JS — 段の数も文面もシナリオから来る -->
+        <aside class="tutor" id="tutor-panel" hidden></aside>
         <!-- 対応フェーズの枠組み。何を訊かれているのかを、その場に置く -->
         <div class="respond-frame" id="respond-frame" hidden></div>
         <!-- 向こうから入ってきたこと。押した結果とは別の箱に置く。

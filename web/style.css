@@ -242,6 +242,15 @@ table.swap-grid td {
 .card-policies {
   display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 6px;
 }
+/* 練習の盤面の印（SPEC 3.13）。付けないと、点が低く出たときに
+   「自分は下手だ」と読まれる。案内どおりに歩く盤面は競うためのものではない */
+.card-badge {
+  font-size: 10.5px; font-weight: 600; letter-spacing: .06em;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent); border-radius: 3px;
+  padding: 2px 6px; margin-right: 8px; vertical-align: 2px;
+}
 .pchip {
   font-size: 11.5px; line-height: 1;
   border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
@@ -1228,3 +1237,53 @@ table.log td, table.log th { padding: 5px 12px 5px 0; }
 .incoming.averted { border-left-color: var(--good); }
 .incoming.averted .incoming-tag { color: var(--good); border-color: var(--good); }
 .outcome-msg.notified { color: var(--good); }
+
+
+/* ── チュートリアルの案内（SPEC 7.6.26） ──
+   練習の盤面にしか出ない。**盤面の色は使わない** — 資産の重要度や
+   方針違反と同じ青で塗ると、案内が盤面の一部に見える。 */
+.tutor {
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border-radius: 5px; padding: 14px 16px; margin-bottom: 18px;
+}
+.tutor .tutor-head {
+  display: flex; align-items: baseline; gap: 10px;
+  font-size: 12px; color: var(--fg-dim); margin-bottom: 8px;
+  letter-spacing: .06em;
+}
+.tutor .tutor-step { color: var(--accent); font-family: var(--mono); }
+.tutor .tutor-body { font-size: 14px; line-height: 1.85; }
+.tutor .tutor-body strong { color: #fff; }
+.tutor .tutor-body p { margin: 0 0 10px; }
+.tutor .tutor-body p:last-child { margin-bottom: 0; }
+/* **「ただし」は必ず目に入る形にする。** ここが読み飛ばされると、
+   案内が「唯一の正解」として伝わる（SPEC 3.13） */
+.tutor .tutor-caveat {
+  margin-top: 12px; padding-top: 10px;
+  border-top: 1px dashed color-mix(in srgb, var(--accent) 30%, transparent);
+  font-size: 13px; line-height: 1.8; color: var(--fg-dim);
+}
+.tutor .tutor-caveat b { color: var(--fg); font-weight: 600; }
+.tutor .tutor-wait {
+  margin-top: 12px; font-size: 13px; color: var(--fg);
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.tutor .tutor-wait .what {
+  font-weight: 600;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 3px; padding: 3px 8px;
+}
+.tutor .btn-row { margin-top: 12px; }
+/* 指さし。案内が「どこを見ればいいか」を言う段で囲む。
+
+   **点滅させない。** 演習中はアニメーションしないのが規則で（SPEC 7.6.14）、
+   最初は点滅する版を書いたが、`test_the_light_turns_itself_off_...` が
+   「walk 無しで動く規則がある」で落ちた。**正しい落ち方だった** —
+   盤面を変えない動きはノイズで、指さしは静かな枠で十分に伝わる。
+   例外を1つ作るより、動かさないほうが安い。 */
+.tutor-point {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px; border-radius: 4px;
+}

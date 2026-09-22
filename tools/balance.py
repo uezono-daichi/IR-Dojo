@@ -1690,6 +1690,13 @@ def emit_swap() -> int:
     """
     out = []
     for sc in loader.list_scenarios():
+        # **練習の盤面は入れない**（SPEC 3.13）。入口の表は「方針を差し替えると
+        # 最善が入れ替わる」を見せるもので、案内どおりに1本道を歩く盤面は
+        # その主張の証拠にならない。表に混ぜると、一覧の先頭が練習になった日に
+        # 入口が練習の数字を名乗る
+        if sc.meta.tutorial:
+            print(f"  飛ばした: {sc.meta.id}（練習の盤面）")
+            continue
         table = policy_swap(sc)
         if len(table) < 2:
             print(f"  飛ばした: {sc.meta.id}（入れ替えられる対応が足りない）")
@@ -1736,6 +1743,16 @@ def main() -> int:
         return emit_swap()
 
     sc = loader.load_scenario(args.scenario)
+    # **練習の盤面は測らない**（SPEC 3.13）。通らないからではなく、
+    # **測っている対象が違う** — 「網羅が損か」「折れ点を誰かが踏むか」は、
+    # 案内どおりに歩く盤面では成立しない。黙って通すと、
+    # 赤が出ないことを「均衡が取れている」と読んでしまう
+    if sc.meta.tutorial:
+        print(f"■ {sc.meta.title}（{sc.meta.id}）は練習の盤面です。")
+        print("  設計の均衡は測りません（SPEC 3.13）。"
+              "案内どおりに歩く盤面では、網羅の損も折れ点も成立しません。")
+        return 0
+
     data = report(sc)
 
     if args.json:

@@ -717,6 +717,52 @@ def compute_complexity(sc: "Scenario") -> int:
     return max(1, min(5, round(complexity_raw(sc) / 3.0)))
 
 
+# ─────────── チュートリアル（SPEC 3.13） ───────────
+
+
+class TutorialStep(Strict):
+    """チュートリアルの1段（SPEC 3.13）。
+
+    **書くのは手順と理由であって、答えではない。**
+    「この端末が侵害されています」は書かない。書くのは
+    「一次情報の裏を先に取ります。報告は観測ではないからです」である。
+    答えは、ふつうのシナリオと同じく講評で初めて出る（5.9）。
+
+    **`caveat` は省略できない段がある。** 学習者に「まずこうしましょう」と
+    言う以上、**それが唯一の正解ではないこと**を同じ画面で言わないと、
+    この製品の主張（方針が変われば最善も変わる）と正面から衝突する。
+    手を1つ名指しする段（`expect_action` を持つ段）では必須にしてある。
+    """
+
+    id: str
+    body: str
+    # この段で押してほしい手。省略すると「読んで次へ」の段になる
+    expect_action: str | None = None
+    # 手ではなく、フェーズ移行や被疑判定を待つ段
+    expect_kind: str | None = None
+    # 「ただし、これが唯一の正解ではない」を言う一文
+    caveat: str = ""
+    # 画面のどこを見てほしいか（CSS セレクタ）。遊び方の案内で使う
+    points_at: str | None = None
+
+    @model_validator(mode="after")
+    def _one_kind_of_wait(self) -> "TutorialStep":
+        if self.expect_action and self.expect_kind:
+            raise ValueError(
+                f"{self.id}: expect_action と expect_kind は同時に書けない"
+            )
+        if self.expect_kind and self.expect_kind not in (
+            "advance_phase", "declare_assessment", "finish"
+        ):
+            raise ValueError(f"{self.id}: 未知の expect_kind: {self.expect_kind}")
+        if self.expect_action and not self.caveat.strip():
+            raise ValueError(
+                f"{self.id}: 手を名指しする段には caveat が要る"
+                "（唯一の正解ではないことを同じ画面で言う / SPEC 3.13）"
+            )
+        return self
+
+
 # ─────────── meta / root ───────────
 
 
@@ -732,6 +778,10 @@ class Meta(Strict):
     default_assist_level: AssistLevel = AssistLevel.ASSISTED
     briefing: str
     tags: list[str] = []
+    # **練習用の盤面**（SPEC 3.13）。案内が付き、設計の均衡の測定からは外れる。
+    # 外す理由は「通らないから」ではなく、**測っている対象が違う**ため —
+    # 練習の盤面は「網羅が損か」「折れ点を誰かが踏むか」を成立させない
+    tutorial: bool = False
 
 
 class Scenario(Strict):
@@ -749,6 +799,7 @@ class Scenario(Strict):
     assist_profiles: dict[AssistLevel, AssistProfile] = {}
     retrospective: Retrospective = Retrospective()
     debrief: Debrief = Debrief()
+    tutorial: list[TutorialStep] = []
 
     def profile(self, level: AssistLevel) -> AssistProfile:
         """シナリオ側の上書きがあればそれを、なければ既定値を返す。"""
@@ -1040,9 +1091,41 @@ def _validate_scenario(sc: "Scenario") -> None:
     _reject_possibilities_that_leak(sc)
     _reject_occurrences_not_in_the_log(sc)
     _reject_occurrence_times_that_mark_the_trap(sc)
+    _reject_broken_tutorial(sc)
 
     # 被害モデルの params
     _validate_damage_params(sc.damage)
+
+
+def _reject_broken_tutorial(sc: "Scenario") -> None:
+    """案内が盤面と食い違っていないこと（SPEC 3.13）。
+
+    案内は手で書く文章なので、**放っておけば盤面より先に腐る。**
+    アクションの id を1つ書き換えた日に、案内だけが古い手を指し続ける
+    （凡例のモックが3フェーズのまま腐ったのと同じ壊れ方 / 7.6.7）。
+    """
+    if sc.meta.tutorial and not sc.tutorial:
+        raise ValueError("tutorial: true だが案内が1段も無い")
+    if sc.tutorial and not sc.meta.tutorial:
+        raise ValueError("案内があるのに meta.tutorial が false")
+    if not sc.tutorial:
+        return
+
+    _reject_duplicates("チュートリアルの段", [s.id for s in sc.tutorial])
+    known = {a.id for a in sc.actions}
+    for step in sc.tutorial:
+        if step.expect_action and step.expect_action not in known:
+            raise ValueError(
+                f"{step.id}: 案内が指している手が盤面に無い: {step.expect_action}"
+            )
+    # **最後は必ず終わりまで連れて行く。** 途中で案内が切れると、
+    # 学習者は「次に何をすればいいか分からない画面」に置き去りにされる
+    last = sc.tutorial[-1]
+    if last.expect_kind != "finish":
+        raise ValueError(
+            "案内の最後の段は expect_kind: finish であること"
+            "（終わりまで連れて行かないと、途中で置き去りになる）"
+        )
 
 
 def _validate_spreads(sc: "Scenario") -> None:
@@ -1625,6 +1708,13 @@ def _reject_conclusion_vocabulary(sc: "Scenario") -> None:
         targets.append((t.id, "text", t.text))
         targets.append((t.id, "averted_label", t.averted_label))
         targets.append((t.id, "averted_text", t.averted_text))
+    # **案内も同じ線で縛る**（SPEC 3.13）。チュートリアルは
+    # 「まずこうしましょう」と手順を言う場所であって、
+    # 「この端末は侵害されている」と結論を言う場所ではない。
+    # 答えはふつうの演習と同じく講評で初めて出る（5.9）
+    for s in sc.tutorial:
+        targets.append((s.id, "body", s.body))
+        targets.append((s.id, "caveat", s.caveat))
 
     for oid, field, text in targets:
         for word in CONCLUSION_WORDS:

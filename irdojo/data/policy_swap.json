@@ -1,5 +1,5 @@
 {
-  "fingerprint": "5c7347cfcb05b424e9aee1f367225eec9d6a87ac3e1450307fb554f1a9446def",
+  "fingerprint": "19c2ac5d6535141e775d67943b8d7049a2acd5410737ad97b9a678c77ca06f7d",
   "scenarios": [
     {
       "scenario_id": "insider-exfil-suspicion-01",
@@ -187,5 +187,5 @@
       ]
     }
   ],
-  "generator": "6210ec331ab1a28f6cf8c51fff6642834ec7370516ef3ed5ad39142458234ecb"
+  "generator": "19240a53d8e05daff63aa35bb20d31599d0839389c7b754bea0f5e0da0ab6639"
 }
