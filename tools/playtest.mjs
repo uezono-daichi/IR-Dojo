@@ -519,6 +519,38 @@ await page.evaluate(() => window.scrollTo(0, 0));
 const legendBefore = await legendSample('#brief-mini');
 
 await page.click('#btn-begin');
+
+// **プレイ画面が画面に収まっているか。**（SPEC 7.6.24）
+// 右カラムの天井を手で書いていたので、どの画面サイズでも 186px はみ出し、
+// 下のボタン2つが一度も見えなかった。**測っていたのは入口だけだった。**
+{
+  const fit = await page.evaluate(() => {
+    const vis = (sel) => {
+      const e = document.querySelector(sel);
+      if (!e || e.offsetParent === null) return null;
+      const r = e.getBoundingClientRect();
+      return { bottom: Math.round(r.bottom), ok: r.top >= 0 && r.bottom <= innerHeight };
+    };
+    const scrollers = [...document.querySelectorAll('#screen-play *')].filter(
+      (e) => e.scrollHeight > e.clientHeight + 2
+        && /auto|scroll/.test(getComputedStyle(e).overflowY)).length;
+    return {
+      over: document.documentElement.scrollHeight - innerHeight,
+      finish: vis('#btn-finish'), advance: vis('#btn-advance'), scrollers,
+    };
+  });
+  if (fit.over > 0) {
+    note('error', 'play', `プレイ画面が ${fit.over}px はみ出している`);
+  }
+  for (const [name, v] of [['対応を終了する', fit.finish], ['対応フェーズに移る', fit.advance]]) {
+    if (v && !v.ok) {
+      note('error', 'play', `${name} がスクロールしないと見えない（下端 ${v.bottom}px）`);
+    }
+  }
+  if (fit.scrollers > 1) {
+    note('error', 'play', `スクロールする箱が ${fit.scrollers} 個ある（1つに絞る）`);
+  }
+}
 await page.waitForSelector('#screen-play.active');
 await checkCanvasStable('play');
 await checkTimeline('play-start');

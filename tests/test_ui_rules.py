@@ -976,3 +976,54 @@ def test_the_screen_calls_begin_with_the_session_it_has(app_js):
     name = used.pop().split(".", 1)[1]
     assert re.search(rf"S\.{name}\s*=", body), f"S.{name} に代入している場所が無い"
     assert "/begin'" in body, "ブリーフィングを閉じた合図を送っていない"
+
+
+def test_the_play_screen_fits_without_scrolling_to_the_buttons(app_js):
+    """**画面の外に出る寸法を手で書かない**（SPEC 7.6.24）。
+
+    右カラムの天井は `100vh - ヘッダ - 帯 - 130px` と書いてあった。
+    この 130px は、その上にあるフェーズ帯・資産盤・事件の時計（実測 196px）を
+    **1つも数えていなかった。** 結果、どの画面サイズでもぴったり 186px はみ出し、
+    「対応フェーズに移る」と「対応を終了する」は一度も見えなかった。
+
+    テスターに言われるまで気づいていない。**測っていたのは入口だけだった。**
+    実際に見えるかどうかは `playtest.mjs` が測る。こちらは
+    寸法の出どころが実測であることを原稿の側で見る。
+    """
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    block = css[css.index(".play-actions {"):]
+    block = block[: block.index("}")]
+    assert "--cols-top" in block, "右カラムの天井が実測から来ていない"
+    assert "--cols-bottom" in block, "下の余白を数えていない"
+    body = strip_comments(app_js)
+    assert "--cols-top" in body and "getBoundingClientRect" in body, "実測していない"
+    # 二重スクロールに戻さない。スクロールする箱は外側の1つだけ
+    inner = css[css.index("#actions-list {"):]
+    inner = inner[: inner.index("}")]
+    assert "max-height" not in inner, "内側にも天井があり、スクロールが二重になる"
+
+
+def test_the_play_screen_can_be_left_without_recording(index_html, app_js):
+    """途中でやめられること（SPEC 7.6.25）。
+
+    テスターの指摘：「演習を途中終了する」みたいなボタンがあって、
+    ホームに戻れたりしてもいい（演習のログは残らなくて平気）。
+
+    **「対応を終了する」の隣には置かない。** あちらは採点まで行く手で、
+    こちらは何も残さずに帰る手である。取り違えると、やり直しのつもりで
+    採点を確定させることになる。
+    """
+    bar = index_html[index_html.index('<header class="bar">'):]
+    bar = bar[: bar.index("</header>")]
+    assert 'id="btn-abort"' in bar, "やめる手が上の帯に無い"
+    assert 'id="btn-finish"' not in bar, "採点まで行く手が帯に混ざっている"
+
+    body = strip_comments(app_js)
+    fn = body[body.index("$('btn-abort-confirm')"):]
+    fn = fn[: fn.index("});")]
+    assert "'DELETE'" in fn, "サーバ側のセッションを捨てていない"
+    assert "screen-top" in fn, "最初の画面に戻っていない"
+
+    modal = index_html[index_html.index('id="modal-abort"'):]
+    modal = modal[: modal.index("</div>\n</div>")]
+    assert "記録されません" in modal, "何も残らないことを言っていない"

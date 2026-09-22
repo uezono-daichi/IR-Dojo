@@ -233,6 +233,10 @@
       <button id="btn-show-legend">画面の見方</button>
       <button id="btn-show-policy">方針を再表示</button>
       <button id="btn-show-assessment" style="display:none">被疑判定</button>
+      <!-- **「対応を終了する」の隣には置かない。** あちらは採点まで行く手で、
+           こちらは何も残さずに帰る手である。取り違えると、やり直しのつもりで
+           採点を確定させることになる（SPEC 7.6.25） -->
+      <button id="btn-abort" class="quiet">演習をやめる</button>
     </div>
   </header>
   <!-- 状況は横一列。判断に使うものを画面の端に押し込まない -->
@@ -321,6 +325,20 @@
     <div class="btn-row right">
       <button data-close="modal-advance">戻る</button>
       <button class="primary" id="btn-advance-confirm">移行する</button>
+    </div>
+  </div>
+</div>
+
+<!-- モーダル: 途中でやめる。**記録は残らない**（SPEC 7.6.25） -->
+<div class="modal-bg" id="modal-abort">
+  <div class="modal">
+    <h2>この演習をやめますか</h2>
+    <p>ここまでの手は<strong>何も記録されません。</strong>
+       点数も講評も出ません。最初の画面に戻ります。</p>
+    <p class="dim">同じ演習は、方針やアシストレベルを変えて何度でも遊び直せます。</p>
+    <div class="btn-row right">
+      <button data-close="modal-abort">続ける</button>
+      <button class="primary" id="btn-abort-confirm">やめて最初に戻る</button>
     </div>
   </div>
 </div>

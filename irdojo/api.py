@@ -401,6 +401,23 @@ def decide(sid: str, body: Decision) -> dict[str, Any]:
     }
 
 
+@app.delete("/api/session/{sid}")
+def abort_session(sid: str) -> dict[str, bool]:
+    """途中でやめる（SPEC 7.6.25）。**記録は残らない。**
+
+    記録は講評を組むときにしか作られない（`report_json.build`）ので、
+    **何もしないことが「残さない」になる。** ここで捨てるのは
+    サーバ側のセッションと足あとだけである。
+
+    知らない id でも 200 を返す。やめたい人を、後片付けの都合で
+    引き止めない。
+    """
+    _SESSIONS.pop(sid, None)
+    _REPORTS.pop(sid, None)
+    _forget(sid)
+    return {"ok": True}
+
+
 @app.get("/api/session/{sid}/report")
 def get_report(sid: str) -> report_json.Report:
     engine = _get(sid)

@@ -693,14 +693,10 @@ ul.lessons li { margin-bottom: 8px; }
   font-size: 13px; line-height: 1.85; color: var(--fg-dim);
 }
 
-/* 説明を入れるとアクション欄が伸びるので、パネル内でスクロールさせる。
-   グラフと論点を画面から押し出さないため。 */
-#actions-list {
-  max-height: calc(100vh - var(--header-h, 66px) - var(--strip-h, 147px) - 130px);
-  overflow-y: auto; padding-right: 6px;
-}
-#actions-list::-webkit-scrollbar { width: 8px; }
-#actions-list::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+/* **スクロールする箱は1つだけ。**
+   ここにも天井を置いていたので、外側の `.panel-actions` と二重になり、
+   スクロールバーが2本出ていた。伸び縮みは外側に任せる。 */
+#actions-list { padding-right: 6px; }
 
 .outcome-body { margin-top: 10px; }
 .outcome-body .ev { margin-bottom: 8px; }
@@ -1081,12 +1077,24 @@ ul.lessons li { margin-bottom: 8px; }
    縦に積むと、ログが出た瞬間にアクションが画面外へ出てしまう。 */
 .play-cols { display: flex; gap: 26px; align-items: flex-start; }
 .play-result { flex: 1 1 680px; min-width: 0; }
+/* **右カラムは画面からはみ出さない。**（SPEC 7.6.24）
+   天井は `--cols-top`（画面の上端からこの柱までの実測距離）から引く。
+   以前は `- 130px` と手で書いてあり、フェーズ帯・資産盤・時計の
+   196px を1つも数えていなかったので、**どの画面サイズでも
+   ぴったり 186px はみ出し**、下のボタン2つが一度も見えなかった。
+
+   柱そのものを縦の箱にして、**伸びるのはアクション欄だけ**にする。
+   ボタンの行は `flex: none` なので、必ず最後に居場所が残る。 */
 .play-actions {
   flex: 0 0 520px;
   position: sticky; top: calc(var(--header-h, 66px) + var(--strip-h, 140px) + 10px);
+  display: flex; flex-direction: column; min-height: 0;
+  max-height: calc(100dvh - var(--cols-top, 430px) - var(--cols-bottom, 40px) - 8px);
 }
-.play-actions .btn-row { margin-top: 14px; }
-.panel-actions { max-height: calc(100vh - var(--header-h, 66px) - var(--strip-h, 140px) - 130px); overflow-y: auto; }
+.play-actions .btn-row { margin-top: 14px; flex: none; }
+.panel-actions {
+  flex: 1 1 auto; min-height: 120px; overflow-y: auto;
+}
 .panel-actions::-webkit-scrollbar { width: 8px; }
 .panel-actions::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
 

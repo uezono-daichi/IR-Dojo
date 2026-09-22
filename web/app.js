@@ -1138,6 +1138,17 @@ function renderPlay() {
   root.style.setProperty('--strip-h', Math.round(
     document.querySelector('.strip').getBoundingClientRect().height) + 'px');
 
+  /* **右カラムの天井も実測する。**（SPEC 7.6.24）
+     アクション欄の高さは `100vh - ヘッダ - 帯 - 130px` と書いてあったが、
+     この 130px はフェーズ帯・資産盤・事件の時計（実測 196px）を
+     1つも数えていなかった。結果、右カラムの下端がどの画面でも
+     **ぴったり 186px はみ出し**、「対応フェーズに移る」と「対応を終了する」は
+     スクロールしないと一度も見えなかった。テスターに指摘されるまで
+     気づいていない — measuring していたのは入口だけだった。
+
+     手で足し直しても、この上に何か置いた日にまた狂う。
+     **画面の上端から右カラムまでの距離をそのまま測る。** */
+
   // 描画は画面を表示してから。非表示のままだと clientWidth が 0 になる
   var chart = $('damage-chart');
   var wrapEl = chart.parentNode;
@@ -1145,6 +1156,28 @@ function renderPlay() {
   if (v.damage_history) { DamageChart.draw(chart, v.damage_history, {}); }
   renderBoard(v);
   renderTimeline($('play-timeline'), v);
+  measureCols();
+}
+
+/* **右カラムの天井を実測する。**（SPEC 7.6.24）
+
+   以前は CSS に `100vh - ヘッダ - 帯 - 130px` と書いてあった。
+   この 130px は、上にあるフェーズ帯・資産盤・事件の時計（実測 196px）を
+   1つも数えていなかったので、**どの画面サイズでもぴったり 186px はみ出し**、
+   「対応フェーズに移る」と「対応を終了する」は一度も見えなかった。
+
+   **盤面と時計を描き終えてから、同期で測る。** `requestAnimationFrame` に
+   逃がすと、描き終える前に測る回が混じって数 px ずれる（実測で 7px の
+   はみ出しが出たり出なかったりした）。ずれる測定は、測っていないのと同じ。 */
+function measureCols() {
+  var cols = document.querySelector('#screen-play .play-cols');
+  if (!cols) { return; }
+  var root = document.documentElement;
+  var top = cols.getBoundingClientRect().top + (window.scrollY || 0);
+  root.style.setProperty('--cols-top', Math.round(top) + 'px');
+  // 下の余白も測る。手で書くと、余白を1回調整した日にまた溢れる
+  var pad = parseInt(getComputedStyle(cols.parentNode).paddingBottom, 10) || 0;
+  root.style.setProperty('--cols-bottom', pad + 'px');
 }
 
 /* ── 事件の時計（SPEC 7.6.17） ──
@@ -2664,6 +2697,22 @@ function init() {
     if (!this.open || S.legendDrawn || !S.legendView) { return; }
     S.legendDrawn = true;
     renderLegend(S.legendView, $('brief-mini'), $('brief-legend'));
+  });
+
+  $('btn-abort').addEventListener('click', function () { openModal('modal-abort'); });
+  $('btn-abort-confirm').addEventListener('click', function () {
+    /* 途中でやめる（SPEC 7.6.25）。**記録は残らない** —
+       記録は `finish` を押した回にしか作られないので、
+       何もしないことが「残さない」になる。
+       サーバ側のセッションだけ捨てる。**失敗しても帰る** —
+       やめたい人を、後片付けの失敗で引き止めない。 */
+    var sid = S.sessionId;
+    closeModal('modal-abort');
+    S.sessionId = null;
+    show('screen-top');
+    if (sid) {
+      api('/api/session/' + sid, { method: 'DELETE' }).catch(function () {});
+    }
   });
 
   $('btn-show-policy').addEventListener('click', function () {
