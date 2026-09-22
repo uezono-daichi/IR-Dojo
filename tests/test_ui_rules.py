@@ -1027,3 +1027,81 @@ def test_the_play_screen_can_be_left_without_recording(index_html, app_js):
     modal = index_html[index_html.index('id="modal-abort"'):]
     modal = modal[: modal.index("</div>\n</div>")]
     assert "記録されません" in modal, "何も残らないことを言っていない"
+
+
+def test_the_select_screen_groups_the_practice_boards(index_html, app_js):
+    """**練習は1つの枠にまとめる**（SPEC 7.6.27）。
+
+    利用者の言葉：「チュートリアルで一つの枠にして、その中に遊び方と、
+    インシデント対応の基本で2項目」「シナリオ選ぶ時にスクロールして
+    選びたくないので一画面に収めたい」。
+
+    実測で、選ぶ画面は縦 1593px あり、**「開始する」がどの画面サイズでも
+    一度も見えなかった。** プレイ画面（7.6.24）と同じ穴を2回踏んでいる。
+    """
+    sel = index_html[index_html.index('id="screen-select"') :]
+    sel = sel[: sel.index("</section>")]
+    assert 'id="tutorial-group"' in sel, "練習をまとめる枠が無い"
+    assert "<details" in sel, "枠が畳めない"
+    assert "<summary>" in sel, "枠に見出しが無い"
+    # 枠は札より前にある。後ろに置くと、はじめての人が最後まで見ない
+    assert sel.index('id="tutorial-group"') < sel.index('id="scenario-list"')
+    # 方針とアシストは横に並べる（縦に積むと 249px 使う）
+    assert "pick-options" in sel, "方針とアシストが縦に積まれている"
+
+    body = strip_comments(app_js)
+    fn = body[body.index("function renderScenarioList") :]
+    fn = fn[: fn.index("\nfunction ")]
+    assert "sc.tutorial" in fn, "練習を振り分けていない"
+    assert "tutorial-list" in fn, "練習を枠の中へ入れていない"
+    # 既定で選ばれるのは本番の先頭。畳みの中の札が選ばれた状態で
+    # 始まると、選択が見えないまま開始ボタンだけが有効になる
+    assert "!sc.tutorial" in fn, "既定の選択が本番になっていない"
+
+
+def test_the_entrance_shows_the_practice_boards_as_one_card(app_js):
+    """入口でも練習は1枚にまとめる（SPEC 7.6.27）。
+
+    7本を札のまま並べると 1280×720 で2行になり、広い画面では
+    1行7列に割れて題が切れる。**「入口の札は題だけ」（7.6.19）という
+    決め方は、枚数が増えると横で同じ問題に当たる。**
+    """
+    body = strip_comments(app_js)
+    fn = body[body.index("function renderTopScenarios") :]
+    fn = fn[: fn.index("\nfunction ")]
+    assert "tutorialGroupCard" in fn, "練習をまとめた札が無い"
+    assert "!sc.tutorial" in fn, "本番の札に練習が混ざっている"
+    # **これは演習の札ではない**ので、`fillScenarioCard` は通さない。
+    # 通すと、シナリオから来ない中身を札の組み立てに混ぜることになる
+    maker = body[body.index("function tutorialGroupCard") :]
+    maker = maker[: maker.index("\nfunction ")]
+    assert "data-tutorial-group" in maker
+    # 押したら、選ぶ画面の枠が開いた状態で開く
+    assert "open = true" in maker, "押しても枠が開かない"
+
+
+def test_the_strip_counts_practice_separately(app_js):
+    """隅の帯は練習と本番を別に数える（SPEC 7.6.27 / 7.6.18）。
+
+    入口の札は練習を1枚にまとめているので、合計だけを出すと
+    「7 と言っているのに札が6枚」になる。**数えている配列は1つのまま、
+    出す数を分ける** — 別経路で数え直さない。
+    """
+    body = strip_comments(app_js)
+    fn = body[body.index("function renderTopMeta") :]
+    fn = fn[: fn.index("\nfunction ")]
+    assert "TUTORIALS" in fn, "帯が練習の数を出していない"
+    assert "!sc.tutorial" in fn, "本番の数を練習と分けていない"
+    assert "S.scenarios.filter" in fn, "同じ配列から数えていない"
+
+
+def test_the_playtest_watches_the_select_screen(playtest_mjs):
+    """遊んで確かめる側も、選ぶ画面の収まりを見張ること。
+
+    **同じ穴を2回踏んだ。** 入口には検査があり、プレイ画面にも足したが、
+    選ぶ画面には無かった。
+    """
+    assert "選ぶ画面が" in playtest_mjs, "はみ出しを見ていない"
+    assert "btn-start" in playtest_mjs, "開始ボタンが見えるかを見ていない"
+    # 練習は畳みの中にあるので、開いてから押すこと
+    assert "tutorial-group" in playtest_mjs, "畳みを開かずに練習を選ぼうとしている"

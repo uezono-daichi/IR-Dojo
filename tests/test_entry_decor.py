@@ -235,7 +235,12 @@ def test_the_strip_counts_the_very_list_it_shows(app_js):
     失敗したときに「2 SCENARIOS」と言いながら札が0枚、が成立する。
     """
     body = meta_body(app_js)
-    assert "S.scenarios.length + ' SCENARIOS'" in body
+    # **練習と本番は別に数える**（SPEC 7.6.27）。入口の札は練習を1枚に
+    # まとめているので、合計だけを出すと「7 と言っているのに札が6枚」になる。
+    # 見ているのは**同じ配列から数えていること**で、合計であることではない。
+    assert "S.scenarios.filter" in body, "帯が別の経路で数えている"
+    assert "real + ' SCENARIOS'" in body
+    assert "practice + ' TUTORIALS'" in body
     # 一覧を入れ替えたら帯も数え直す
     loader = app_js[app_js.index("function loadScenarios"):]
     loader = loader[: loader.index("function showListError")]

@@ -112,16 +112,31 @@
 <section id="screen-select" class="screen">
   <div class="wrap">
     <h1 style="font-size:22px">演習を選ぶ</h1>
-    <p class="sub">シナリオを選んでください。同じシナリオを、方針とアシストレベルを変えて解き直せます。</p>
+    <p class="sub">同じシナリオを、方針とアシストレベルを変えて解き直せます。</p>
+
+    <!-- **練習は1つの枠にまとめて畳む**（SPEC 7.6.27）。
+         札のまま2枚並べると、それだけで 290px 使う。この画面は
+         **開始ボタンが一度も見えていなかった**（実測 1593px）ので、
+         まず縦を削るところから入る。中に何が入っているかは見出しが言う -->
+    <details class="fold block tutor-group" id="tutorial-group">
+      <summary>チュートリアル — はじめての方はここから（2本）</summary>
+      <div id="tutorial-list"></div>
+    </details>
+
     <div id="scenario-list"></div>
-    <fieldset>
-      <legend>対応方針 — 以降すべての評価基準になります</legend>
-      <div id="policy-list"></div>
-    </fieldset>
-    <fieldset>
-      <legend>アシストレベル — 採点式は変わりません</legend>
-      <div id="assist-list"></div>
-    </fieldset>
+
+    <!-- 方針とアシストは横に並べる。縦に積むと 249px 使い、
+         そのぶん札が画面の外へ出る -->
+    <div class="pick-options">
+      <fieldset>
+        <legend>対応方針 — 以降すべての評価基準になります</legend>
+        <div id="policy-list"></div>
+      </fieldset>
+      <fieldset>
+        <legend>アシストレベル — 採点式は変わりません</legend>
+        <div id="assist-list"></div>
+      </fieldset>
+    </div>
     <div class="btn-row right">
       <button id="btn-back-top">戻る</button>
       <button class="primary" id="btn-start">開始する</button>

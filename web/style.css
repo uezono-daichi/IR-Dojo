@@ -1287,3 +1287,58 @@ table.log td, table.log th { padding: 5px 12px 5px 0; }
   outline: 2px solid var(--accent);
   outline-offset: 3px; border-radius: 4px;
 }
+
+
+/* ── 演習を選ぶ画面（SPEC 7.6.27） ──
+   **開始ボタンが一度も見えていなかった。** 札7枚を縦に積むと一覧だけで
+   1005px、画面全体で 1593px になり、どの画面サイズでも溢れていた。
+   プレイ画面と同じ穴で、**ここにも検査が無かった。** */
+
+/* この画面だけ幅を広く取る。**860px に5本を積むと縦にしか伸びない** */
+#screen-select > .wrap { max-width: 1280px; padding: 24px 24px 20px; }
+#screen-select h1 { margin-bottom: 2px; }
+#screen-select .sub { margin-bottom: 14px; }
+
+/* 本番の札は並べる。**1列に積むと、本数を増やすたびに下が伸びる** */
+#scenario-list {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+  gap: 10px; margin-bottom: 14px;
+}
+#scenario-list .card { margin-bottom: 0; padding: 12px 14px; }
+/* タグ（英語の分類）はここでは出さない。**選ぶときに効くのは方針の名前** */
+#scenario-list .card > .faint { display: none; }
+#scenario-list .card-policies { margin: 7px 0 0; }
+
+/* 練習は畳みの中。**中の札は細く** — タグも所要も出さない。
+   ここで選ぶのは「操作か、考え方か」の2択しかない */
+/* **練習は「1つの枠」に見せる。**
+   利用者の言葉：「チュートリアルで一つの枠にして、その中に
+   遊び方と、インシデント対応の基本で2項目」。
+   見出しの行が枠の頭になり、開くと中に2項目が並ぶ。 */
+.tutor-group {
+  margin: 0 0 14px; border: 1px solid var(--line); border-radius: 6px;
+  background: color-mix(in srgb, var(--panel) 55%, transparent);
+}
+.tutor-group > summary {
+  font-weight: 600; width: 100%; box-sizing: border-box;
+  border: 0; border-radius: 6px; background: none; padding: 11px 14px 11px 12px;
+}
+.tutor-group[open] > summary {
+  border-bottom: 1px solid var(--line);
+  border-radius: 6px 6px 0 0; margin-bottom: 0;
+}
+.tutor-group > *:not(summary) { margin: 0; padding: 10px; }
+#tutorial-list {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 10px;
+}
+#tutorial-list .card { margin-bottom: 0; }
+.card-slim { padding: 11px 14px; }
+
+/* 方針とアシストは横に並べる。縦に積むと 249px 使う */
+.pick-options {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 0 20px; align-items: start;
+}
+.pick-options fieldset { margin-bottom: 10px; }
+.pick-options legend { padding-bottom: 5px; }

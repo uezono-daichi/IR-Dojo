@@ -325,7 +325,13 @@ function renderTopMeta() {
     facts.push('BUILD ' + S.meta.build);
   }
   if (S.scenarios.length) {
-    facts.push(S.scenarios.length + ' SCENARIOS');
+    // **練習と本番は別に数える**（SPEC 7.6.27）。入口の札は練習を
+    // 1枚にまとめているので、合計だけを出すと「7 と言っているのに札が6枚」
+    // になる。数えている配列は1つのまま、出す数を分ける
+    var real = S.scenarios.filter(function (sc) { return !sc.tutorial; }).length;
+    var practice = S.scenarios.length - real;
+    facts.push(real + ' SCENARIOS');
+    if (practice) { facts.push(practice + ' TUTORIALS'); }
     var seen = {}, n = 0;
     S.scenarios.forEach(function (sc) {
       sc.policies.forEach(function (pol) {
@@ -350,7 +356,16 @@ function renderTopMeta() {
 function renderTopScenarios() {
   var host = $('top-scenarios');
   clear(host);
-  S.scenarios.forEach(function (sc) {
+
+  /* **練習は1枚にまとめる**（SPEC 7.6.27）。
+     7本を札のまま並べると、1280×720 では2行になり、広い画面では
+     1行7列に割れて題がまた切れる。**入口の札は題だけを出す**という
+     決め方（7.6.19）は、枚数が増えると横で同じ問題に当たる。
+     押すと、選ぶ画面の練習の枠が開いた状態で開く。 */
+  var tutorials = S.scenarios.filter(function (sc) { return sc.tutorial; });
+  if (tutorials.length) { host.appendChild(tutorialGroupCard(tutorials.length)); }
+
+  S.scenarios.filter(function (sc) { return !sc.tutorial; }).forEach(function (sc) {
     var card = el('div', 'card card-pick');
     card.setAttribute('role', 'button');
     card.setAttribute('data-scenario', sc.id);
@@ -369,6 +384,34 @@ function renderTopScenarios() {
     });
     host.appendChild(card);
   });
+}
+
+/* 入口に置く「練習」の1枚（SPEC 7.6.27）。
+
+   **これは演習の札ではない。** 中身はシナリオから来ないので
+   `fillScenarioCard` は通さない。押すと、選ぶ画面の練習の枠が
+   開いた状態で開く。 */
+function tutorialGroupCard(count) {
+  var card = el('div', 'card card-pick card-tutorial');
+  card.setAttribute('role', 'button');
+  card.setAttribute('tabindex', '0');
+  card.setAttribute('data-tutorial-group', '1');
+  var head = el('div', 'card-head');
+  var title = el('div', 'card-title', 'チュートリアル');
+  title.insertBefore(el('span', 'card-badge', '練習'), title.firstChild);
+  head.appendChild(title);
+  head.appendChild(el('div', 'dim', count + '本'));
+  card.appendChild(head);
+  function open() {
+    toSelect(null);
+    var g = $('tutorial-group');
+    if (g) { g.open = true; }
+  }
+  card.addEventListener('click', open);
+  card.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+  });
+  return card;
 }
 
 /* 選択画面へ渡す。札から来たときは、そのシナリオを選んだ状態にする */
@@ -459,12 +502,15 @@ function fillScenarioCard(card, sc, opts) {
      就業関係への配慮最優先」は、違う綱引きを練習することを一目で言う。
      漏洩にもならない。**方針はこの札のすぐ下で自分で選ぶもの**であって、
      盤面の真相ではない。 */
+  if (opts && opts.policies === false) { return card; }
   var pol = el('div', 'card-policies');
   sc.policies.forEach(function (p) {
     pol.appendChild(el('span', 'pchip', p.label));
   });
   card.appendChild(pol);
-  card.appendChild(el('div', 'faint', sc.tags.join(' / ')));
+  if (!opts || opts.tags !== false) {
+    card.appendChild(el('div', 'faint', sc.tags.join(' / ')));
+  }
   return card;
 }
 
@@ -481,20 +527,37 @@ function renderScenarioList() {
   // カードは押して選ぶ。**2本目が入るまで、ここは押せなかった** —
   // 一覧を描いたあと無条件に先頭を選んでいたので、1本のときは
   // 見た目どおりに動き、2本目を足した瞬間に「2本目だけ遊べない」になる
-  S.scenarios.forEach(function (sc) {
-    var card = el('div', 'card card-pick');
+  //
+  // **練習は別の枠へ**（SPEC 7.6.27）。札のまま混ぜると、この画面は
+  // 縦 1593px になり、開始ボタンが一度も見えない
+  var group = $('tutorial-group');
+  var tutorHost = $('tutorial-list');
+  clear(tutorHost);
+  var tutorials = S.scenarios.filter(function (sc) { return sc.tutorial; });
+  group.hidden = !tutorials.length;
+
+  function addCard(sc, into, compact) {
+    var card = el('div', 'card card-pick' + (compact ? ' card-slim' : ''));
     card.setAttribute('role', 'radio');
     card.setAttribute('data-scenario', sc.id);
     card.setAttribute('tabindex', '0');
-    fillScenarioCard(card, sc);
+    fillScenarioCard(card, sc, compact ? { tags: false, policies: false } : null);
     card.addEventListener('click', function () { selectScenario(sc); });
     card.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectScenario(sc); }
     });
     S.cards.push({ id: sc.id, node: card });
-    host.appendChild(card);
+    into.appendChild(card);
+  }
+
+  S.scenarios.forEach(function (sc) {
+    if (sc.tutorial) { addCard(sc, tutorHost, true); }
+    else { addCard(sc, host, false); }
   });
-  selectScenario(S.scenarios[0]);
+  // **既定で選ばれるのは本番の先頭。** 練習は畳んである側なので、
+  // 選ばれた札が見えない状態で開始ボタンだけが有効になるのを避ける
+  var first = S.scenarios.filter(function (sc) { return !sc.tutorial; })[0];
+  selectScenario(first || S.scenarios[0]);
 }
 
 function selectScenario(sc) {

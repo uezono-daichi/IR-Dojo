@@ -311,6 +311,12 @@ async function checkTopScreen(where) {
       cols, heads: head.length,
       cards: [...top.querySelectorAll('#top-scenarios .card-title')]
         .map(e => e.textContent.trim()),
+      // 練習をまとめた札が名乗っている本数（SPEC 7.6.27）。
+      // 題とは別の欄にあるので、別に読む
+      tutorCount: (() => {
+        const c = top.querySelector('#top-scenarios [data-tutorial-group] .dim');
+        return c ? c.textContent.trim() : null;
+      })(),
       prose: top.querySelectorAll('.lede p').length,
       // 隅の帯（SPEC 7.6.18）。**中身は実データからしか来ない**ので、
       // ここでは「札の枚数と食い違っていないか」だけを見る
@@ -336,14 +342,31 @@ async function checkTopScreen(where) {
   if (m.fieldOnTop) {
     note('error', where, '背後の格子が中身の前に出ている（ボタンが押せない）');
   }
-  // 帯が「N SCENARIOS」と言うなら、その N は下に並んでいる札の枚数である。
+  // 帯が「N SCENARIOS」と言うなら、その N は下に並んでいる**本番の**札の枚数。
   // **別の経路で数えた数を並べると、片方が落ちた日に矛盾が表に出る**
+  //
+  // 練習は札1枚にまとめてあるので、帯も別に数える（SPEC 7.6.27）。
+  // 「M TUTORIALS」は、その札が名乗っている本数と合っていること
   const said = m.meta.find(t => / SCENARIOS$/.test(t));
+  const realCards = m.cards.filter((x) => !x.includes('チュートリアル'));
+  const tutorCard = m.cards.find((x) => x.includes('チュートリアル'));
+  const saidTutor = m.meta.find(t => / TUTORIALS$/.test(t));
+  if (tutorCard || saidTutor) {
+    const onCard = (m.tutorCount || '').match(/(\d+)\s*本/);
+    const inStrip = (saidTutor || '').match(/(\d+)/);
+    if (!tutorCard || !saidTutor) {
+      note('error', where,
+        `練習の札と帯が片方しか無い: 札 ${tutorCard ? 'あり' : 'なし'} / 帯 ${saidTutor || 'なし'}`);
+    } else if (!onCard || !inStrip || onCard[1] !== inStrip[1]) {
+      note('error', where,
+        `練習の本数が食い違っている: 札「${m.tutorCount}」/ 帯「${saidTutor}」`);
+    }
+  }
   if (m.meta.length && !said) {
     note('error', where, `隅の帯に演習の数が無い: ${JSON.stringify(m.meta)}`);
-  } else if (said && parseInt(said, 10) !== m.cards.length) {
+  } else if (said && parseInt(said, 10) !== realCards.length) {
     note('error', where,
-      `隅の帯と札の枚数が食い違っている: 「${said}」だが札は ${m.cards.length} 枚`);
+      `隅の帯と札の枚数が食い違っている: 「${said}」だが本番の札は ${realCards.length} 枚`);
   }
   if (m.scrollH > m.clientH + 1) {
     note('error', where,
@@ -471,15 +494,35 @@ await page.waitForTimeout(200);
 await page.click('#btn-to-select');
 await page.waitForSelector('#scenario-list .card:not(.card-error)');
 // 入口の札と選択画面の札は同じ関数から出ている。**別々に書いたら腐る**
+//
+// **練習は両方で1つにまとめてある**（SPEC 7.6.27）。入口は「チュートリアル」
+// の1枚、選択画面は畳みの中の2枚。突き合わせるのは**本番の札どうし**で、
+// 練習の側は「入口に1枚あり、畳みの中に2枚ある」で見る
 const listed = await page.$$eval('#scenario-list .card-title',
   e => e.map(x => x.textContent.trim()));
-if (JSON.stringify(listed) !== JSON.stringify(top.cards)) {
-  note('error', 'top', `入口の演習一覧が選択画面と食い違っている: `
+const topReal = top.cards.filter((x) => !x.includes('チュートリアル'));
+const topTutorial = top.cards.filter((x) => x.includes('チュートリアル'));
+const inFold = await page.$$eval('#tutorial-list .card-title',
+  e => e.map(x => x.textContent.trim()));
+if (topTutorial.length !== (inFold.length ? 1 : 0)) {
+  note('error', 'top',
+    `練習の札が入口に ${topTutorial.length} 枚、畳みの中に ${inFold.length} 本`);
+}
+if (JSON.stringify(listed) !== JSON.stringify(topReal)) {
+  note('error', 'top', `入口の本番の一覧が選択画面と食い違っている: `
     + `${JSON.stringify(top.cards)} ≠ ${JSON.stringify(listed)}`);
 }
 // どのシナリオを遊ぶか。指定が無ければ一覧の先頭（既定の選択）
 if (args.scenario) {
-  const sel = `#scenario-list [data-scenario="${args.scenario}"]`;
+  // **練習は畳みの中にある**（SPEC 7.6.27）。開かずに押そうとすると
+  // 「カードが無い」で落ちるが、それは正しい落ち方ではない
+  const inFoldSel = `#tutorial-list [data-scenario="${args.scenario}"]`;
+  if (await page.$(inFoldSel)) {
+    await page.click('#tutorial-group > summary');
+    await page.waitForTimeout(250);
+  }
+  const sel = (await page.$(inFoldSel)) ? inFoldSel
+    : `#scenario-list [data-scenario="${args.scenario}"]`;
   if (!(await page.$(sel))) {
     note('error', 'select', `シナリオ ${args.scenario} のカードが無い`);
   } else {
@@ -499,6 +542,28 @@ if (args.assist) {
   }
 }
 await screen('02-select');
+
+// **選ぶ画面が画面に収まっているか。**（SPEC 7.6.27）
+// プレイ画面と同じ穴を2回踏んだ — 札を7枚積むと縦 1593px になり、
+// 「開始する」がどの画面サイズでも一度も見えなかった。
+// **測っていたのは入口とプレイ画面だけだった。**
+{
+  const fit = await page.evaluate(() => {
+    const s = document.querySelector('#btn-start').getBoundingClientRect();
+    return {
+      over: document.documentElement.scrollHeight - innerHeight,
+      startVisible: s.top >= 0 && s.bottom <= innerHeight,
+      startBottom: Math.round(s.bottom),
+    };
+  });
+  if (fit.over > 0) {
+    note('error', 'select', `選ぶ画面が ${fit.over}px はみ出している`);
+  }
+  if (!fit.startVisible) {
+    note('error', 'select',
+      `「開始する」がスクロールしないと見えない（下端 ${fit.startBottom}px）`);
+  }
+}
 
 await page.click('#btn-start');
 await page.waitForSelector('#screen-briefing.active');
