@@ -97,8 +97,12 @@
     </section>
 
     <div class="btn-row">
-      <button class="primary big" id="btn-to-select">演習を選ぶ</button>
-      <button id="btn-to-learn">はじめて学ぶ</button>
+      <!-- **粒度をそろえる**（SPEC 7.6.31）。
+           「演習を選ぶ」「はじめて学ぶ」「何を測るのか」を横に並べていたが、
+           3つは同じ高さのものではなかった — 1つ目は次の画面へ行く操作、
+           2つ目は**コース**、3つ目はこの道具の説明である。
+           コースは次の画面の中へ移した -->
+      <button class="primary big" id="btn-to-select">はじめる</button>
       <button class="quiet" id="btn-what">何を測るのか</button>
     </div>
 
@@ -112,7 +116,7 @@
 <!-- ② シナリオ選択 -->
 <section id="screen-select" class="screen">
   <div class="wrap">
-    <h1 style="font-size:22px">演習を選ぶ</h1>
+    <h1 style="font-size:22px">何から始めますか</h1>
     <p class="sub">同じシナリオを、方針とアシストレベルを変えて解き直せます。</p>
 
     <!-- **枠は2つ、粒度は同じ**（SPEC 7.6.27）。
@@ -122,6 +126,14 @@
 
          **本数は手で書かない。** 見出しの数字は JS が配列から入れる
          （手で書いた数字は、1本足した日から嘘になる / 7.6.18） -->
+    <!-- **初めての人のコースは、ここが入り口**（SPEC 7.6.31）。
+         上から順に、読む → 案内つきで遊ぶ → 自分で遊ぶ。
+         3つとも同じ作りの枠で、同じ粒度で並ぶ -->
+    <details class="fold pick-group" id="learn-group">
+      <summary>はじめて学ぶ — インシデント対応が初めての方へ<span id="learn-count"></span></summary>
+      <div id="learn-list"></div>
+    </details>
+
     <details class="fold pick-group" id="tutorial-group">
       <summary>チュートリアル — はじめての方はここから<span id="tutorial-count"></span></summary>
       <div id="tutorial-list"></div>

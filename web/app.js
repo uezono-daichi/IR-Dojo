@@ -420,6 +420,20 @@ function toTutorials() {
   if (g) { g.open = true; }
 }
 
+/* 座学を開く。章を指定すると、その章を開いた状態で出す。
+
+   **押された結果としてしか呼ばれない**（選ぶ画面の章の行）。
+   畳みを開いてよい場所は名前で列挙してあるので（7.6.28）、1か所にまとめる。 */
+function toLearn(chapterId) {
+  renderLearn();
+  show('screen-learn');
+  if (!chapterId) { return; }
+  var box = document.querySelector('[data-chapter="' + chapterId + '"]');
+  if (!box) { return; }
+  box.open = true;
+  box.scrollIntoView({ block: 'start' });
+}
+
 /* ── 座学（SPEC 3.14） ──
 
    **遊ぶ前に読むもの。** 章は畳んで出す（7.6.28）。
@@ -431,6 +445,7 @@ function renderLearn() {
   if (!host || host.childNodes.length) { return; }   // 一度組んだら作り直さない
   (window.LEARN || []).forEach(function (ch, i) {
     var box = el('details', 'fold pick-group learn-ch');
+    box.setAttribute('data-chapter', ch.id);
     var sum = el('summary');
     sum.appendChild(el('span', 'learn-no', String(i + 1)));
     sum.appendChild(el('span', 'learn-title', ch.title));
@@ -478,6 +493,29 @@ function learnTable(spec) {
   table.appendChild(tbody);
   wrap.appendChild(table);
   return wrap;
+}
+
+/* 座学の章の行（SPEC 7.6.31）。
+
+   **これは演習の札ではない。** 中身はシナリオから来ないので
+   `fillScenarioCard` は通さない。押すと、その章を開いた座学を出す。 */
+function learnChapterRow(ch, i) {
+  var row = el('div', 'card card-pick card-slim');
+  row.setAttribute('role', 'button');
+  row.setAttribute('tabindex', '0');
+  row.setAttribute('data-learn', ch.id);
+  var head = el('div', 'card-head');
+  var title = el('div', 'card-title', ch.title);
+  title.insertBefore(el('span', 'learn-no', String(i + 1)), title.firstChild);
+  head.appendChild(title);
+  if (ch.lead) { head.appendChild(el('div', 'dim', ch.lead)); }
+  row.appendChild(head);
+  function go() { toLearn(ch.id); }
+  row.addEventListener('click', go);
+  row.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
+  });
+  return row;
 }
 
 /* 選択画面へ渡す。札から来たときは、そのシナリオを選んだ状態にする */
@@ -596,6 +634,16 @@ function renderScenarioList() {
   //
   // **練習は別の枠へ**（SPEC 7.6.27）。札のまま混ぜると、この画面は
   // 縦 1593px になり、開始ボタンが一度も見えない
+  // 座学の章を、同じ粒度の枠に並べる（SPEC 7.6.31）
+  var learnHost = $('learn-list');
+  clear(learnHost);
+  var chapters = window.LEARN || [];
+  $('learn-group').hidden = !chapters.length;
+  $('learn-count').textContent = chapters.length ? '（' + chapters.length + '章）' : '';
+  chapters.forEach(function (ch, i) {
+    learnHost.appendChild(learnChapterRow(ch, i));
+  });
+
   var group = $('tutorial-group');
   var tutorHost = $('tutorial-list');
   clear(tutorHost);
@@ -2975,11 +3023,8 @@ function stamp(iso) {
 function init() {
   $('btn-to-select').addEventListener('click', function () { toSelect(null); });
   $('btn-what').addEventListener('click', function () { openModal('modal-what'); });
-  $('btn-to-learn').addEventListener('click', function () {
-    renderLearn();
-    show('screen-learn');
-  });
-  $('btn-learn-back').addEventListener('click', function () { show('screen-top'); });
+
+  $('btn-learn-back').addEventListener('click', function () { toSelect(null); });
   $('btn-learn-play').addEventListener('click', toTutorials);
   $('btn-back-top').addEventListener('click', function () { show('screen-top'); });
   $('btn-start').addEventListener('click', startSession);

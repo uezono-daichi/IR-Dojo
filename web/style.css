@@ -1340,6 +1340,15 @@ table.log td, table.log th { padding: 5px 12px 5px 0; }
 }
 #tutorial-list .card { margin-bottom: 0; }
 .card-slim { padding: 11px 14px; }
+/* 座学の章の行。番号を題の前に置く */
+#learn-list { display: grid; gap: 8px; }
+.pick-group[open] > #learn-list {
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+#learn-list .card { margin-bottom: 0; }
+#learn-list .card-head { gap: 10px; }
+#learn-list .dim { font-size: 12px; text-align: right; }
+#learn-list .learn-no { margin-right: 8px; }
 
 /* 方針とアシストは横に並べる。縦に積むと 249px 使う */
 .pick-options {

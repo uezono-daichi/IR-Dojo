@@ -1044,10 +1044,16 @@ def test_the_select_screen_groups_the_practice_boards(index_html, app_js):
     # **枠は2つ、粒度は同じ。** 利用者の言葉：「チュートリアルの枠が
     # あるなら同じ粒度で別の枠を作ってそこにシナリオを入れればいいのでは？」
     # 練習だけを枠に入れて本番を裸で並べると、同じ種類のものが違う見え方をする
+    # **枠は3つ、粒度は同じ**（v1.65 / 7.6.31）。
+    # 読む → 案内つきで遊ぶ → 自分で遊ぶ、の順に並ぶ
+    assert 'id="learn-group"' in sel, "座学の枠が無い"
     assert 'id="tutorial-group"' in sel, "練習をまとめる枠が無い"
     assert 'id="scenario-group"' in sel, "本番をまとめる枠が無い"
     groups = re.findall(r'<details class="([^"]*)" id="(\w+[\w-]*)"', sel)
-    assert len(groups) == 2, f"枠が2つでない: {groups}"
+    assert len(groups) == 3, f"枠が3つでない: {groups}"
+    assert [g[1] for g in groups] == [
+        "learn-group", "tutorial-group", "scenario-group"
+    ], f"並びが「読む → 練習 → 本番」でない: {groups}"
     assert {cls for cls, _ in groups} == {"fold pick-group"}, (
         f"2つの枠が違う作りになっている: {groups}"
     )
@@ -1066,6 +1072,8 @@ def test_the_select_screen_groups_the_practice_boards(index_html, app_js):
     fn = body[body.index("function renderScenarioList") :]
     fn = fn[: fn.index("\nfunction ")]
     assert "sc.tutorial" in fn, "練習を振り分けていない"
+    # 座学の章もここで並べる（行そのものは `learnChapterRow` が組む）
+    assert "learnChapterRow" in fn, "座学の章を並べていない"
     assert "tutorial-list" in fn, "練習を枠の中へ入れていない"
     # 見出しの本数は配列から入れる
     assert "tutorial-count" in fn and "scenario-count" in fn, "本数を入れていない"
@@ -1178,6 +1186,8 @@ def test_every_fold_starts_closed(index_html, app_js):
         # 入口の札、または座学の「読み終えた — 練習へ」を押した結果。
         # **押された結果としてしか呼ばれない**ので、1か所にまとめてある
         "toTutorials",
+        # 選ぶ画面の章の行を押した結果。その章を開いた状態で座学を出す
+        "toLearn",
         # 証拠の参照を押した結果。畳んだ先にある証拠へ連れて行く
         "focusEvidence",
         # **見本の中**（画面の見方）。見本は中身を見せるためのもので、

@@ -94,13 +94,23 @@ def test_the_screen_holds_no_teaching_text(index_html):
         assert ch not in screen, f"画面に教材の文が書かれている: {ch}"
 
 
-def test_the_curriculum_is_reachable_from_the_entrance(index_html):
-    """入口から行けること。
+def test_the_curriculum_is_reachable_where_you_choose_what_to_do(index_html):
+    """**「何から始めますか」の1つ目として置く**（SPEC 7.6.31）。
 
-    行けない教材は、無いのと同じである。
+    利用者の指摘：「演習を選ぶ／はじめて学ぶ／何を測るのか、この配置が難しい。
+    そもそも同列？ **演習を選んだ先で初めて学ぶ人のコースあったらいいのでは？**」
+
+    そのとおりで、3つは同じ高さのものではなかった — 1つ目は次の画面へ行く操作、
+    2つ目は**コース**、3つ目はこの道具の説明である。
+    コースは次の画面の中へ移し、読む → 練習 → 本番の順に並べた。
     """
+    sel = index_html[index_html.index('id="screen-select"') :]
+    sel = sel[: sel.index("</section>")]
+    assert 'id="learn-group"' in sel, "座学のコースが選ぶ画面に無い"
+    assert sel.index('id="learn-group"') < sel.index('id="tutorial-group"')
+
     top = index_html[index_html.index('id="screen-top"') : index_html.index('id="screen-select"')]
-    assert 'id="btn-to-learn"' in top, "入口に座学への入り口が無い"
+    assert 'id="btn-to-learn"' not in top, "入口に粒度の違うボタンが残っている"
 
 
 def test_reading_leads_to_the_practice_boards(index_html):
