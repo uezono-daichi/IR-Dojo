@@ -491,6 +491,36 @@ await shot('01b-top-1280x720');
 await page.setViewportSize({ width: 1440, height: 1000 });
 await page.waitForTimeout(200);
 
+// **座学も見る**（SPEC 3.14）。入口から行けて、章が畳んで並んでいて、
+// 一番狭いところで収まること。読まれない教材は無いのと同じである
+await page.click('#btn-to-learn');
+await page.waitForTimeout(300);
+{
+  const m = await page.evaluate(() => {
+    const chs = [...document.querySelectorAll('.learn-ch')];
+    return {
+      chapters: chs.length,
+      opened: chs.filter((c) => c.open).length,
+      over: document.documentElement.scrollHeight - innerHeight,
+      raw: document.querySelector('#learn-body').innerText.includes('**'),
+    };
+  });
+  if (!m.chapters) note('error', 'learn', '座学に章が1つも無い');
+  if (m.opened) note('error', 'learn', `座学の章が ${m.opened} 個開いている（畳んで出す）`);
+  if (m.over > 0) note('error', 'learn', `座学が ${m.over}px はみ出している`);
+  if (m.raw) note('error', 'learn', '座学に生の markdown が出ている');
+  await screen('01c-learn');
+  // 1章開いて、中身が組まれるかまで見る
+  await page.click('.learn-ch:nth-of-type(3) > summary');
+  await page.waitForTimeout(250);
+  const filled = await page.$eval('.learn-ch:nth-of-type(3) .learn-body',
+    (e) => e.innerText.trim().length);
+  if (filled < 80) note('error', 'learn', `章を開いても中身が薄い（${filled}字）`);
+  await shot('01d-learn-open');
+}
+await page.click('#btn-learn-back');
+await page.waitForTimeout(250);
+
 await page.click('#btn-to-select');
 await page.waitForSelector('#scenario-list .card:not(.card-error)', { state: 'attached' });
 // **畳みは全部、既定で閉じている**（SPEC 7.6.28）。

@@ -98,8 +98,8 @@ function prose(host, text, cls) {
    解釈されない。使うのはチュートリアルの案内に限る —
    ふつうの散文（ブリーフィング・方針・証拠）は素のままにしておく。
    強調できる場所が増えると、書き手が語気で本命を指せるようになる（5.4）。 */
-function emphProse(host, text) {
-  clear(host);
+function emphProse(host, text, append) {
+  if (!append) { clear(host); }
   if (!text) { return host; }
   String(text).trim().split(/\n[ \t]*\n/).forEach(function (block) {
     var folded = foldParagraph(block);
@@ -402,16 +402,82 @@ function tutorialGroupCard(count) {
   head.appendChild(title);
   head.appendChild(el('div', 'dim', count + '本'));
   card.appendChild(head);
-  function open() {
-    toSelect(null);
-    var g = $('tutorial-group');
-    if (g) { g.open = true; }
-  }
-  card.addEventListener('click', open);
+  card.addEventListener('click', toTutorials);
   card.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toTutorials(); }
   });
   return card;
+}
+
+/* 選ぶ画面を、練習の枠が開いた状態で開く。
+
+   **押された結果としてしか呼ばれない**（入口の「チュートリアル」の札と、
+   座学の「読み終えた — 練習へ」）。畳みを開いてよい場所は名前で
+   列挙してあるので（SPEC 7.6.28）、開く処理は1か所にまとめておく。 */
+function toTutorials() {
+  toSelect(null);
+  var g = $('tutorial-group');
+  if (g) { g.open = true; }
+}
+
+/* ── 座学（SPEC 3.14） ──
+
+   **遊ぶ前に読むもの。** 章は畳んで出す（7.6.28）。
+   中身は `learn.js` の `LEARN` から来る — 画面には1文字も書かない。
+   書くと、教材を直すのに画面を触ることになる。 */
+
+function renderLearn() {
+  var host = $('learn-body');
+  if (!host || host.childNodes.length) { return; }   // 一度組んだら作り直さない
+  (window.LEARN || []).forEach(function (ch, i) {
+    var box = el('details', 'fold pick-group learn-ch');
+    var sum = el('summary');
+    sum.appendChild(el('span', 'learn-no', String(i + 1)));
+    sum.appendChild(el('span', 'learn-title', ch.title));
+    if (ch.lead) { sum.appendChild(el('span', 'learn-lead', ch.lead)); }
+    box.appendChild(sum);
+
+    var body = el('div', 'learn-body');
+    (ch.body || []).forEach(function (p) { emphProse(body, p, true); });
+    if (ch.table) { body.appendChild(learnTable(ch.table)); }
+    (ch.rules || []).forEach(function (r) {
+      var row = el('div', 'learn-rule');
+      row.appendChild(el('div', 'k', r[0]));
+      var v = el('div', 'v');
+      emphProse(v, r[1], true);
+      row.appendChild(v);
+      body.appendChild(row);
+    });
+    (ch.more || []).forEach(function (p) { emphProse(body, p, true); });
+    if (ch.note) {
+      var note = el('div', 'learn-note');
+      emphProse(note, ch.note, true);
+      body.appendChild(note);
+    }
+    box.appendChild(body);
+    host.appendChild(box);
+  });
+}
+
+function learnTable(spec) {
+  var wrap = el('div', 'learn-table');
+  var table = el('table');
+  var thead = el('thead'), hr = el('tr');
+  spec.head.forEach(function (h) { hr.appendChild(el('th', null, h)); });
+  thead.appendChild(hr); table.appendChild(thead);
+  var tbody = el('tbody');
+  spec.rows.forEach(function (row) {
+    var tr = el('tr');
+    row.forEach(function (cell, i) {
+      var td = el('td', i ? null : 'k');
+      emphProse(td, cell, true);
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  return wrap;
 }
 
 /* 選択画面へ渡す。札から来たときは、そのシナリオを選んだ状態にする */
@@ -2909,6 +2975,12 @@ function stamp(iso) {
 function init() {
   $('btn-to-select').addEventListener('click', function () { toSelect(null); });
   $('btn-what').addEventListener('click', function () { openModal('modal-what'); });
+  $('btn-to-learn').addEventListener('click', function () {
+    renderLearn();
+    show('screen-learn');
+  });
+  $('btn-learn-back').addEventListener('click', function () { show('screen-top'); });
+  $('btn-learn-play').addEventListener('click', toTutorials);
   $('btn-back-top').addEventListener('click', function () { show('screen-top'); });
   $('btn-start').addEventListener('click', startSession);
   $('btn-begin').addEventListener('click', function () {

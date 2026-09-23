@@ -1091,8 +1091,12 @@ def test_the_entrance_shows_the_practice_boards_as_one_card(app_js):
     maker = body[body.index("function tutorialGroupCard") :]
     maker = maker[: maker.index("\nfunction ")]
     assert "data-tutorial-group" in maker
-    # 押したら、選ぶ画面の枠が開いた状態で開く
-    assert "open = true" in maker, "押しても枠が開かない"
+    # 押したら、選ぶ画面の枠が開いた状態で開く。
+    # **開く処理は1か所にまとめてある**（座学の「練習へ」も同じ道を通る）
+    assert "toTutorials" in maker, "押しても枠が開かない"
+    opener = body[body.index("function toTutorials") :]
+    opener = opener[: opener.index("\n}") + 2]
+    assert "open = true" in opener
 
 
 def test_the_strip_counts_practice_separately(app_js):
@@ -1171,8 +1175,9 @@ def test_every_fold_starts_closed(index_html, app_js):
 
     # JS で開いてよい場所は4つだけ。**名前で列挙する** — どれも理由が違う
     allowed = {
-        # 入口の「チュートリアル」を押した結果。押されたら開く、そのもの
-        "tutorialGroupCard",
+        # 入口の札、または座学の「読み終えた — 練習へ」を押した結果。
+        # **押された結果としてしか呼ばれない**ので、1か所にまとめてある
+        "toTutorials",
         # 証拠の参照を押した結果。畳んだ先にある証拠へ連れて行く
         "focusEvidence",
         # **見本の中**（画面の見方）。見本は中身を見せるためのもので、

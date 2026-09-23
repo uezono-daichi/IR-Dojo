@@ -1364,3 +1364,50 @@ table.log td, table.log th { padding: 5px 12px 5px 0; }
 .tutor-guided #btn-finish:not(.tutor-off) {
   border-color: color-mix(in srgb, var(--accent) 70%, transparent);
 }
+
+
+/* ── 座学（SPEC 3.14 / 7.6.30） ──
+   章は畳んで出す（7.6.28 と同じ形）。見出しに番号・題・一行の要約を並べ、
+   **開かなくても何の章かが分かる**ようにする。 */
+.wrap-learn { max-width: 1040px; padding: 24px 24px 24px; }
+#screen-learn .sub { margin-bottom: 16px; }
+.learn-ch { margin-bottom: 8px; }
+.learn-ch > summary { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.learn-no {
+  font-family: var(--mono); font-size: 11px; color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 3px; padding: 2px 6px; flex: none;
+}
+.learn-title { font-weight: 600; }
+.learn-lead { font-weight: 400; font-size: 13px; color: var(--fg-dim); }
+.learn-body { font-size: 14px; line-height: 1.95; }
+.learn-body > p { margin: 0 0 12px; }
+.learn-body > p:last-child { margin-bottom: 0; }
+.learn-body strong { color: #fff; }
+
+.learn-table { overflow-x: auto; margin: 4px 0 14px; }
+.learn-table table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+.learn-table th {
+  text-align: left; font-weight: 400; color: var(--fg-dim);
+  border-bottom: 1px solid var(--line); padding: 6px 12px 6px 0;
+  white-space: nowrap;
+}
+.learn-table td { padding: 8px 12px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+.learn-table td p { margin: 0; }
+.learn-table td.k { color: var(--fg); white-space: nowrap; }
+
+.learn-rule {
+  display: grid; grid-template-columns: minmax(0, 15em) minmax(0, 1fr);
+  gap: 4px 18px; padding: 9px 0; border-bottom: 1px solid var(--line);
+}
+.learn-rule .k { font-weight: 600; }
+.learn-rule .v { color: var(--fg-dim); font-size: 13.5px; }
+.learn-rule .v p { margin: 0; }
+
+.learn-note {
+  margin-top: 14px; padding: 10px 12px; border-radius: 4px;
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  font-size: 13.5px; line-height: 1.85;
+}
+.learn-note p { margin: 0; }

@@ -98,6 +98,7 @@
 
     <div class="btn-row">
       <button class="primary big" id="btn-to-select">演習を選ぶ</button>
+      <button id="btn-to-learn">はじめて学ぶ</button>
       <button class="quiet" id="btn-what">何を測るのか</button>
     </div>
 
@@ -146,6 +147,24 @@
     <div class="btn-row right">
       <button id="btn-back-top">戻る</button>
       <button class="primary" id="btn-start">開始する</button>
+    </div>
+  </div>
+</section>
+
+<!-- ②' 座学（SPEC 3.14）。**遊ぶ前に読むもの。**
+     演習は「判断」だけを鍛える道具で、判断の前提になる知識は
+     どこにも無かった（利用者の指摘：「全くの初心者にはまだわかりにくい」）。
+     ここは盤面ではないので、同梱シナリオの中身は1文字も書かない —
+     書けば、読んだ人だけが答えを知っている状態になる -->
+<section id="screen-learn" class="screen">
+  <div class="wrap wrap-learn">
+    <h1 style="font-size:22px">はじめて学ぶ</h1>
+    <p class="sub">インシデント対応を初めて聞く人のための座学です。
+       上から順に読めば、演習を始められます。</p>
+    <div id="learn-body"></div>
+    <div class="btn-row right">
+      <button id="btn-learn-back">戻る</button>
+      <button class="primary" id="btn-learn-play">読み終えた — 練習へ</button>
     </div>
   </div>
 </section>
@@ -455,6 +474,7 @@
 </div>
 
 <script src="/static/chart.js"></script>
+<script src="/static/learn.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>
