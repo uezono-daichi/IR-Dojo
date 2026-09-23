@@ -648,6 +648,65 @@ if (legendBefore.groups.length !== 1
 // 1440×1000 で通っていたものが 1440×800 で落ちた（周7 の退行）
 const HEIGHTS = { 2: 800, 3: 1000 };
 
+/* 練習の盤面で、案内がいま待っている操作を返す（SPEC 7.6.29）。
+   練習でなければ null を返し、呼んだ側はふつうに遊ぶ。
+
+   **読むだけの段は「次へ」を押す。** 押さないと、案内は次に進まず、
+   盤面の側にも通る手が1つも無いので、そこで止まる。 */
+async function nextTutorialMove(page) {
+  const panel = await page.$('#tutor-panel:not([hidden])');
+  if (!panel) return null;
+  const next = await page.$('#tutor-panel button:not([inert])');
+  if (next) { await next.click(); await page.waitForTimeout(160); }
+  return await page.$('#screen-play .act:not([inert]):not([disabled])');
+}
+
+/* 練習の盤面を、案内どおりに終わりまで歩く（SPEC 7.6.29）。
+
+   **遊び方が違うのだから、測り方も変える。** ふつうの盤面は自由に押す像で
+   測るが、練習は通る手が1つしか無い。押せるものを押し続けて講評まで行く。
+   途中で止まったら、そこが案内の切れ目である。 */
+async function walkTutorial(page, screen) {
+  for (let i = 0; i < 40; i++) {
+    if (await page.$('#screen-debrief.active')) return true;
+
+    const next = await page.$('#tutor-panel button:not([inert])');
+    if (next) { await next.click(); await page.waitForTimeout(180); continue; }
+
+    const act = await page.$('#screen-play .act:not([inert]):not([disabled])');
+    if (act) {
+      await act.click(); await page.waitForTimeout(420);
+      const close = await page.$('.modal-bg.open button[data-close]');
+      if (close) { await close.click().catch(() => {}); await page.waitForTimeout(160); }
+      continue;
+    }
+
+    const advance = await page.$('#btn-advance:not([inert])');
+    if (advance && await advance.isVisible()) {
+      await advance.click(); await page.waitForTimeout(350);
+      if (await page.$('#modal-assessment.open')) {
+        if (screen) await screen('07-assessment');
+        const boxes = await page.$$('#assess-list input[type=checkbox]');
+        if (boxes.length) await boxes[0].check();
+        await page.click('#btn-assess-confirm').catch(() => {});
+        await page.waitForTimeout(450);
+        if (screen) await screen('08-response');
+      }
+      continue;
+    }
+
+    const finish = await page.$('#btn-finish:not([inert])');
+    if (finish) {
+      await finish.click(); await page.waitForTimeout(300);
+      await page.click('#btn-finish-confirm').catch(() => {});
+      await page.waitForTimeout(1200);
+      continue;
+    }
+    break;
+  }
+  return !!(await page.$('#screen-debrief.active'));
+}
+
 const log = [];
 for (let i = 0; i < 40; i++) {
   // 視点の戻り先は押した瞬間に決まるので、高さを変えるのは押す前
@@ -655,7 +714,11 @@ for (let i = 0; i < 40; i++) {
     await page.setViewportSize({ width: 1440, height: HEIGHTS[i] });
     await page.waitForTimeout(150);
   }
-  const b = await page.$('#actions-list button.act:not([disabled])');
+  // **練習の盤面は案内どおりにしか動かせない**（SPEC 7.6.29）。
+  // 通らない手は `inert` なので、自由に押す像はここで詰まる。
+  // 案内が待っているものを押す — 遊び方が違うのだから、測り方も変える
+  const b = await nextTutorialMove(page)
+    || await page.$('#actions-list button.act:not([disabled]):not([inert])');
   if (!b) break;
   const label = (await b.textContent()).trim().split('\n')[0];
   await b.click();
@@ -691,29 +754,37 @@ if (JSON.stringify(legendInPlay.phases) !== JSON.stringify(playNow.phases)) {
 await page.click('[data-close="modal-legend"]');
 await page.waitForTimeout(120);
 
-await page.click('#btn-advance').catch(() => {});
-await page.waitForTimeout(350);
-await screen('07-assessment');
-const boxes = await page.$$('#assess-list input[type=checkbox]');
-if (boxes.length) await boxes[0].check();
-await page.click('#btn-assess-confirm').catch(() => {});
-await page.waitForTimeout(400);
-await screen('08-response');
+const guided = !!(await page.$('#tutor-panel:not([hidden])'));
+if (guided) {
+  // 案内どおりに終わりまで歩く。**通る手は1つしか無い**
+  if (!(await walkTutorial(page, screen))) {
+    note('error', 'tutorial', '案内どおりに歩いても講評へ辿り着かない');
+  }
+} else {
+  await page.click('#btn-advance').catch(() => {});
+  await page.waitForTimeout(350);
+  await screen('07-assessment');
+  const boxes = await page.$$('#assess-list input[type=checkbox]');
+  if (boxes.length) await boxes[0].check();
+  await page.click('#btn-assess-confirm').catch(() => {});
+  await page.waitForTimeout(400);
+  await screen('08-response');
 
-for (let i = 0; i < 10; i++) {
-  const b = await page.$('#actions-list button.act:not([disabled])');
-  if (!b) break;
-  await b.click(); await page.waitForTimeout(140);
+  for (let i = 0; i < 10; i++) {
+    const b = await page.$('#actions-list button.act:not([disabled]):not([inert])');
+    if (!b) break;
+    await b.click(); await page.waitForTimeout(140);
+  }
+  // 止めた・取り除いたが盤に出ている状態。**ここでしか撮れない** —
+  // 講評へ進むと盤は消え、答え合わせの側の表示に変わる（SPEC 7.6.16）
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(150);
+  await screen('08b-contained');
+  await page.click('#btn-finish').catch(() => {});
+  await page.waitForTimeout(300);
+  await page.click('#btn-finish-confirm').catch(() => {});
+  await page.waitForTimeout(1200);
 }
-// 止めた・取り除いたが盤に出ている状態。**ここでしか撮れない** —
-// 講評へ進むと盤は消え、答え合わせの側の表示に変わる（SPEC 7.6.16）
-await page.evaluate(() => window.scrollTo(0, 0));
-await page.waitForTimeout(150);
-await screen('08b-contained');
-await page.click('#btn-finish').catch(() => {});
-await page.waitForTimeout(300);
-await page.click('#btn-finish-confirm').catch(() => {});
-await page.waitForTimeout(1200);
 
 if (!(await page.$('#screen-debrief.active'))) {
   note('error', 'debrief', '講評画面が出ない');

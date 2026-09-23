@@ -178,3 +178,88 @@ def test_the_guidance_does_not_copy_the_move_labels():
     fn = web[web.index("function renderTutorial"):]
     fn = fn[: fn.index("\n/* ── 事件の時計")]
     assert "available_actions" in fn, "手の名前を盤面から引いていない"
+
+
+# ── 案内どおりにしか動かせない（SPEC 7.6.29） ──────────
+
+
+def _app_js() -> str:
+    from pathlib import Path
+
+    return (Path(__file__).resolve().parent.parent / "web" / "app.js").read_text("utf-8")
+
+
+def test_only_the_move_the_guidance_names_can_be_pressed():
+    """**ルートをあらかじめ制限する**（SPEC 7.6.29）。
+
+    利用者の言葉：「説明文をタッチするときは説明文以外を触れないように
+    （途中でやめるは触れてOK）、この操作しての時はその操作のみできるように。
+    ルートをあらかじめ制限することが大事かも」。
+
+    はじめての人は、案内を読む前に手が動く。押せてしまう手があると、
+    案内と盤面がずれた状態から始まり、**案内が嘘に見える。**
+    """
+    body = _app_js()
+    fn = body[body.index("function applyTutorialLock") :]
+    fn = fn[: fn.index("\n/* ── 事件の時計")] if "\n/* ── 事件の時計" in fn else fn
+    # 止め方は inert。disabled はボタンにしか効かず、畳みの見出しには効かない
+    assert "setAttribute('inert'" in fn, "inert で止めていない"
+    # 読むだけの段は、案内の「次へ」だけを通す
+    assert "#tutor-panel button" in fn, "読むだけの段で次へを通していない"
+    # 手を名指しする段は、その手だけ
+    assert "data-action=" in fn, "名指しされた手を通していない"
+
+
+def test_the_way_out_is_never_blocked():
+    """**「演習をやめる」だけは常に通す**（SPEC 7.6.29）。
+
+    出口を塞ぐのは制限ではなく監禁である。
+    あわせて、**盤面を1つも動かさない参照**（画面の見方・方針を再表示・
+    いまの被疑判定）も通す。ここを塞ぐと、迷った人に逃げ場が無くなる。
+    """
+    body = _app_js()
+    fn = body[body.index("var allow = [") :]
+    fn = fn[: fn.index("];")]
+    for must in ("#btn-abort", "#btn-show-legend", "#btn-show-policy"):
+        assert must in fn, f"{must} が常に通る側に入っていない"
+    # 盤面を動かすものは、ここに入っていないこと
+    for must_not in ("#btn-finish", "#btn-advance"):
+        assert must_not not in fn, f"{must_not} が無条件に通っている"
+
+
+def test_a_normal_board_is_not_locked():
+    """ふつうの演習では何も止めない（SPEC 7.6.29）。
+
+    止めるのは案内があるときだけ。案内の無い盤面で手が減ったら、
+    それは演習ではなくなる。
+    """
+    body = _app_js()
+    fn = body[body.index("function applyTutorialLock") :]
+    fn = fn[: fn.index("\n}") + 2]
+    assert "if (!live) { return; }" in fn, "案内が無いときに素通りしていない"
+    assert "removeAttribute('inert')" in fn, "前の段の止めを解いていない"
+
+
+def test_the_action_buttons_carry_their_id():
+    """案内が手を名指しできること。
+
+    `data-action` が無いと、案内は「右の◯◯を押して」としか言えず、
+    **どれを通すかを画面が決められない。**
+    """
+    body = _app_js()
+    fn = body[body.index("function actionCard") :]
+    fn = fn[: fn.index("\n}") + 2]
+    assert "data-action" in fn, "手に id を持たせていない"
+
+
+def test_the_playtest_walks_the_guided_route():
+    """遊んで確かめる側も、案内どおりに歩くこと。
+
+    **遊び方が違うのだから、測り方も変える。** ふつうの盤面は自由に押す像で
+    測るが、練習は通る手が1つしか無い。自由に押す像はそこで詰まる。
+    """
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent / "tools" / "playtest.mjs").read_text("utf-8")
+    assert "walkTutorial" in src, "案内どおりに歩く道筋が無い"
+    assert "案内どおりに歩いても講評へ辿り着かない" in src, "途中で止まっても黙っている"

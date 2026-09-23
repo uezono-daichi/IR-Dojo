@@ -1392,6 +1392,66 @@ function renderTutorial() {
     var target = document.querySelector(step.points_at);
     if (target) { target.classList.add('tutor-point'); }
   }
+  applyTutorialLock();
+}
+
+/* **案内が指している操作だけを通す**（SPEC 7.6.29）。
+
+   利用者の言葉：「説明文をタッチするときは説明文以外を触れないように
+   （途中でやめるは触れてOK）、この操作しての時はその操作のみできるように。
+   **ルートをあらかじめ制限することが大事かも**」。
+
+   はじめての人は、案内を読む前に手が動く。押せてしまう手があると、
+   案内と盤面がずれた状態から始まり、**案内が嘘に見える。**
+
+   止め方は `inert`。`disabled` はボタンにしか効かず、畳みの見出しには
+   効かない。`pointer-events: none` はキーボードを素通りさせる。
+   `inert` は**押せない・触れない・辿り着けない**の3つを一度に閉じる。
+
+   **「演習をやめる」だけは常に通す。** 出口を塞ぐのは制限ではなく監禁である。 */
+function applyTutorialLock() {
+  var play = $('screen-play');
+  if (!play) { return; }
+  var step = currentStep();
+  var live = !!(S.tutorial && S.tutorial.length && step);
+
+  var all = play.querySelectorAll('button, [role="button"], summary, input, a[href]');
+  for (var i = 0; i < all.length; i++) {
+    all[i].removeAttribute('inert');
+    all[i].classList.remove('tutor-off');
+  }
+  play.classList.toggle('tutor-guided', live);
+  if (!live) { return; }
+
+  /* **常に通すもの。** どれも盤面を1つも動かさない。
+     制限するのは「ルート」であって、**読み返す手段ではない。**
+     ここを塞ぐと、迷った人に逃げ場が無くなる — それは制限ではなく監禁である。 */
+  var allow = [
+    '#btn-abort',          // 途中でやめる（利用者が名指しした例外）
+    '#btn-show-legend',    // 画面の見方
+    '#btn-show-policy',    // 方針を再表示
+    '#btn-show-assessment',// いまの被疑判定
+    '#btn-what-play',      // 帰結の「?」
+  ];
+  if (step.expect_action) {
+    allow.push('[data-action="' + step.expect_action + '"]');
+  } else if (step.expect_kind === 'finish') {
+    allow.push('#btn-finish');
+  } else if (step.expect_kind) {
+    // 被疑判定の宣言も、押すのは「対応フェーズに移る」である
+    allow.push('#btn-advance');
+  } else {
+    // 読むだけの段。通すのは案内の「次へ」だけ
+    allow.push('#tutor-panel button');
+  }
+
+  for (var k = 0; k < all.length; k++) {
+    var node = all[k], ok = false;
+    for (var s = 0; s < allow.length; s++) {
+      if (node.matches(allow[s])) { ok = true; break; }
+    }
+    if (!ok) { node.setAttribute('inert', ''); node.classList.add('tutor-off'); }
+  }
 }
 
 /* ── 事件の時計（SPEC 7.6.17） ──
@@ -2032,6 +2092,8 @@ function renderQuestions(v) {
 /* アクションの見た目。凡例の見本と本物で同じものを使う */
 function actionCard(a) {
   var btn = el('button', 'act' + (a.type === 'contain' ? ' contain' : ''));
+  // 案内がこの手を名指しできるように、id を持たせる（SPEC 7.6.29）
+  btn.setAttribute('data-action', a.id);
   var head = el('span', 'act-head');
   head.appendChild(el('span', 'act-label', a.label));
   head.appendChild(el('span', 'cost', a.cost_minutes + '分'));

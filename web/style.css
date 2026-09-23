@@ -1348,3 +1348,19 @@ table.log td, table.log th { padding: 5px 12px 5px 0; }
 }
 .pick-options fieldset { margin-bottom: 10px; }
 .pick-options legend { padding-bottom: 5px; }
+
+
+/* ── 案内どおりにしか動かせない状態（SPEC 7.6.29） ──
+   通らない操作は薄くする。**消さない** — どこに何があるかは見えていて、
+   いまは押せない、が伝わる形にする。消すと画面が段ごとに作り変わって見える。 */
+.tutor-off { opacity: .32; }
+.tutor-guided .act.tutor-off { border-style: dashed; }
+/* 通る操作は、案内の枠と同じ色で縁取る */
+.tutor-guided .act:not(.tutor-off):not([disabled]) {
+  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.tutor-guided #btn-advance:not(.tutor-off),
+.tutor-guided #btn-finish:not(.tutor-off) {
+  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+}
