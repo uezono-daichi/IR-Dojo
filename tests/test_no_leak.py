@@ -1196,7 +1196,11 @@ def test_the_two_places_that_decide_nothing_happened_agree():
     statement = body[i:body.index(";", i)]
 
     screen_items = ("revealed", "stopped", "purged", "halted", "already",
-                    "prevented", "notice", "preserve")
+                    "prevented", "notice", "preserve",
+                    # 戻した回も空振りではない（SPEC 5.11）。
+                    # 業務が戻っているのに「何も出てこなかった」と返ると、
+                    # **押した結果が見えないまま盤面だけが変わる**
+                    "restored")
     for name in screen_items:
         assert name in statement, f"画面側の空振り判定が {name} を数えていない"
     # 一覧に無いものが増えていないか。`!` の数＝否定した項目の数で見る
@@ -1209,7 +1213,7 @@ def test_the_two_places_that_decide_nothing_happened_agree():
     j = engine_py.index("    def empty(self)")
     prop = engine_py[j:engine_py.index("\n\n", j)]
     engine_items = ("revealed", "contained", "eradicated", "halted",
-                    "already", "prevented")
+                    "already", "prevented", "restored")
     for name in engine_items:
         assert f"self.{name}" in prop, f"エンジン側の空振り判定が {name} を数えていない"
     # 連絡と仕掛けは、どちらの側でも空振りにならない。片方だけ直すと、

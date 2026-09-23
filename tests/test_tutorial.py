@@ -19,6 +19,16 @@ from irdojo.loader import list_scenarios, load_scenario
 from irdojo.schema import CONCLUSION_WORDS
 
 
+@pytest.fixture
+def client():
+    """記録の行き先は `conftest.isolated_home` が一時ディレクトリへ逃がす。"""
+    from fastapi.testclient import TestClient
+
+    from irdojo.api import app
+
+    return TestClient(app)
+
+
 def tutorials():
     return [sc for sc in list_scenarios() if sc.meta.tutorial]
 
@@ -282,3 +292,107 @@ def test_the_textbook_tutorial_makes_you_stop_and_then_remove():
     stop_at = min(order.index(a.id) for a in stops if a.id in order)
     rm_at = min(order.index(a.id) for a in removes if a.id in order)
     assert stop_at < rm_at, "取り除くほうが先に来ている"
+
+
+# ── 戻すところまで遊ぶ（SPEC 5.11） ──────────────────
+
+
+def test_the_textbook_tutorial_goes_all_the_way_to_recovery():
+    """**止めて終わりではない**（SPEC 5.11）。
+
+    利用者の求め：「復旧と再発防止を遊べる盤面が無い。それも遊べるようになろう」。
+
+    調査 → 封じ込め・対応 → **復旧** の3段にし、
+    案内は戻すところまで連れて行く。
+    """
+    sc = load_scenario("tutorial-02-first-response")
+    assert [p.id for p in sc.phases] == ["investigation", "response", "recovery"]
+    restores = [a for a in sc.actions if a.restores]
+    assert restores, "戻す手が無い"
+    named = [s.expect_action for s in sc.tutorial if s.expect_action]
+    assert any(a.id in named for a in restores), "戻す手を押させていない"
+
+
+def test_restoring_before_removing_brings_the_attacker_back(client):
+    """**取り除かずに戻すと、攻撃者も一緒に戻ってくる**（SPEC 5.11）。
+
+    `containment_factor` の説明に「隔離しても、端末を戻せば攻撃者も
+    戻ってくる」と書いてありながら、**盤面で一度も問われていなかった**。
+    ここで初めて、押して確かめられる。
+    """
+    def play(remove_first: bool) -> dict:
+        s = client.post("/api/session", json={
+            "scenario_id": "tutorial-02-first-response",
+            "policy_id": "business_continuity",
+            "assist_level": "assisted",
+        }).json()
+        sid = s["session_id"]
+
+        def go(body):
+            return client.post(f"/api/session/{sid}/decide", json=body).json()
+
+        for a in s["view"]["available_actions"][:3]:
+            go({"kind": "action", "action_id": a["id"]})
+        go({"kind": "advance_phase"})
+        go({"kind": "declare_assessment", "assessment": ["acct-yamada"]})
+        go({"kind": "action", "action_id": "act_reset_account"})
+        if remove_first:
+            go({"kind": "action", "action_id": "act_remove_forward"})
+        go({"kind": "advance_phase"})
+        go({"kind": "action", "action_id": "act_restore_account"})
+        go({"kind": "finish"})
+        return client.get(f"/api/session/{sid}/report").json()
+
+    dirty = play(False)
+    clean = play(True)
+
+    assert dirty["restore"]["verdict"] == "recompromised"
+    assert dirty["restore"]["recompromised"] == ["acct-yamada"]
+    assert clean["restore"]["verdict"] == "clean"
+    assert not clean["restore"]["recompromised"]
+
+    # **新しい評価軸は足していない。** 差は既存の帰結に出る
+    d_cons = dirty["score"]["consequences"]
+    c_cons = clean["score"]["consequences"]
+    assert d_cons["total_damage"] > c_cons["total_damage"], "被害に差が出ていない"
+    assert c_cons["containment_completeness"] > d_cons["containment_completeness"]
+
+
+def test_the_screen_does_not_say_the_attacker_came_back(client):
+    """**プレイ中は「戻した」としか言わない**（原則5 / SPEC 5.11）。
+
+    戻した先で攻撃が再開したことは学習者に見えていない。
+    その場で告げれば損失の予告になり、
+    **取り除かずに戻す判断が一度も起きなくなる。**
+    """
+    import json as _json
+
+    s = client.post("/api/session", json={
+        "scenario_id": "tutorial-02-first-response",
+        "policy_id": "business_continuity",
+        "assist_level": "assisted",
+    }).json()
+    sid = s["session_id"]
+
+    def go(body):
+        return client.post(f"/api/session/{sid}/decide", json=body).json()
+
+    for a in s["view"]["available_actions"][:3]:
+        go({"kind": "action", "action_id": a["id"]})
+    go({"kind": "advance_phase"})
+    go({"kind": "declare_assessment", "assessment": ["acct-yamada"]})
+    go({"kind": "action", "action_id": "act_reset_account"})
+    go({"kind": "advance_phase"})
+    out = go({"kind": "action", "action_id": "act_restore_account"})
+
+    assert out["restored"], "戻したことは言う"
+
+    # **見るのは「いま何が起きたか」を返す欄だけ。**
+    # `view` には手の一覧が丸ごと入っており、`共有ストレージを再開する` の
+    # ような**手の名前**まで拾うと、語の検査は当てにならなくなる
+    happened = {k: v for k, v in out.items() if k != "view"}
+    blob = _json.dumps(happened, ensure_ascii=False)
+    for banned in ("recompromis", "戻ってき", "再侵害"):
+        assert banned not in blob, f"プレイ中に「{banned}」を告げている"
+    # 構造としても、再侵害を返す欄が無いこと
+    assert "recompromised" not in out, "再侵害の欄がプレイ中の応答にある"

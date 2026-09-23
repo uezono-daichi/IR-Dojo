@@ -54,6 +54,7 @@ class ActionType(str, Enum):
     # 現場に指示を出して、世界の側のふるまいを変える。
     # 報告（適時性で測る類い）は依然として範囲外（SPEC 9.3）
     COMMUNICATE = "communicate"
+    RESTORE = "restore"
 
 
 class AssistLevel(str, Enum):
@@ -365,6 +366,11 @@ class Action(Strict):
     # `targets` の部分集合でなければならない — 手を触れていない資産から
     # 永続化だけが消えることはない。ローダが拒否する
     eradicates: list[str] = []
+    # **戻す**（SPEC 5.11）。止めてあった資産を業務に返す。
+    # 業務影響はそこで止まるが、**取り除けていなければ攻撃者も戻ってくる。**
+    # 「隔離しても、端末を戻せば攻撃者も戻ってくる」は `containment_factor` の
+    # 説明に書いてありながら、**盤面で一度も問われていなかった**（9.4 #5 の続き）
+    restores: list[str] = []
     yields: list[str] = []
     destroys: list[str] = []
     # **時計にだけ効く保全**（SPEC 5.6.3）。この手を打ち終わった時刻から先、
@@ -382,6 +388,12 @@ class Action(Strict):
 
     @model_validator(mode="after")
     def contain_requires_targets(self) -> "Action":
+        if self.type == ActionType.RESTORE and not self.restores:
+            raise ValueError(f"{self.id}: 戻す手に restores がありません")
+        if self.restores and self.type != ActionType.RESTORE:
+            raise ValueError(
+                f"{self.id}: restores は type: restore の手にだけ書けます"
+            )
         if self.type == ActionType.CONTAIN and not self.targets:
             raise ValueError(f"{self.id}: contain アクションには targets が必要")
         # 封じ込めは手がかりで縛らない。証拠なしに止めることは「できる」べきで、
@@ -1092,9 +1104,46 @@ def _validate_scenario(sc: "Scenario") -> None:
     _reject_occurrences_not_in_the_log(sc)
     _reject_occurrence_times_that_mark_the_trap(sc)
     _reject_broken_tutorial(sc)
+    _reject_broken_restore(sc)
 
     # 被害モデルの params
     _validate_damage_params(sc.damage)
+
+
+def _reject_broken_restore(sc: "Scenario") -> None:
+    """戻す手の検査（SPEC 5.11）。
+
+    **戻せるのは、止められる資産だけである。** どの手でも止まらない資産を
+    戻す手は、押しても何も起きない — 盤面を変えない手はノイズである（5.10）。
+
+    **無実の資産にも戻す手を置く。** 侵害資産にしか戻す手が無いと、
+    手が並んだ時点で「危ないのはこれだ」を配ることになる
+    （`_reject_eradication_that_maps_persistence` と同じ形の漏洩）。
+    """
+    restores = {a.id: set(a.restores) for a in sc.actions if a.restores}
+    if not restores:
+        return
+
+    known = {a.id for a in sc.world.assets}
+    stoppable = {t for a in sc.actions if a.side_effects.business_impact for t in a.targets}
+    for aid, targets in restores.items():
+        missing = sorted(targets - known)
+        if missing:
+            raise ValueError(f"{aid}: 戻す先が盤面に無い: {missing}")
+        idle = sorted(targets - stoppable)
+        if idle:
+            raise ValueError(
+                f"{aid}: どの手でも止まらない資産を戻そうとしています: {idle}。"
+                "押しても何も起きない手は盤面を変えません"
+            )
+
+    reach = set().union(*restores.values())
+    secret = set(sc.world.ground_truth.compromised) | {sc.world.ground_truth.patient_zero}
+    if not reach - secret:
+        raise ValueError(
+            f"戻す手の当たり先が侵害資産にしか届きません: {sorted(reach)}。"
+            "無実の資産にも戻す手を置いて、囮を作ってください"
+        )
 
 
 def _reject_broken_tutorial(sc: "Scenario") -> None:
@@ -1271,7 +1320,8 @@ def _reject_assets_no_action_can_touch(sc: "Scenario") -> None:
     """
     touchable: set[str] = set()
     for a in sc.actions:
-        touchable |= set(a.targets) | set(a.investigates) | set(a.eradicates)
+        touchable |= (set(a.targets) | set(a.investigates)
+                      | set(a.eradicates) | set(a.restores))
     orphans = sorted(a.id for a in sc.world.assets if a.id not in touchable)
     if orphans:
         raise ValueError(
@@ -1537,7 +1587,7 @@ def _reject_actions_that_name_other_assets(sc: "Scenario") -> None:
     by_id = sc.asset_by_id
 
     for act in sc.actions:
-        own = set(act.targets) | set(act.investigates)
+        own = set(act.targets) | set(act.investigates) | set(act.restores)
         forbidden = sorted(secret - own)
         for field in ("label", "description", "group", "command"):
             text = getattr(act, field) or ""

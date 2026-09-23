@@ -728,6 +728,11 @@ async function walkTutorial(page, screen) {
     const advance = await page.$('#btn-advance:not([inert])');
     if (advance && await advance.isVisible()) {
       await advance.click(); await page.waitForTimeout(350);
+      // 被疑判定を要求しないフェーズ移行は、確認の窓が出る（対応 → 復旧など）
+      if (await page.$('#modal-advance.open')) {
+        await page.click('#btn-advance-confirm').catch(() => {});
+        await page.waitForTimeout(450);
+      }
       if (await page.$('#modal-assessment.open')) {
         if (screen) await screen('07-assessment');
         const boxes = await page.$$('#assess-list input[type=checkbox]');

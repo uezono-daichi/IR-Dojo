@@ -312,6 +312,7 @@ def decide(sid: str, body: Decision) -> dict[str, Any]:
             "contained": [],
             "eradicated": [],
             "halted": [],
+            "restored": [],
             "already": [],
             "halts_business": False,
             "preserved": False,
@@ -376,6 +377,13 @@ def decide(sid: str, body: Decision) -> dict[str, Any]:
                 "cascaded": a in outcome.cascaded,
             }
             for a in outcome.halted
+            if a in engine.scenario.asset_by_id
+        ],
+        # 業務に戻した資産（SPEC 5.11）。**戻したことだけを返す。**
+        # 戻した先で攻撃が再開したかどうかは、ここでは返さない — 講評で初めて出る
+        "restored": [
+            {"id": a, "label": engine.scenario.asset_by_id[a].label}
+            for a in outcome.restored
             if a in engine.scenario.asset_by_id
         ],
         # 押す前から止まっていた targets。空振りではないので別に返す

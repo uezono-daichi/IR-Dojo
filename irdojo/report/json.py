@@ -85,6 +85,29 @@ class SpreadReview(BaseModel):
     steps: list[SpreadStep]
 
 
+class RestoreReview(BaseModel):
+    """戻した結果の答え合わせ（SPEC 5.11 / 7.6.32）。
+
+    **プレイ中は「戻した」としか言わない。** 戻した先で攻撃が再開したことは
+    学習者には見えていないので、そこで告げれば損失の予告になる（原則5）。
+    ここが唯一の開示の場である。
+
+    戻す手を一度も押さなかった回にも出す — **戻さなかったことも判断である。**
+    業務を止めたまま終えた資産があれば、それは業務影響として積み上がっている。
+    """
+
+    restored: list[str]                # 業務に戻した資産
+    restored_labels: list[str]
+    # **取り除かずに戻したために、攻撃が再開した資産。**
+    # ここが空でないなら、業務は戻ったが盤面は戻っていない
+    recompromised: list[str]
+    recompromised_labels: list[str]
+    # 止めたまま終えた資産。業務影響が最後まで積み上がっている
+    still_halted: list[str]
+    still_halted_labels: list[str]
+    verdict: str                       # clean | recompromised | none
+
+
 class ContainmentReview(BaseModel):
     """封じ込めの答え合わせ（SPEC 5.8 / 7.6.13）。
 
@@ -314,6 +337,8 @@ class Report(BaseModel):
     truth: TruthReveal | None
     # 封じ込めの答え合わせ。reveal_ground_truth が false なら出さない
     containment: ContainmentReview | None
+    # 戻した結果。戻す手を持つ盤面でだけ出す（SPEC 5.11）
+    restore: RestoreReview | None
     # 真実が動いた盤面でだけ出す。動かない盤面では None（SPEC 5.2）
     spread: SpreadReview | None
     key_lessons: list[str]
@@ -587,6 +612,7 @@ def build(
         retrospective=retro,
         truth=truth,
         containment=_containment_review(state, scenario) if truth else None,
+        restore=_restore_review(state, scenario),
         spread=_spread_review(state, scenario) if truth else None,
         key_lessons=list(scenario.debrief.key_lessons),
         replay_suggestions=[
@@ -652,6 +678,40 @@ def _spread_review(state: GameState, scenario: Scenario) -> SpreadReview | None:
         finish_labels=[_label(assets, a) for a in at_finish],
         decided_at_minute=snap.at_minute if snap else 0,
         steps=steps,
+    )
+
+
+def _restore_review(state: GameState, scenario: Scenario) -> RestoreReview | None:
+    """戻した結果の答え合わせ（SPEC 5.11）。
+
+    **戻す手が無い盤面では出さない。** 出すと「戻す手があったのに気づかなかった」
+    と読まれるが、そもそも無い。
+    """
+    if not any(a.restores for a in scenario.actions):
+        return None
+
+    assets = scenario.asset_by_id
+    restored = sorted(state.restored_at)
+    recompromised = sorted(state.recompromised_at)
+    still = sorted(a for a in state.halted_at if a not in state.restored_at)
+
+    def labels(ids: list[str]) -> list[str]:
+        return [_label(assets, a) for a in ids]
+
+    verdict = "none"
+    if recompromised:
+        verdict = "recompromised"
+    elif restored:
+        verdict = "clean"
+
+    return RestoreReview(
+        restored=restored,
+        restored_labels=labels(restored),
+        recompromised=recompromised,
+        recompromised_labels=labels(recompromised),
+        still_halted=still,
+        still_halted_labels=labels(still),
+        verdict=verdict,
     )
 
 

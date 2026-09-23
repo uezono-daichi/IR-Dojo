@@ -526,14 +526,60 @@ actions:
     side_effects:
       business_impact: true
 
+  - id: act_restore_account
+    label: 山田のアカウントを業務に戻す
+    type: restore
+    phase: recovery
+    cost_minutes: 15
+    group: 業務に戻す
+    restores: [acct-yamada]
+    command: |
+      $ idq enable --user yamada@example.co.jp --require-reset
+        enabled   password reset scheduled   (00:00:26)
+    description: |
+      資格情報を再設定し、業務アカウントを使える状態に戻す。
+      本人は再びメールを送受信できるようになる。
+
+  - id: act_restore_pc
+    label: pc-02 をネットワークに戻す
+    type: restore
+    phase: recovery
+    cost_minutes: 10
+    group: 業務に戻す
+    restores: [pc-02]
+    command: |
+      $ netctl release --host pc-02
+        released   (00:00:14)
+    description: |
+      端末の通信の遮断を解く。利用者は再び業務に使える。
+
+  - id: act_restore_share
+    label: 共有ストレージを再開する
+    type: restore
+    phase: recovery
+    cost_minutes: 20
+    group: 業務に戻す
+    restores: [share-01]
+    command: |
+      $ svcctl start --site share-01 --wait
+        started   (00:01:40)
+    description: |
+      置き場を再開する。全部門が共有領域を再び使えるようになる。
+
 phases:
   - id: investigation
     label: 調査
     advance_label: 対応フェーズに移る
   - id: response
     label: 封じ込め・対応
-    advance_label: null
+    advance_label: 復旧フェーズに移る
     requires_assessment: true
+  # **戻すところまで遊ぶ**（SPEC 5.11）。
+  # 止めたままでは業務が止まり続ける。だが取り除く前に戻すと、
+  # 攻撃者も一緒に戻ってくる — その判断をここで問う
+  - id: recovery
+    label: 復旧
+    advance_label: null
 
 damage:
   model: exponential
@@ -785,7 +831,34 @@ tutorial:
       右の `取り除く` から、**追加された規則を削除してください。**
       止める手と、取り除く手は**別の手**です。
 
-  - id: s14_finish
+  - id: s14_recovery
+    expect_kind: advance_phase
+    body: |
+      ここで終わりではありません。**業務が止まったままです。**
+
+      止めたアカウントも端末も、止めている間は誰も使えません。
+      画面の左上の**業務影響**が、いまも積み上がり続けています。
+
+      下の **復旧フェーズに移る** を押してください。
+
+  - id: s15_restore
+    expect_action: act_restore_account
+    caveat: |
+      戻す順番は1つではありません。業務への影響が大きいものから戻す、
+      という考え方もあります。**どれを先に戻すかは、何を守るかで変わります。**
+    body: |
+      **戻す**というのは、止めたものを業務に返すことです。
+
+      ここで1つ、覚えて帰ってほしいことがあります。
+
+      **戻す前に、取り除けているかを確かめてください。**
+      取り除けていないまま戻すと、**攻撃者も一緒に戻ってきます。**
+      業務は戻りますが、盤面は戻っていません。
+
+      さきほど規則を削除したので、このアカウントは戻して大丈夫です。
+      **山田のアカウントを業務に戻して**ください。
+
+  - id: s16_finish
     expect_kind: finish
     body: |
       お疲れさまでした。
@@ -799,4 +872,4 @@ tutorial:
       どの手がかりが偽物だったか、何を見落としたかが、全部そこに出ます。
 
       終わったら、**同じ演習を別の方針でもう一度**やってみてください。
-      ここがこの道具の中心です。
+      ここがこの演習の中心です。

@@ -1334,6 +1334,7 @@ function decide(payload) {
       S.lastOutcome.contained = res.contained || [];
       S.lastOutcome.eradicated = res.eradicated || [];
       S.lastOutcome.halted = res.halted || [];
+      S.lastOutcome.restored = res.restored || [];
       S.lastOutcome.already = res.already || [];
       S.lastOutcome.haltsBusiness = !!res.halts_business;
       S.lastOutcome.impact = res.business_impact_delta || 0;
@@ -2039,6 +2040,7 @@ function renderResult(v) {
   var purged = o.eradicated || [];
   var halted = o.halted || [];
   var already = o.already || [];
+  var restored = o.restored || [];
   // 連絡は証拠を産まないが、空振りではない。世界のふるまいが変わっている。
   // 既に止めてある資産をもう一度止めた回も空振りではない（同じ資産に
   // 手が2つあるので普通に起きる）。元の状態に戻した回も同じで、
@@ -2058,10 +2060,11 @@ function renderResult(v) {
   // 緑の枠の中にオレンジの「何も出てこなかった」が並ぶ）
   var preserve = !!o.preserved;
   var empty = !notice && !preserve && !o.revealed && !stopped && !purged.length
-              && !halted.length && !already.length && !o.prevented;
+              && !halted.length && !already.length && !o.prevented
+              && !restored.length;
   var note = el('div', 'outcome'
     + (notice || preserve || stopped || purged.length || halted.length
-       || already.length || o.prevented
+       || already.length || o.prevented || restored.length
         ? ' outcome-contained'
                               : (empty ? ' outcome-empty' : '')));
 
@@ -2123,6 +2126,18 @@ function renderResult(v) {
       arow.appendChild(el('span', 'chip', a.id + '　' + a.label));
     });
     note.appendChild(arow);
+  }
+  /* 戻したこと（SPEC 5.11）。**言うのは「戻した」だけ。**
+     戻した先で攻撃が再開したかどうかは、ここでは言わない —
+     見えていないものを告げれば損失の予告になる（原則5）。講評で初めて出る。 */
+  if (restored.length) {
+    note.appendChild(el('div', 'outcome-msg sub',
+      '業務に戻したのは ' + restored.length + ' 件。'));
+    var rrow = el('div', 'outcome-cascade');
+    restored.forEach(function (a) {
+      rrow.appendChild(el('span', 'chip', a.id + '\u3000' + a.label));
+    });
+    note.appendChild(rrow);
   }
   // 業務が止まったことは、止めたことと別に告げる。
   // 同じ「止める」でも、通信だけを断つ手は仕事を止めない（SPEC 6.3）
@@ -2331,7 +2346,7 @@ function renderActions(v) {
             label: a.label, cost: a.cost_minutes, type: a.type,
             command: '', running: true,
             revealed: 0, unlocked: 0, contained: [], eradicated: [],
-            halted: [], already: [],
+            halted: [], restored: [], already: [],
             haltsBusiness: false, impact: 0, prevented: 0, preserved: false
           };
           // 走らせている間もその場で見せる。押した瞬間に何か起きる
@@ -2854,6 +2869,10 @@ function blockTruth(rep) {
   var cr = blockContainment(rep);
   if (cr) { b.appendChild(cr); }
 
+  // 戻した結果は、止めた結果の**あと**に出す。順番が仕事の順番である
+  var rr = blockRestore(rep);
+  if (rr) { b.appendChild(rr); }
+
   var mp = rep.retrospective.minimal_path;
   if (mp && mp.minutes !== null) {
     b.appendChild(el('p', null,
@@ -2927,6 +2946,50 @@ function blockSpread(rep) {
 // 図の破線がどの傾きで伸びているかを決めているのは、止めたかどうかと
 // **取り除いたかどうか**の両方である。完全度 100% でも傾きが緩まないことが
 // あり、それを言葉にしないと「正しく止めたのに、なぜまだ伸びるのか」で終わる。
+/* 戻した結果の答え合わせ（SPEC 5.11 / 7.6.32）。
+
+   **ここが唯一の開示の場である。** プレイ中は「戻した」としか言わない —
+   戻した先で攻撃が再開したことは学習者に見えていないので、
+   その場で告げれば損失の予告になる（原則5）。
+
+   **戻さなかった回にも出す。** 戻さなかったことも判断であり、
+   止めたまま終えた資産があれば、業務影響は最後まで積み上がっている。 */
+function blockRestore(rep) {
+  var r = rep.restore;
+  if (!r) { return null; }
+
+  var box = el('div', r.verdict === 'recompromised' ? 'note-warn' : 'note');
+  box.appendChild(el('h3', null, '業務に戻したもの'));
+
+  var g = el('div', 'summary-grid');
+  g.appendChild(el('div', 'k', '戻した'));
+  g.appendChild(el('div', 'v', r.restored_labels.join('、') || '（なし）'));
+  if (r.still_halted_labels.length) {
+    g.appendChild(el('div', 'k', '止めたまま終えた'));
+    g.appendChild(el('div', 'v', r.still_halted_labels.join('、')));
+  }
+  box.appendChild(g);
+
+  if (r.recompromised_labels.length) {
+    box.appendChild(el('p', null,
+      r.recompromised_labels.join('、') +
+      ' は、取り除かないまま業務に戻しました。' +
+      '戻した時点で攻撃が再開しています — 業務は戻りましたが、盤面は戻っていません。'));
+    box.appendChild(el('p', null,
+      '画面には「戻した」としか出ていません。' +
+      '見えていないことは、ここで初めて分かるようにしてあります。'));
+  } else if (r.restored.length) {
+    box.appendChild(el('p', null,
+      '取り除いてから戻しているので、戻した先で攻撃は再開していません。'));
+  }
+  if (r.still_halted_labels.length) {
+    box.appendChild(el('p', null,
+      '止めたまま終えた資産は、業務影響が最後まで積み上がっています。' +
+      '戻さないことも1つの判断で、何を守るかによって当否が変わります。'));
+  }
+  return box;
+}
+
 function blockContainment(rep) {
   var c = rep.containment;
   if (!c) { return null; }

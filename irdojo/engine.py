@@ -96,6 +96,12 @@ class GameState(BaseModel):
     # true の手だけが入り、depends_on で不動点まで展開される。
     # 「どの資産で仕事ができなくなるか」の答え。business_impact だけが使う
     halted_at: dict[str, int] = {}
+    # 戻した資産 → その時刻（SPEC 5.11）。業務影響はここで止まる
+    restored_at: dict[str, int] = {}
+    # **戻した先で攻撃が再開した資産** → その時刻。
+    # 取り除けていない資産を戻すと、そこで起きる。
+    # これは学習者に**その場では告げない**（5.9）— 講評で初めて出る
+    recompromised_at: dict[str, int] = {}
     phase_transitions: dict[str, int] = {}
     # 方針ごとに違反を記録する。同じ行動列を別方針で採点したとき、
     # その方針の制約で評価し直せるようにするため（SPEC 6.8）。
@@ -147,6 +153,9 @@ class ActionOutcome(BaseModel):
     # 止めることと業務が止まることは別なので、別の箱で返す（SPEC 6.3）
     halted: list[str] = []
     cascaded: list[str] = []          # そのうち依存で巻き込まれた分
+    # 業務に戻した資産（SPEC 5.11）。**戻したことだけを言う。**
+    # 戻した先で攻撃が再開したかどうかは、ここでは返さない — 講評で初めて出る（5.9）
+    restored: list[str] = []
     # 押す前から既に止まっていた targets。**空振りではない。**
     # 同じ資産に2つの手があるので、2手目はここに落ちる（例: 境界で遮断した
     # あとに電源を落とす）。数えないと「何も出てこなかった」が出る
@@ -190,6 +199,10 @@ class ActionOutcome(BaseModel):
             and not self.halted
             and not self.already
             and not self.prevented
+            # 戻した回は空振りではない（SPEC 5.11）。
+            # 業務が戻っているのに「何も出てこなかった」と返ると、
+            # **押した結果が見えないまま盤面だけが変わる**
+            and not self.restored
         )
 
 
@@ -695,6 +708,41 @@ class Engine:
             # 直接指定していないのに業務が止まったもの＝依存で波及した分
             cascaded = [a for a in halted if a not in action.targets]
 
+        # 7.2 戻す（SPEC 5.11）。**止めてあったものを業務に返す。**
+        #
+        #     業務影響はそこで止まる。だが**取り除けていなければ、
+        #     攻撃者も一緒に戻ってくる** — 封じ込めが解けて、被害がまた積もり出す。
+        #
+        #     これは**その場では告げない**（5.9）。画面に出るのは
+        #     「戻した」だけで、何が起きたかは講評で初めて分かる。
+        #     告げてしまうと、取り除かずに戻す判断が一度も起きない。
+        restored: list[str] = []
+        if action.type == ActionType.RESTORE:
+            truth = self.scenario.world.ground_truth
+            for asset_id in action.restores:
+                if asset_id not in st.halted_at:
+                    continue          # 止まっていないものは戻せない
+                st.restored_at.setdefault(asset_id, end)
+                restored.append(asset_id)
+            if restored:
+                # 業務影響を解く。依存で波及していた分も引き直す
+                keep = {
+                    a: m for a, m in st.halted_at.items() if a not in st.restored_at
+                }
+                st.halted_at = damage_mod.expand_containment(
+                    keep, self.scenario.asset_by_id
+                )
+                for asset_id in restored:
+                    # **取り除けていない資産を戻すと、攻撃が再開する。**
+                    # 居座られたままの状態を残して電源を入れ直すのと同じ
+                    if (
+                        asset_id in truth.persistence
+                        and asset_id not in st.eradicated_at
+                        and asset_id in st.contained_at
+                    ):
+                        st.contained_at.pop(asset_id, None)
+                        st.recompromised_at.setdefault(asset_id, end)
+
         # 7.5 連絡。以後この出来事は起きなくなる。
         #     効き始めるのは **打ち終わった時刻**（end）から。
         #     周知を書いている 20分の間に現場が動いてしまうことはある
@@ -731,6 +779,7 @@ class Engine:
             contained=contained,
             eradicated=eradicated,
             halted=halted,
+            restored=restored,
             cascaded=cascaded,
             already=already,
             business_impact_delta=st.accumulated_business_impact - impact_before,
