@@ -263,3 +263,22 @@ def test_the_playtest_walks_the_guided_route():
     src = (Path(__file__).resolve().parent.parent / "tools" / "playtest.mjs").read_text("utf-8")
     assert "walkTutorial" in src, "案内どおりに歩く道筋が無い"
     assert "案内どおりに歩いても講評へ辿り着かない" in src, "途中で止まっても黙っている"
+
+
+def test_the_textbook_tutorial_makes_you_stop_and_then_remove():
+    """**止めただけでは終わらない**を、読ませずに押させる（SPEC 3.13）。
+
+    座学の「取り除く・戻す」は文章だが、文章で読んだことは手が覚えない。
+    教科書の練習は、**止める手と取り除く手を別々に押させて**終わる。
+    """
+    sc = load_scenario("tutorial-02-first-response")
+    named = [s.expect_action for s in sc.tutorial if s.expect_action]
+    stops = [a for a in sc.actions if a.type.value == "contain" and not a.eradicates]
+    removes = [a for a in sc.actions if a.eradicates]
+    assert any(a.id in named for a in stops), "止める手を押させていない"
+    assert any(a.id in named for a in removes), "取り除く手を押させていない"
+    # 順番は、止めてから取り除く
+    order = [s.expect_action for s in sc.tutorial if s.expect_action]
+    stop_at = min(order.index(a.id) for a in stops if a.id in order)
+    rm_at = min(order.index(a.id) for a in removes if a.id in order)
+    assert stop_at < rm_at, "取り除くほうが先に来ている"

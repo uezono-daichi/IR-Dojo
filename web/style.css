@@ -1448,3 +1448,18 @@ table.log td, table.log th { padding: 5px 12px 5px 0; }
   margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line);
 }
 .learn-practice .k { font-size: 13px; color: var(--fg-dim); }
+
+/* 座学の読み解きの例（SPEC 3.14） */
+.learn-ex { font-size: 13.5px; margin: 18px 0 8px; color: var(--fg); }
+.learn-read { margin: 0 0 6px; }
+.learn-read-line {
+  font-size: 13.5px; line-height: 1.8; color: var(--fg-dim);
+  padding: 5px 0 5px 14px; border-left: 2px solid var(--line);
+}
+.learn-read-line p { margin: 0; }
+.learn-read-line strong { color: var(--fg); }
+
+.learn-caption { font-size: 12px; color: var(--fg-faint); margin: -8px 0 14px; }
+/* 増え方の棒。等幅で並べると、数字より先に形が見える */
+.learn-table td:last-child { font-family: var(--mono); white-space: nowrap; }
+.learn-table td:nth-child(2) { color: var(--accent); letter-spacing: -1px; }

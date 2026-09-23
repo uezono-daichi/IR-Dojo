@@ -156,14 +156,21 @@ def test_the_reading_chapter_shows_a_real_looking_log(learn_js):
     「平常時と比べる」と言われても、記録を前にすると動けません。
     実際の形をした断片を1つ読ませて、読み方の型を4つに割る。
     """
-    block = learn_js[learn_js.index("id: 'reading'") :]
-    block = block[: block.index("\n  },")]
-    assert "log:" in block, "記録の断片が無い"
-    assert "steps:" in block, "読み方の手順が無い"
-    assert block.count("['") >= 4, "手順が4つに満たない"
+    block = learn_js[learn_js.index("id: 'reading'") : learn_js.index("id: 'investigate'")]
+    assert "steps:" in block, "読み方の型が無い"
+    # **1例では足りない。** 認証・通信・ファイル操作で形が違う
+    # 例の見出しは `label`。`title:` は章の題だけが使う —
+    # 混ぜると、SPEC の表との突き合わせが例まで拾う
+    assert block.count("label: '例") >= 3, "読み解きの例が3つに満たない"
+    assert "title: '例" not in block, "例の見出しに title を使っている"
+    assert block.count("log:") >= 3, "記録の断片が3つに満たない"
+    # どの例も、4手ぶん読み解いてある
+    assert block.count("**形**") >= 3 and block.count("**無いもの**") >= 3
     # 架空の宛先だけを使う（RFC 5737 / RFC 2606）
-    assert "example.test" in block or "example.com" in block
+    assert "example.test" in block
     assert "203.0.113." in block or "198.51.100." in block
+    for real in (".com'", ".jp'", ".net'"):
+        assert real not in block, f"実在しうる宛先が混ざっている: {real}"
 
 
 def test_chapters_point_at_something_to_try(learn_js):
@@ -192,3 +199,34 @@ def test_the_curriculum_matches_the_spec_table():
     learn = (WEB / "learn.js").read_text("utf-8")
     for title in re.findall(r"title: '([^']+)'", learn):
         assert title in table, f"SPEC の表に「{title}」が無い"
+
+
+def test_the_damage_chapter_shows_the_shape_in_numbers(learn_js):
+    """**時間と被害の関係を、文章だけにしない**（SPEC 3.14）。
+
+    「増え方は一定ではない」と書いても、形は伝わらない。
+    棒と倍率で、**どこかで曲がる**ことを目で見せる。
+    """
+    block = learn_js[learn_js.index("id: 'damage'") : learn_js.index("id: 'flow'")]
+    assert "curve:" in block, "増え方の表が無い"
+    assert "■" in block, "形が見える棒が無い"
+    assert "25.9" in block, "終盤の倍率が出ていない"
+
+
+def test_the_damage_chapter_does_not_give_away_where_the_bend_is(learn_js):
+    """**折れ点の位置は盤面の答えの一部である**（SPEC 5.9）。
+
+    講評で初めて出るものを、座学で先に配らない。
+    座学に載せるのは**架空の例の形**であって、同梱盤面の実数ではない。
+    """
+    block = learn_js[learn_js.index("id: 'damage'") : learn_js.index("id: 'flow'")]
+    assert "架空の例" in block, "架空の例であることを言っていない"
+    assert "演習ごとに違います" in block, "盤面ごとに違うことを言っていない"
+    assert "講評で初めて分かります" in block, "いつ分かるかを言っていない"
+    # 同梱盤面の折れ点そのものを書いていないこと
+    for sc in list_scenarios():
+        accel = sc.damage.acceleration
+        if accel:
+            assert str(accel.threshold_minutes) not in block, (
+                f"{sc.meta.id} の折れ点 {accel.threshold_minutes} が座学に出ている"
+            )

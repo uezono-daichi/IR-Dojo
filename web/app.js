@@ -455,6 +455,15 @@ function renderLearn() {
     var body = el('div', 'learn-body');
     (ch.body || []).forEach(function (p) { emphProse(body, p, true); });
     if (ch.table) { body.appendChild(learnTable(ch.table)); }
+    if (ch.curve) {
+      // 被害の増え方。**数字だけでは形が読めない**ので、棒を添える。
+      // 盤面の実数ではなく架空の例 — 折れ点の位置は答えの一部である（5.9）
+      body.appendChild(learnTable(ch.curve));
+      if (ch.curve.caption) {
+        body.appendChild(el('div', 'learn-caption', ch.curve.caption));
+      }
+    }
+    (ch.after || []).forEach(function (p) { emphProse(body, p, true); });
     (ch.rules || []).forEach(function (r) {
       var row = el('div', 'learn-rule');
       row.appendChild(el('div', 'k', r[0]));
@@ -462,6 +471,19 @@ function renderLearn() {
       emphProse(v, r[1], true);
       row.appendChild(v);
       body.appendChild(row);
+    });
+    (ch.examples || []).forEach(function (ex) {
+      body.appendChild(el('h4', 'learn-ex', ex.label));
+      var pre = el('pre', 'learn-log');
+      pre.textContent = ex.log.join('\n');
+      body.appendChild(pre);
+      var ol = el('div', 'learn-read');
+      (ex.read || []).forEach(function (line) {
+        var p = el('div', 'learn-read-line');
+        emphProse(p, line, true);
+        ol.appendChild(p);
+      });
+      body.appendChild(ol);
     });
     if (ch.log) {
       // 記録の断片。**等幅で、折り返さずそのまま出す** —
