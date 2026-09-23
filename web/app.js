@@ -534,7 +534,12 @@ function renderScenarioList() {
   var tutorHost = $('tutorial-list');
   clear(tutorHost);
   var tutorials = S.scenarios.filter(function (sc) { return sc.tutorial; });
+  var real = S.scenarios.filter(function (sc) { return !sc.tutorial; });
   group.hidden = !tutorials.length;
+  // **見出しの本数は配列から入れる。** 手で書くと、1本足した日から嘘になる
+  $('tutorial-count').textContent = '（' + tutorials.length + '本）';
+  $('scenario-count').textContent = '（' + real.length + '本）';
+  $('scenario-group').hidden = !real.length;
 
   function addCard(sc, into, compact) {
     var card = el('div', 'card card-pick' + (compact ? ' card-slim' : ''));
@@ -556,8 +561,7 @@ function renderScenarioList() {
   });
   // **既定で選ばれるのは本番の先頭。** 練習は畳んである側なので、
   // 選ばれた札が見えない状態で開始ボタンだけが有効になるのを避ける
-  var first = S.scenarios.filter(function (sc) { return !sc.tutorial; })[0];
-  selectScenario(first || S.scenarios[0]);
+  selectScenario(real[0] || S.scenarios[0]);
 }
 
 function selectScenario(sc) {

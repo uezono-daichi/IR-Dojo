@@ -1041,11 +1041,24 @@ def test_the_select_screen_groups_the_practice_boards(index_html, app_js):
     """
     sel = index_html[index_html.index('id="screen-select"') :]
     sel = sel[: sel.index("</section>")]
+    # **枠は2つ、粒度は同じ。** 利用者の言葉：「チュートリアルの枠が
+    # あるなら同じ粒度で別の枠を作ってそこにシナリオを入れればいいのでは？」
+    # 練習だけを枠に入れて本番を裸で並べると、同じ種類のものが違う見え方をする
     assert 'id="tutorial-group"' in sel, "練習をまとめる枠が無い"
-    assert "<details" in sel, "枠が畳めない"
-    assert "<summary>" in sel, "枠に見出しが無い"
+    assert 'id="scenario-group"' in sel, "本番をまとめる枠が無い"
+    groups = re.findall(r'<details class="([^"]*)" id="(\w+[\w-]*)"', sel)
+    assert len(groups) == 2, f"枠が2つでない: {groups}"
+    assert {cls for cls, _ in groups} == {"fold pick-group"}, (
+        f"2つの枠が違う作りになっている: {groups}"
+    )
+    # 違うのは**既定で開いているかどうか**だけ
+    assert 'id="scenario-group" open' in sel, "本番の枠が既定で閉じている"
+    assert 'id="tutorial-group">' in sel, "練習の枠が既定で開いている"
     # 枠は札より前にある。後ろに置くと、はじめての人が最後まで見ない
-    assert sel.index('id="tutorial-group"') < sel.index('id="scenario-list"')
+    assert sel.index('id="tutorial-group"') < sel.index('id="scenario-group"')
+    # **本数は手で書かない**（7.6.18）。1本足した日から嘘になる
+    assert "（2本）" not in sel and "（5本）" not in sel, "本数が手で書かれている"
+    assert 'id="tutorial-count"' in sel and 'id="scenario-count"' in sel
     # 方針とアシストは横に並べる（縦に積むと 249px 使う）
     assert "pick-options" in sel, "方針とアシストが縦に積まれている"
 
@@ -1054,6 +1067,8 @@ def test_the_select_screen_groups_the_practice_boards(index_html, app_js):
     fn = fn[: fn.index("\nfunction ")]
     assert "sc.tutorial" in fn, "練習を振り分けていない"
     assert "tutorial-list" in fn, "練習を枠の中へ入れていない"
+    # 見出しの本数は配列から入れる
+    assert "tutorial-count" in fn and "scenario-count" in fn, "本数を入れていない"
     # 既定で選ばれるのは本番の先頭。畳みの中の札が選ばれた状態で
     # 始まると、選択が見えないまま開始ボタンだけが有効になる
     assert "!sc.tutorial" in fn, "既定の選択が本番になっていない"
@@ -1105,3 +1120,35 @@ def test_the_playtest_watches_the_select_screen(playtest_mjs):
     assert "btn-start" in playtest_mjs, "開始ボタンが見えるかを見ていない"
     # 練習は畳みの中にあるので、開いてから押すこと
     assert "tutorial-group" in playtest_mjs, "畳みを開かずに練習を選ぼうとしている"
+
+
+def test_a_closed_frame_does_not_lay_out_its_contents(index_html):
+    """**閉じた `<details>` の中に `display` を書かない**（SPEC 7.6.27）。
+
+    実際に踏んだ: `#tutorial-list { display: grid }` と書いたので、
+    閉じているのに中身が 71px ぶん場所を取っていた。
+    `<details>` が閉じているときの非表示は作者の `display` に負ける。
+
+    枠が閉じているあいだ、中の札は**見えないまま生きている**ことになる。
+    `[open]` を付けて、開いているときだけ並べる。
+    """
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    for host in ("#scenario-list", "#tutorial-list"):
+        for sel, decls in rules_with(css, host):
+            # 見るのは**その箱そのもの**を指す規則だけ。
+            # 中の子孫に display を与えるのは、閉じ方とは関係がない
+            targets = [s.strip() for s in sel.split(",")]
+            if not any(s.endswith(host) for s in targets):
+                continue
+            if re.search(r"(^|[;{\s])display\s*:", decls):
+                assert "[open]" in sel, (
+                    f"{host} に display を与える規則が [open] の外にある: {sel}"
+                )
+
+
+def rules_with(css: str, needle: str):
+    """`needle` を含むセレクタの規則を (セレクタ, 宣言) で返す。"""
+    for block in re.finditer(r"([^{}]+)\{([^{}]*)\}", css):
+        sel, decls = block.group(1).strip(), block.group(2)
+        if needle in sel:
+            yield sel, decls

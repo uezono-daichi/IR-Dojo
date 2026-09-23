@@ -114,16 +114,22 @@
     <h1 style="font-size:22px">演習を選ぶ</h1>
     <p class="sub">同じシナリオを、方針とアシストレベルを変えて解き直せます。</p>
 
-    <!-- **練習は1つの枠にまとめて畳む**（SPEC 7.6.27）。
-         札のまま2枚並べると、それだけで 290px 使う。この画面は
-         **開始ボタンが一度も見えていなかった**（実測 1593px）ので、
-         まず縦を削るところから入る。中に何が入っているかは見出しが言う -->
-    <details class="fold block tutor-group" id="tutorial-group">
-      <summary>チュートリアル — はじめての方はここから（2本）</summary>
+    <!-- **枠は2つ、粒度は同じ**（SPEC 7.6.27）。
+         練習だけを枠に入れて本番を裸で並べると、同じ種類のものが
+         違う見え方をする。畳めるかどうかだけが違う —
+         練習は既定で閉じ、本番は既定で開く。
+
+         **本数は手で書かない。** 見出しの数字は JS が配列から入れる
+         （手で書いた数字は、1本足した日から嘘になる / 7.6.18） -->
+    <details class="fold pick-group" id="tutorial-group">
+      <summary>チュートリアル — はじめての方はここから<span id="tutorial-count"></span></summary>
       <div id="tutorial-list"></div>
     </details>
 
-    <div id="scenario-list"></div>
+    <details class="fold pick-group" id="scenario-group" open>
+      <summary>演習<span id="scenario-count"></span></summary>
+      <div id="scenario-list"></div>
+    </details>
 
     <!-- 方針とアシストは横に並べる。縦に積むと 249px 使い、
          そのぶん札が画面の外へ出る -->

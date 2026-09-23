@@ -1297,38 +1297,42 @@ table.log td, table.log th { padding: 5px 12px 5px 0; }
 /* この画面だけ幅を広く取る。**860px に5本を積むと縦にしか伸びない** */
 #screen-select > .wrap { max-width: 1280px; padding: 24px 24px 20px; }
 #screen-select h1 { margin-bottom: 2px; }
-#screen-select .sub { margin-bottom: 14px; }
+#screen-select .sub { display: none; }
 
 /* 本番の札は並べる。**1列に積むと、本数を増やすたびに下が伸びる** */
-#scenario-list {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
-  gap: 10px; margin-bottom: 14px;
+.pick-group[open] > #scenario-list {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(224px, 1fr));
+  gap: 8px;
 }
-#scenario-list .card { margin-bottom: 0; padding: 12px 14px; }
+#scenario-list .card { margin-bottom: 0; padding: 11px 12px; }
+#scenario-list .card-head > .dim { white-space: nowrap; }
 /* タグ（英語の分類）はここでは出さない。**選ぶときに効くのは方針の名前** */
 #scenario-list .card > .faint { display: none; }
-#scenario-list .card-policies { margin: 7px 0 0; }
+#scenario-list .card-policies { margin: 6px 0 0; gap: 5px; }
+#scenario-list .pchip { font-size: 11px; padding: 4px 6px; }
 
 /* 練習は畳みの中。**中の札は細く** — タグも所要も出さない。
    ここで選ぶのは「操作か、考え方か」の2択しかない */
-/* **練習は「1つの枠」に見せる。**
-   利用者の言葉：「チュートリアルで一つの枠にして、その中に
-   遊び方と、インシデント対応の基本で2項目」。
-   見出しの行が枠の頭になり、開くと中に2項目が並ぶ。 */
-.tutor-group {
-  margin: 0 0 14px; border: 1px solid var(--line); border-radius: 6px;
+/* **枠は2つ、粒度は同じ。**
+   利用者の言葉：「チュートリアルの枠があるなら同じ粒度で別の枠を作って
+   そこにシナリオを入れればいいのでは？」。練習だけを枠に入れて本番を
+   裸で並べると、同じ種類のものが違う見え方をする。
+   違うのは**既定で開いているかどうか**だけ。 */
+.pick-group {
+  margin: 0 0 12px; border: 1px solid var(--line); border-radius: 6px;
   background: color-mix(in srgb, var(--panel) 55%, transparent);
 }
-.tutor-group > summary {
-  font-weight: 600; width: 100%; box-sizing: border-box;
-  border: 0; border-radius: 6px; background: none; padding: 11px 14px 11px 12px;
+.pick-group > summary {
+  font-size: 14px; font-weight: 600; width: 100%; box-sizing: border-box;
+  border: 0; border-radius: 6px; background: none; padding: 10px 14px 10px 12px;
 }
-.tutor-group[open] > summary {
+.pick-group[open] > summary {
   border-bottom: 1px solid var(--line);
   border-radius: 6px 6px 0 0; margin-bottom: 0;
 }
-.tutor-group > *:not(summary) { margin: 0; padding: 10px; }
-#tutorial-list {
+.pick-group > *:not(summary) { margin: 0; padding: 10px; }
+.pick-group #scenario-list { margin-bottom: 0; }
+.pick-group[open] > #tutorial-list {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 10px;
 }
