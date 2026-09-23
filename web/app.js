@@ -567,6 +567,11 @@ function renderScenarioList() {
 function selectScenario(sc) {
   var changed = !S.scenario || S.scenario.id !== sc.id;
   S.scenario = sc;
+  // **閉じていても、何を選んでいるかは見える。**（SPEC 7.6.28）
+  // 枠を畳んだまま始められるので、選択が見出しに出ていないと
+  // 「何が始まるのか分からないまま開始ボタンだけが有効」になる
+  var picked = $('scenario-picked');
+  if (picked) { picked.textContent = sc ? '　選択中: ' + sc.title : ''; }
   // 方針とアシストはシナリオごとのもの。持ち越すと、前のシナリオにしか
   // 無い方針 id を送ることになる（サーバは知らない id を弾く）
   if (changed) { S.policy = sc.default_policy; S.assist = sc.default_assist_level; }
@@ -646,7 +651,9 @@ function startSession() {
     // 考え方の枠組みを出すかはアシストレベルが決める（3.10）
     var primer = $('brief-primer');
     primer.hidden = !data.view.show_primer;
-    primer.open = !!data.view.show_primer;
+    // **畳みは全部、既定で閉じている**（SPEC 7.6.28）。
+    // アシストが決めるのは「出すかどうか」であって「開いているかどうか」ではない
+    primer.open = false;
     // 構成図はアシスト。依存関係そのものは資産一覧に残る（3.10）
     var topo = data.view.show_topology;
     $('brief-topo').hidden = !topo;

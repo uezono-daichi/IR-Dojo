@@ -492,7 +492,11 @@ await page.setViewportSize({ width: 1440, height: 1000 });
 await page.waitForTimeout(200);
 
 await page.click('#btn-to-select');
-await page.waitForSelector('#scenario-list .card:not(.card-error)');
+await page.waitForSelector('#scenario-list .card:not(.card-error)', { state: 'attached' });
+// **畳みは全部、既定で閉じている**（SPEC 7.6.28）。
+// 札を押すには先に枠を開ける。閉じたままの札は当たらない
+await page.click('#scenario-group > summary');
+await page.waitForTimeout(250);
 // 入口の札と選択画面の札は同じ関数から出ている。**別々に書いたら腐る**
 //
 // **練習は両方で1つにまとめてある**（SPEC 7.6.27）。入口は「チュートリアル」

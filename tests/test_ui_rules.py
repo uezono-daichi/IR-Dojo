@@ -1051,9 +1051,9 @@ def test_the_select_screen_groups_the_practice_boards(index_html, app_js):
     assert {cls for cls, _ in groups} == {"fold pick-group"}, (
         f"2つの枠が違う作りになっている: {groups}"
     )
-    # 違うのは**既定で開いているかどうか**だけ
-    assert 'id="scenario-group" open' in sel, "本番の枠が既定で閉じている"
-    assert 'id="tutorial-group">' in sel, "練習の枠が既定で開いている"
+    # **どちらも既定で閉じている**（v1.62 / 7.6.28）。
+    # 片方だけ開いていると、同じ見た目のものが違うふるまいをする
+    assert "open>" not in sel, "既定で開いている枠がある"
     # 枠は札より前にある。後ろに置くと、はじめての人が最後まで見ない
     assert sel.index('id="tutorial-group"') < sel.index('id="scenario-group"')
     # **本数は手で書かない**（7.6.18）。1本足した日から嘘になる
@@ -1152,3 +1152,63 @@ def rules_with(css: str, needle: str):
         sel, decls = block.group(1).strip(), block.group(2)
         if needle in sel:
             yield sel, decls
+
+
+def test_every_fold_starts_closed(index_html, app_js):
+    """**畳みは全部、既定で閉じている**（SPEC 7.6.28）。
+
+    利用者の指摘：「畳み込みできるところに置いて畳み込みしてる
+    ところとしてないところが統一されてない。基本畳み込みされた状態で
+    表示して、押されたら開くようにして」。
+
+    実際そうなっていた — 選ぶ画面の「演習」と、ブリーフィングの
+    「はじめての人へ」だけが開いた状態で出ていた。**同じ見た目のものが
+    違うふるまいをすると、畳みそのものが読めなくなる。**
+    """
+    text = re.sub(r"<!--.*?-->", "", index_html, flags=re.S)
+    opened = re.findall(r"<details[^>]*\bopen\b[^>]*>", text)
+    assert not opened, f"既定で開いている畳みがある: {opened}"
+
+    # JS で開いてよい場所は4つだけ。**名前で列挙する** — どれも理由が違う
+    allowed = {
+        # 入口の「チュートリアル」を押した結果。押されたら開く、そのもの
+        "tutorialGroupCard",
+        # 証拠の参照を押した結果。畳んだ先にある証拠へ連れて行く
+        "focusEvidence",
+        # **見本の中**（画面の見方）。見本は中身を見せるためのもので、
+        # 畳んだ見本は用をなさない。ここだけは実画面の既定と違ってよい
+        "renderLegend",
+        # 前に開いていたかを覚えているだけ。既定は閉じている
+        "renderBoard",
+    }
+    body = strip_comments(app_js)
+    lines = body.split("\n")
+    owners = [
+        (i, m.group(1))
+        for i, line in enumerate(lines)
+        for m in [re.match(r"function (\w+)", line)]
+        if m
+    ]
+    for i, line in enumerate(lines):
+        if not re.search(r"\.open = (true|!!)", line):
+            continue
+        before = [name for j, name in owners if j < i]
+        owner = before[-1] if before else "(不明)"
+        assert owner in allowed, (
+            f"{owner} が押されていないのに畳みを開いている: {line.strip()}"
+        )
+
+
+def test_the_frame_says_what_is_selected_even_when_closed(index_html, app_js):
+    """畳んだままでも、何が選ばれているかは見えること（SPEC 7.6.28）。
+
+    枠を閉じたまま始められるので、選択が見出しに出ていないと
+    **「何が始まるのか分からないまま開始ボタンだけが有効」**になる。
+    """
+    sel = index_html[index_html.index('id="screen-select"') :]
+    sel = sel[: sel.index("</section>")]
+    assert 'id="scenario-picked"' in sel, "選択中の演習を見出しに出していない"
+    body = strip_comments(app_js)
+    fn = body[body.index("function selectScenario") :]
+    fn = fn[: fn.index("\nfunction ")]
+    assert "scenario-picked" in fn, "選んだときに見出しを書き替えていない"

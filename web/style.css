@@ -1332,6 +1332,8 @@ table.log td, table.log th { padding: 5px 12px 5px 0; }
 }
 .pick-group > *:not(summary) { margin: 0; padding: 10px; }
 .pick-group #scenario-list { margin-bottom: 0; }
+/* 枠を閉じたままでも、何を選んでいるかは見出しに出す */
+.pick-group .picked { font-weight: 400; color: var(--fg-dim); }
 .pick-group[open] > #tutorial-list {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 10px;
