@@ -1420,3 +1420,31 @@ table.log td, table.log th { padding: 5px 12px 5px 0; }
   font-size: 13.5px; line-height: 1.85;
 }
 .learn-note p { margin: 0; }
+
+
+/* 座学の中の記録断片（SPEC 3.14）。**等幅で、桁をそろえたまま出す** —
+   ずれると「いつもと違うところ」が読めない */
+.learn-log {
+  font-family: var(--mono); font-size: 12px; line-height: 1.75;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px;
+  padding: 12px 14px; margin: 4px 0 14px; overflow-x: auto; white-space: pre;
+}
+/* 手順。番号を付けて、順に読ませる */
+.learn-step {
+  display: grid; grid-template-columns: 24px minmax(0, 1fr);
+  gap: 0 12px; padding: 8px 0; border-bottom: 1px solid var(--line);
+}
+.learn-step .n {
+  font-family: var(--mono); font-size: 11px; color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 50%; width: 20px; height: 20px; line-height: 18px; text-align: center;
+}
+.learn-step .k { font-weight: 600; margin-bottom: 2px; }
+.learn-step .d { color: var(--fg-dim); font-size: 13.5px; }
+.learn-step .d p { margin: 0; }
+/* 読んだら試す */
+.learn-practice {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line);
+}
+.learn-practice .k { font-size: 13px; color: var(--fg-dim); }

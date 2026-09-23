@@ -463,7 +463,26 @@ function renderLearn() {
       row.appendChild(v);
       body.appendChild(row);
     });
+    if (ch.log) {
+      // 記録の断片。**等幅で、折り返さずそのまま出す** —
+      // 桁がそろっていないと「いつもと違うところ」が読めない
+      var pre = el('pre', 'learn-log');
+      pre.textContent = ch.log.join('\n');
+      body.appendChild(pre);
+    }
+    (ch.steps || []).forEach(function (s, n) {
+      var row = el('div', 'learn-step');
+      row.appendChild(el('div', 'n', String(n + 1)));
+      var v = el('div', 'v');
+      v.appendChild(el('div', 'k', s[0]));
+      var d = el('div', 'd');
+      emphProse(d, s[1], true);
+      v.appendChild(d);
+      row.appendChild(v);
+      body.appendChild(row);
+    });
     (ch.more || []).forEach(function (p) { emphProse(body, p, true); });
+    if (ch.practice) { body.appendChild(practiceLink(ch.practice)); }
     if (ch.note) {
       var note = el('div', 'learn-note');
       emphProse(note, ch.note, true);
@@ -472,6 +491,28 @@ function renderLearn() {
     box.appendChild(body);
     host.appendChild(box);
   });
+}
+
+/* 章の末尾の「試す」（SPEC 3.14）。**読むだけで終わらせないための線。**
+
+   押された結果としてしか呼ばれない（畳みを開く場所は 7.6.28 で列挙してある）。 */
+function practiceLink(scenarioId) {
+  var wrap = el('div', 'learn-practice');
+  var sc = null;
+  S.scenarios.forEach(function (s) { if (s.id === scenarioId) { sc = s; } });
+  if (!sc) { wrap.hidden = true; return wrap; }
+  wrap.appendChild(el('span', 'k', '読んだら試す'));
+  var btn = el('button', 'primary', sc.title);
+  btn.addEventListener('click', function () { toPractice(sc); });
+  wrap.appendChild(btn);
+  return wrap;
+}
+
+/* その演習を選んだ状態で「何から始めますか」を開く。 */
+function toPractice(sc) {
+  toSelect(sc);
+  var g = $(sc.tutorial ? 'tutorial-group' : 'scenario-group');
+  if (g) { g.open = true; }
 }
 
 function learnTable(spec) {

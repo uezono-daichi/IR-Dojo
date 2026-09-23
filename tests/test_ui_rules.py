@@ -1188,6 +1188,8 @@ def test_every_fold_starts_closed(index_html, app_js):
         "toTutorials",
         # 選ぶ画面の章の行を押した結果。その章を開いた状態で座学を出す
         "toLearn",
+        # 座学の「読んだら試す」を押した結果。その演習を選んだ状態で開く
+        "toPractice",
         # 証拠の参照を押した結果。畳んだ先にある証拠へ連れて行く
         "focusEvidence",
         # **見本の中**（画面の見方）。見本は中身を見せるためのもので、

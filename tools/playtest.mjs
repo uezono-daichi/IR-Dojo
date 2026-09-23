@@ -494,6 +494,31 @@ await page.waitForTimeout(200);
 // **座学も見る**（SPEC 3.14）。入口から行けて、章が畳んで並んでいて、
 // 一番狭いところで収まること。読まれない教材は無いのと同じである
 await page.click('#btn-to-select');
+await page.waitForTimeout(250);
+// **選ぶ画面は、既定の状態で測る。**（SPEC 7.6.27 / 7.6.22）
+// 枠を開いた後で測ると「開けば溢れてよい」という決めと食い違う。
+// ここは到達直後 — まだどの枠も開いていない
+// **選ぶ画面が画面に収まっているか。**（SPEC 7.6.27）
+// プレイ画面と同じ穴を2回踏んだ — 札を7枚積むと縦 1593px になり、
+// 「開始する」がどの画面サイズでも一度も見えなかった。
+// **測っていたのは入口とプレイ画面だけだった。**
+{
+  const fit = await page.evaluate(() => {
+    const s = document.querySelector('#btn-start').getBoundingClientRect();
+    return {
+      over: document.documentElement.scrollHeight - innerHeight,
+      startVisible: s.top >= 0 && s.bottom <= innerHeight,
+      startBottom: Math.round(s.bottom),
+    };
+  });
+  if (fit.over > 0) {
+    note('error', 'select', `選ぶ画面が ${fit.over}px はみ出している`);
+  }
+  if (!fit.startVisible) {
+    note('error', 'select',
+      `「開始する」がスクロールしないと見えない（下端 ${fit.startBottom}px）`);
+  }
+}
 await page.waitForTimeout(300);
 await page.click('#learn-group > summary');
 await page.waitForTimeout(200);
@@ -507,7 +532,7 @@ await page.waitForTimeout(350);
       chapters: chs.length,
       opened: chs.filter((c) => c.open).length,
       openedIds: chs.filter((c) => c.open).map((c) => c.dataset.chapter),
-      over: document.documentElement.scrollHeight - innerHeight,
+      wide: Math.max(0, document.documentElement.scrollWidth - innerWidth),
       raw: document.querySelector('#learn-body').innerText.includes('**'),
     };
   });
@@ -519,7 +544,9 @@ await page.waitForTimeout(350);
   } else if (m.openedIds[0] !== wantChapter) {
     note('error', 'learn', `押した章と違う章が開いた: ${m.openedIds[0]} ≠ ${wantChapter}`);
   }
-  if (m.over > 0) note('error', 'learn', `座学が ${m.over}px はみ出している`);
+  // **座学は読み物なので、縦に伸びてよい。**
+  // 横に溢れるのは別 — 行の右端が切れると読めなくなる
+  if (m.wide) note('error', 'learn', `座学が横に ${m.wide}px はみ出している`);
   if (m.raw) note('error', 'learn', '座学に生の markdown が出ている');
   await screen('01c-learn');
   // 開いた章の中身が組まれているか
@@ -585,28 +612,6 @@ if (args.assist) {
   }
 }
 await screen('02-select');
-
-// **選ぶ画面が画面に収まっているか。**（SPEC 7.6.27）
-// プレイ画面と同じ穴を2回踏んだ — 札を7枚積むと縦 1593px になり、
-// 「開始する」がどの画面サイズでも一度も見えなかった。
-// **測っていたのは入口とプレイ画面だけだった。**
-{
-  const fit = await page.evaluate(() => {
-    const s = document.querySelector('#btn-start').getBoundingClientRect();
-    return {
-      over: document.documentElement.scrollHeight - innerHeight,
-      startVisible: s.top >= 0 && s.bottom <= innerHeight,
-      startBottom: Math.round(s.bottom),
-    };
-  });
-  if (fit.over > 0) {
-    note('error', 'select', `選ぶ画面が ${fit.over}px はみ出している`);
-  }
-  if (!fit.startVisible) {
-    note('error', 'select',
-      `「開始する」がスクロールしないと見えない（下端 ${fit.startBottom}px）`);
-  }
-}
 
 await page.click('#btn-start');
 await page.waitForSelector('#screen-briefing.active');

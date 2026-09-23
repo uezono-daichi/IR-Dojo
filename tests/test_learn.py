@@ -42,7 +42,23 @@ def test_the_curriculum_covers_the_ground_a_beginner_needs(learn_js):
     章が1つ欠けると、その先が読めなくなる順に並べてある。
     """
     ids = re.findall(r"id: '([\w-]+)'", learn_js)
-    need = ["what", "kinds", "damage", "flow", "investigate", "contain", "policy", "words"]
+    # **「1〜100まで」の中身は SPEC 3.14 の表で定義してある。**
+    # 終わりの無い目標は、終わったかどうかを誰も言えない。
+    # ここで言う 1〜100 は「何も知らない人が、一人で現場の初動に立てるまで」。
+    need = [
+        "what",        # インシデントとは何か
+        "prepare",     # 備える — 記録が無ければ何も分からない
+        "kinds",       # どんな形で起きるか
+        "damage",      # 起きると、何が失われるか
+        "flow",        # 対応の流れ
+        "reading",     # 記録を読む — 実例
+        "investigate", # 調べるときの原則
+        "contain",     # 止めるときの判断
+        "recover",     # 取り除く・戻す
+        "report",      # 伝える
+        "policy",      # 方針で、最善が入れ替わる
+        "words",       # 言葉
+    ]
     assert ids == need, f"章の並びが変わっている: {ids}"
 
 
@@ -132,3 +148,47 @@ def test_the_words_chapter_covers_what_the_screens_say(learn_js):
     for word in ("侵害されている", "被疑判定", "封じ込め", "根絶", "誤導",
                  "未解消の論点", "方針", "資産", "依存"):
         assert word in learn_js, f"用語集に「{word}」が無い"
+
+
+def test_the_reading_chapter_shows_a_real_looking_log(learn_js):
+    """**概念だけでは手が止まる**（SPEC 3.14）。
+
+    「平常時と比べる」と言われても、記録を前にすると動けません。
+    実際の形をした断片を1つ読ませて、読み方の型を4つに割る。
+    """
+    block = learn_js[learn_js.index("id: 'reading'") :]
+    block = block[: block.index("\n  },")]
+    assert "log:" in block, "記録の断片が無い"
+    assert "steps:" in block, "読み方の手順が無い"
+    assert block.count("['") >= 4, "手順が4つに満たない"
+    # 架空の宛先だけを使う（RFC 5737 / RFC 2606）
+    assert "example.test" in block or "example.com" in block
+    assert "203.0.113." in block or "198.51.100." in block
+
+
+def test_chapters_point_at_something_to_try(learn_js):
+    """**読むだけで終わらせない。**
+
+    章の終わりに「読んだら試す」を置く。演習と結びつかない座学は、
+    読んだ気になって終わる。
+    """
+    ids = re.findall(r"id: '([\w-]+)'", learn_js)
+    linked = re.findall(r"practice: '([\w-]+)'", learn_js)
+    assert len(linked) >= 5, f"試す先を持つ章が少なすぎる: {len(linked)} / {len(ids)}"
+    known = {sc.meta.id for sc in list_scenarios()}
+    unknown = [p for p in linked if p not in known]
+    assert not unknown, f"存在しない演習を指している: {unknown}"
+
+
+def test_the_curriculum_matches_the_spec_table():
+    """**表に無いものを足さない**（SPEC 3.14）。
+
+    「1〜100」は終わりの無い目標なので、中身を表に書き出してある。
+    章を足したら表も直す — 直さないと「まだ終わっていない」が永久に続く。
+    """
+    spec = (ROOT / "SPEC.md").read_text("utf-8")
+    table = spec[spec.index("「1〜100まで」の中身") :]
+    table = table[: table.index("**この12で「1〜100」とする。**")]
+    learn = (WEB / "learn.js").read_text("utf-8")
+    for title in re.findall(r"title: '([^']+)'", learn):
+        assert title in table, f"SPEC の表に「{title}」が無い"
