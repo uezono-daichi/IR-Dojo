@@ -147,15 +147,24 @@ def test_the_misled_control_differs_only_in_the_declaration(plays):
     """誤導の対照は、調査の手が1つも違わないこと。
 
     ここが揃っていないと「誤導は損か」の差が、調査量の差と混ざる。
-    違ってよいのは、宣言と、その宣言に従って止めた資産だけ。
+    違ってよいのは、宣言と、**その宣言に従って動いた手**だけ。
+
+    以前は封じ込めだけを除いていたが、復旧と再発防止を盤面に入れた時点で
+    それでは足りなくなった。誤導に乗った像は ws-107 を侵害されたと信じて
+    **間違った入り口を塞ぐ**（`act_harden_ws107`）。これは調査量の差ではなく、
+    誤った宣言の**帰結**そのもので、20分の値札ごと測られるべきものである。
+    除くべきは型の名前ではなく「宣言を入力にして動く手」という性質なので、
+    残す側を数え上げる — 判断の**材料**が両者で一字一句同じであること。
     """
     sc, runs = plays
     from irdojo.schema import ActionType
 
+    MATERIAL = {ActionType.INVESTIGATE, ActionType.COMMUNICATE}
+
     def investigated(e):
         return [
             a for a in e.state.executed_actions
-            if sc.action_by_id[a].type != ActionType.CONTAIN
+            if sc.action_by_id[a].type in MATERIAL
         ]
 
     bad, ok = runs["wanderer"], runs["wanderer_clear"]

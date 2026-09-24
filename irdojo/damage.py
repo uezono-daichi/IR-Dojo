@@ -64,8 +64,6 @@ def containment_factor(
     eradicated: Iterable[str],
     truth: GroundTruth,
     effect: ContainmentEffect,
-    hardened: Iterable[str] | None = None,
-    must_harden: Iterable[str] | None = None,
 ) -> float:
     """封じ込めの減衰係数（SPEC 5.8）。
 
@@ -90,18 +88,6 @@ def containment_factor(
     persistence = set(truth.persistence)
 
     if compromised <= c and persistence <= e:
-        # **3つ目の条件 — 入り口を塞いだか**（SPEC 5.12）。
-        #
-        # 止めて、取り除いても、**入られた口が開いたままなら同じことが起きる。**
-        # その被害は演習が終わったあとに出るので、盤面の上では見えない —
-        # 見えるのは講評の破線（復旧地平まで伸ばした見込み）である。
-        #
-        # **塞ぐ手を1つも持たない盤面では、この条件は無い。**
-        # `must_harden` が空なら、これまでと寸分変わらない。
-        # 機構を足しても、既にある盤面の数字は1つも動かさない
-        need = set(must_harden or ())
-        if need and not need <= set(hardened or ()):
-            return effect.on_partial
         return effect.on_correct_containment
     if c & compromised:
         return effect.on_partial
@@ -154,11 +140,32 @@ def project(
     盤面上ほとんど効かなくなる。H は business_impact と共用する
     （「復旧まで」は同じ1つの前提であり、2つ置くと作者が別々に調整できてしまう）。
     """
-    return accrue(
-        model, truth, contained, eradicated,
-        end_minute, end_minute + horizon,
-        hardened, must_harden,
-    )
+    # **塞ぐことは、係数ではなく地平に効く**（SPEC 5.12）。
+    #
+    # 係数を落とす版を一度書いたが、**罰が強すぎた** — 止めて取り除いた
+    # プレイが「塞いでいない」だけで 0.2 → 0.6（3倍）になり、
+    # 何もしなかったプレイ（元から 1.0）との差が潰れて、
+    # 単体テストで順序が逆転した。**取り除く意味まで消えかけた。**
+    #
+    # 入り口を塞いだことの意味は「同じことがまた起きるまでの猶予」であって、
+    # 「いま起きている被害の速さ」ではない。だから**地平を縮める** —
+    # 塞いだなら、この件が尾を引く時間は短くなる。
+    # 塞ぐ手を持たない盤面では `must_harden` が空で、これまでどおり。
+    #
+    # **ただし、止めきっていない盤面では縮まない。** 入り口を塞ぐことは
+    # 「同じ入り方がもう使えない」という意味しか持たず、**すでに中に居る者**
+    # には何もしない。攻撃者を締め出せていないのに地平が半分になるなら、
+    # 何も止めずに塞いだだけのプレイが、正しく止めたプレイと同じ猶予を
+    # 買えてしまう（実際これで「何も止めないプレイは正しく止めたプレイに
+    # 負ける」が 12点→8点まで潰れた）。猶予は**締め出したあとにだけ**生じる。
+    need = set(must_harden or ())
+    span = horizon
+    shut_out = containment_factor(
+        contained, eradicated, truth, model.containment_effect
+    ) == model.containment_effect.on_correct_containment
+    if need and shut_out and need <= set(hardened or ()):
+        span = horizon // 2
+    return accrue(model, truth, contained, eradicated, end_minute, end_minute + span)
 
 
 def accrue(
@@ -168,18 +175,13 @@ def accrue(
     eradicated: Iterable[str],
     start_minute: int,
     end_minute: int,
-    hardened: Iterable[str] | None = None,
-    must_harden: Iterable[str] | None = None,
 ) -> list[float]:
     """[start, end) の各分の被害量を返す（1分刻みの離散和）。
 
     封じ込め状態は区間内で一定とみなす。エンジンはアクション単位で
     この関数を呼ぶため、区間内で状態が変わることはない。
     """
-    factor = containment_factor(
-        contained, eradicated, truth, model.containment_effect,
-        hardened, must_harden,
-    )
+    factor = containment_factor(contained, eradicated, truth, model.containment_effect)
     out: list[float] = []
     for m in range(start_minute, end_minute):
         # 分あたりに直すため 60 で割る（base は「/時間」で与えられる）

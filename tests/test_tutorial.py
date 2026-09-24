@@ -440,11 +440,17 @@ def test_closing_the_entry_is_the_third_condition(client):
     purge = play(True, False)
     close = play(True, True)
 
+    # **塞ぐことは、プレイ中の減衰には効かせない**（SPEC 5.12 改訂）。
+    # 効かせた版では、取り除いても「塞いでいない」で partial に留まり、
+    # **取り除く意味が消えた**（balance.py が 36/36 → 29/36 に落ちた）。
+    # 再発の被害は演習の外に出るのだから、効かせる先も演習の外だけ。
+    # だから封じ込めの判定は、塞いでも塞がなくても同じである
     assert stop["containment"]["verdict"] == "incorrect"
-    assert purge["containment"]["verdict"] == "partial"
+    assert purge["containment"]["verdict"] == "correct"
     assert close["containment"]["verdict"] == "correct"
 
-    # 被害は3段で下がる。**塞いで初めていちばん緩む**
+    # 被害は3段で下がる。**塞いで初めていちばん緩む** —
+    # 差が出るのは復旧地平まで伸ばした見込みのほうである
     d = [r["score"]["consequences"]["total_damage"] for r in (stop, purge, close)]
     assert d[0] > d[1] > d[2], f"3段で下がっていない: {d}"
 

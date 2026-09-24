@@ -675,7 +675,8 @@ def test_actions_do_not_name_assets_they_do_not_touch(client, any_scenario):
 
     for a in actions:
         act = sc.action_by_id[a["id"]]
-        own = set(act.targets) | set(act.investigates)
+        own = (set(act.targets) | set(act.investigates)
+               | set(act.restores) | set(act.hardens))
         text = " ".join(
             str(a.get(f) or "") for f in ("label", "group", "description")
         )

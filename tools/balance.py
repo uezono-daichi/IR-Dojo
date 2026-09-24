@@ -392,6 +392,19 @@ def _play(
         except InvalidDecision:
             continue
 
+    # **入り口を塞ぐ**（SPEC 5.12）。塞ぐ先は、**その像が名指しした資産**に
+    # 紐づける — 正しく名指しできた像だけが正しい口を塞げる。
+    # ここを入れないと、塞ぐ手を持つ盤面では**どの像も塞がない**ことになり、
+    # 見込みが全員ぶん悪化して、像どうしの差が潰れる
+    #（実測で 36/36 → 29/36 に落ちた）
+    named = set(e.state.assessment)
+    for act in sc.actions:
+        if act.hardens and set(act.hardens) <= named:
+            try:
+                e.decide(Decision(kind="action", action_id=act.id))
+            except InvalidDecision:
+                continue
+
     e.decide(Decision(kind="finish"))
     return e
 

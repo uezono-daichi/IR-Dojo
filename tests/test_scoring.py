@@ -138,9 +138,9 @@ def test_fact_metrics(scenario):
 
 def test_composite(scenario):
     r = scoring.score(play_spec_68(scenario).state, scenario)
-    assert r.policy_score == pytest.approx(0.583, abs=0.001)
-    assert r.composite_score == pytest.approx(0.548, abs=0.001)
-    assert round(r.composite_score * 100) == 55
+    assert r.policy_score == pytest.approx(0.525, abs=0.001)
+    assert r.composite_score == pytest.approx(0.531, abs=0.001)
+    assert round(r.composite_score * 100) == 53
 
 
 def test_dependency_chain_variant(scenario):
@@ -164,8 +164,8 @@ def test_dependency_chain_variant(scenario):
     assert r.consequences.evidence_preserved == pytest.approx(1.000, abs=0.001)
     # fs01 が封じ込められていないので完全度は 2/3、減衰も on_partial 止まり
     assert r.consequences.containment_completeness == pytest.approx(0.667, abs=0.001)
-    assert r.policy_score == pytest.approx(0.346, abs=0.001)
-    assert round(r.composite_score * 100) == 48
+    assert r.policy_score == pytest.approx(0.288, abs=0.001)
+    assert round(r.composite_score * 100) == 46
 
 
 def test_same_play_scores_differently_per_policy(scenario):
@@ -184,9 +184,9 @@ def test_same_play_scores_differently_per_policy(scenario):
     # ③ws-055 の分を取っていない、の3件が立つ（v1.42）
     assert got["evidence_preservation"].constraint_violations == 3
 
-    assert round(got["business_continuity"].composite_score * 100) == 55
-    assert round(got["damage_minimization"].composite_score * 100) == 56
-    assert round(got["evidence_preservation"].composite_score * 100) == 50
+    assert round(got["business_continuity"].composite_score * 100) == 53
+    assert round(got["damage_minimization"].composite_score * 100) == 52
+    assert round(got["evidence_preservation"].composite_score * 100) == 49
 
     # 事実認識層は方針に依存しない
     facts = {r.fact_score for r in got.values()}
@@ -349,6 +349,13 @@ def _play(scenario, triage, investigation, policy=None):
     `persistence` が残るので 5.8 は `on_partial` 止まりになり、
     **どちらのプレイも同じ 0.6 で積分される** — 比べたいのは調査量の差
     なのに、封じ込めの側で天井を揃えてしまうと帰結の差が潰れる。
+
+    **入り口を塞ぐところまでが「正しく止めた形」である**（v1.70）。
+    盤面に再発防止が入るまで、この見本は止めた時点で手を離していた。
+    塞がないプレイは復旧地平が丸ごと 480分のままなので、見本の被害が
+    6197 まで膨らみ、**調査量の差が天井（正規化の worst）に食われた** —
+    全部押す側は帯の外に出て 0 で並び、差は 7.7点まで潰れていた。
+    揃えるのは封じ込めの形だけでなく、**どこまでやり切ったか**である。
     """
     e = Engine(scenario, policy or scenario.meta.default_policy, None)
     for aid in list(triage) + list(investigation):
@@ -356,7 +363,8 @@ def _play(scenario, triage, investigation, policy=None):
     e.decide(
         Decision(kind="declare_assessment", assessment=["ws-042", "fs01", "ws-055"])
     )
-    for aid in ("act_rebuild_ws042", "act_shutdown_fs01", "act_isolate_ws055"):
+    for aid in ("act_rebuild_ws042", "act_shutdown_fs01", "act_isolate_ws055",
+                "act_harden_ws042"):
         e.decide(Decision(kind="action", action_id=aid))
     e.decide(Decision(kind="finish"))
     return e

@@ -750,10 +750,7 @@ def _containment_review(
     compromised = list(gt.compromised)
     persistence = list(gt.persistence)
 
-    factor = damage_mod.containment_factor(
-        contained, purged, gt, effect,
-        state.hardened_at.keys(), required_hardening(scenario),
-    )
+    factor = damage_mod.containment_factor(contained, purged, gt, effect)
     if factor == effect.on_correct_containment:
         verdict = "correct"
     elif factor == effect.on_partial:

@@ -597,8 +597,6 @@ class Engine:
                 st.eradicated_at.keys(),
                 a,
                 b,
-                st.hardened_at.keys(),
-                self.must_harden,
             ):
                 st.accumulated_damage += inc
                 st.damage_history.append(st.accumulated_damage)

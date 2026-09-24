@@ -2029,6 +2029,77 @@ actions:
 #
 # 誰が悪いという話ではない。復旧を急ぐ現場判断も、固まった端末の再起動も、
 # それ自体は正しい行動である。揮発性の証拠は、そういう善意で普通に消える。
+  # ── 復旧（SPEC 5.11）。止めたものを業務に返す。
+  #    **取り除けていなければ、攻撃者も一緒に戻ってくる。**
+  - id: act_restore_fs01
+    label: "fs01 の共有を再開する"
+    type: restore
+    phase: response
+    cost_minutes: 25
+    group: "業務に戻す"
+    restores: [fs01]
+    command: |
+      $ svcctl start --host FS01 --service lanmanserver --wait
+        started   shares 6   open handles 0   (00:02:10)
+    description: |
+      ファイルサーバの共有を再開する。利用者は再び共有領域を使える。
+
+  - id: act_restore_ws042
+    label: "ws-042 をネットワークに戻す"
+    type: restore
+    phase: response
+    cost_minutes: 15
+    group: "業務に戻す"
+    restores: [ws-042]
+    command: |
+      $ netctl release --host WS-042
+        released   (00:00:18)
+    description: |
+      端末の通信の遮断を解く。利用者は再び業務に使える。
+
+  - id: act_restore_ws107
+    label: "ws-107 をネットワークに戻す"
+    type: restore
+    phase: response
+    cost_minutes: 15
+    group: "業務に戻す"
+    restores: [ws-107]
+    command: |
+      $ netctl release --host WS-107
+        released   (00:00:16)
+    description: |
+      端末の通信の遮断を解く。利用者は再び業務に使える。
+
+  # ── 再発防止（SPEC 5.12）。**盤面の上では何も起きない。**
+  #    効くのは演習が終わったあとで、見えるのは講評の破線だけである
+  - id: act_harden_ws042
+    label: "ws-042 の自動実行を管理配下に固定する"
+    type: harden
+    phase: response
+    cost_minutes: 20
+    group: "入り口を塞ぐ"
+    hardens: [ws-042]
+    command: |
+      $ mdmctl policy apply --host WS-042 --profile autorun-lockdown
+        applied   scopes 4   drift alerts on   (00:03:20)
+    description: |
+      その端末の自動実行の設定を管理側で固定し、変更を検知するようにする。
+      利用者の作業は止まらない。
+
+  - id: act_harden_ws107
+    label: "ws-107 の自動実行を管理配下に固定する"
+    type: harden
+    phase: response
+    cost_minutes: 20
+    group: "入り口を塞ぐ"
+    hardens: [ws-107]
+    command: |
+      $ mdmctl policy apply --host WS-107 --profile autorun-lockdown
+        applied   scopes 4   drift alerts on   (00:03:18)
+    description: |
+      その端末の自動実行の設定を管理側で固定し、変更を検知するようにする。
+      利用者の作業は止まらない。
+
 timeline:
   - id: tl_accel
     at_minutes: 255
@@ -2169,7 +2240,11 @@ scoring:
       # 「2〜3割」という帯であって、25.0% という点ではない。
       # **base（350.7）も動かさない** — 動かすとどの変更が効いたのか
       # 分からなくなる（帯だけを動かせば、比は帯の側で閉じる）
-      total_damage:             { worst: 21200, best: 0 }
+      # **塞ぐ手が入ったので帯を引き直した**（SPEC 5.12 / v1.70）。
+      # 巧いプレイ 5300 → 6362（入り口を塞ぐ 20分ぶん増えた）。
+      # 作法どおり、巧いプレイが 2〜3割に来る位置に置く（6362 / 24000 = 26.5%）。
+      # **base は動かしていない** — 帯だけを動かせば比は帯の側で閉じる
+      total_damage:             { worst: 15000, best: 0 }
       # 業務影響の帯は「全資産を最序盤に停止した場合」（v1.39 の per_hour で
       # 164/h × 8時間 = 1312）と、**盤面で実際に到達できる最大**
       # （全部押して全部止める 690分のプレイで 1467）の両方を覆う値。

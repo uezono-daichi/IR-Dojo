@@ -1,5 +1,5 @@
 {
-  "fingerprint": "4f38b23de2e5b1e7b953c6a5b6cbf8b6d3ed620c63670252c74c1abd08e3f04b",
+  "fingerprint": "3bb717432467e83ec553bd7004066db8d09006f353360395a7458a5dfd5d6dbd",
   "scenarios": [
     {
       "scenario_id": "insider-exfil-suspicion-01",
@@ -124,7 +124,7 @@
           "label": "Aの対応",
           "policy_id": "business_continuity",
           "scores": {
-            "business_continuity": 97,
+            "business_continuity": 98,
             "evidence_preservation": 90,
             "damage_minimization": 88
           }
@@ -142,9 +142,9 @@
           "label": "Cの対応",
           "policy_id": "damage_minimization",
           "scores": {
-            "business_continuity": 92,
-            "evidence_preservation": 85,
-            "damage_minimization": 94
+            "business_continuity": 93,
+            "evidence_preservation": 86,
+            "damage_minimization": 95
           }
         }
       ]
@@ -187,5 +187,5 @@
       ]
     }
   ],
-  "generator": "19240a53d8e05daff63aa35bb20d31599d0839389c7b754bea0f5e0da0ab6639"
+  "generator": "03a4571924434f003441a8465ff30c1685d56ec90e5dc754a2993dbc5f1c198a"
 }

@@ -2974,7 +2974,10 @@ function blockRestore(rep) {
   if (!r) { return null; }
 
   var box = el('div', r.verdict === 'recompromised' ? 'note-warn' : 'note');
-  box.appendChild(el('h3', null, '業務に戻したもの'));
+  // 見出しは節の中身に合わせる。再発防止が入るまでは戻すことしか
+  // 載っていなかったが、いまは「塞いだ」が先頭の行である。
+  // 隣の節（止めたもの／取り除いたもの）と同じ形にしておく
+  box.appendChild(el('h3', null, '塞いだもの／戻したもの'));
 
   var g = el('div', 'summary-grid');
   if (r.hardened_labels.length || r.entry_open_labels.length) {
