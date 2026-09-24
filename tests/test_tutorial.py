@@ -396,3 +396,104 @@ def test_the_screen_does_not_say_the_attacker_came_back(client):
         assert banned not in blob, f"プレイ中に「{banned}」を告げている"
     # 構造としても、再侵害を返す欄が無いこと
     assert "recompromised" not in out, "再侵害の欄がプレイ中の応答にある"
+
+
+# ── 入り口を塞ぐ（SPEC 5.12） ────────────────────────
+
+
+def test_closing_the_entry_is_the_third_condition(client):
+    """**止めて、取り除いて、塞ぐ**（SPEC 5.12）。
+
+    利用者の求め：「復旧と**再発防止**を遊べる盤面が無い。それも遊べるように」。
+
+    入られた口が開いたままなら、止めても取り除いても同じことが起きる。
+    その被害は演習の終わったあとに出るので、**見えるのは講評の破線だけ**である。
+
+    **新しい評価軸は1本も足していない。** 差は既存の帰結（総被害）に出る。
+    """
+    def play(remove: bool, harden: bool) -> dict:
+        s = client.post("/api/session", json={
+            "scenario_id": "tutorial-02-first-response",
+            "policy_id": "business_continuity",
+            "assist_level": "assisted",
+        }).json()
+        sid = s["session_id"]
+
+        def go(body):
+            return client.post(f"/api/session/{sid}/decide", json=body).json()
+
+        for a in s["view"]["available_actions"][:3]:
+            go({"kind": "action", "action_id": a["id"]})
+        go({"kind": "advance_phase"})
+        go({"kind": "declare_assessment", "assessment": ["acct-yamada"]})
+        go({"kind": "action", "action_id": "act_reset_account"})
+        if remove:
+            go({"kind": "action", "action_id": "act_remove_forward"})
+        go({"kind": "advance_phase"})
+        if harden:
+            go({"kind": "action", "action_id": "act_harden_account"})
+        go({"kind": "action", "action_id": "act_restore_account"})
+        go({"kind": "finish"})
+        return client.get(f"/api/session/{sid}/report").json()
+
+    stop = play(False, False)
+    purge = play(True, False)
+    close = play(True, True)
+
+    assert stop["containment"]["verdict"] == "incorrect"
+    assert purge["containment"]["verdict"] == "partial"
+    assert close["containment"]["verdict"] == "correct"
+
+    # 被害は3段で下がる。**塞いで初めていちばん緩む**
+    d = [r["score"]["consequences"]["total_damage"] for r in (stop, purge, close)]
+    assert d[0] > d[1] > d[2], f"3段で下がっていない: {d}"
+
+    assert close["restore"]["entry_open"] == []
+    assert purge["restore"]["entry_open"] == ["acct-yamada"]
+
+
+def test_closing_the_entry_changes_nothing_on_the_board(client):
+    """**盤面の上では何も起きない**（SPEC 5.12）。
+
+    塞ぐ手は止めも戻しもしない。押した結果に盤面の変化を返さない。
+    ただし**空振りにもしない** — 先の見込みは動いているので、
+    「何も出てこなかった」と返すと押した意味が見えない。
+    """
+    s = client.post("/api/session", json={
+        "scenario_id": "tutorial-02-first-response",
+        "policy_id": "business_continuity",
+        "assist_level": "assisted",
+    }).json()
+    sid = s["session_id"]
+
+    def go(body):
+        return client.post(f"/api/session/{sid}/decide", json=body).json()
+
+    for a in s["view"]["available_actions"][:3]:
+        go({"kind": "action", "action_id": a["id"]})
+    go({"kind": "advance_phase"})
+    go({"kind": "declare_assessment", "assessment": ["acct-yamada"]})
+    go({"kind": "advance_phase"})
+    before = go({"kind": "action", "action_id": "act_harden_pc"})
+
+    assert before["hardened"], "塞いだことを返していない"
+    assert not before["contained"], "塞ぐ手が資産を止めている"
+    assert not before["halted"], "塞ぐ手が業務を止めている"
+    assert not before["restored"], "塞ぐ手が資産を戻している"
+
+
+def test_a_board_without_hardening_is_untouched():
+    """**塞ぐ手を持たない盤面では、この条件は無い**（SPEC 5.12）。
+
+    機構を足しても、既にある盤面の数字は1つも動かさない。
+    `required_hardening` が空集合を返すことで保証する。
+    """
+    from irdojo.schema import required_hardening
+
+    for sc in list_scenarios():
+        has = any(a.hardens for a in sc.actions)
+        need = required_hardening(sc)
+        if has:
+            assert need == {sc.world.ground_truth.patient_zero}
+        else:
+            assert need == set(), f"{sc.meta.id}: 塞ぐ手が無いのに塞ぐことを求めている"

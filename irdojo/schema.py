@@ -55,6 +55,9 @@ class ActionType(str, Enum):
     # 報告（適時性で測る類い）は依然として範囲外（SPEC 9.3）
     COMMUNICATE = "communicate"
     RESTORE = "restore"
+    # 入られた口を塞ぐ。**効くのは演習が終わったあと**なので、
+    # 盤面の上では何も起きない。見えるのは講評の破線だけ（SPEC 5.12）
+    HARDEN = "harden"
 
 
 class AssistLevel(str, Enum):
@@ -371,6 +374,9 @@ class Action(Strict):
     # 「隔離しても、端末を戻せば攻撃者も戻ってくる」は `containment_factor` の
     # 説明に書いてありながら、**盤面で一度も問われていなかった**（9.4 #5 の続き）
     restores: list[str] = []
+    # **入り口を塞ぐ**（SPEC 5.12）。止めて取り除いても、入られた口が
+    # 開いたままなら同じことが起きる。その被害は演習の終わったあとに出る
+    hardens: list[str] = []
     yields: list[str] = []
     destroys: list[str] = []
     # **時計にだけ効く保全**（SPEC 5.6.3）。この手を打ち終わった時刻から先、
@@ -388,6 +394,12 @@ class Action(Strict):
 
     @model_validator(mode="after")
     def contain_requires_targets(self) -> "Action":
+        if self.type == ActionType.HARDEN and not self.hardens:
+            raise ValueError(f"{self.id}: 塞ぐ手に hardens がありません")
+        if self.hardens and self.type != ActionType.HARDEN:
+            raise ValueError(
+                f"{self.id}: hardens は type: harden の手にだけ書けます"
+            )
         if self.type == ActionType.RESTORE and not self.restores:
             raise ValueError(f"{self.id}: 戻す手に restores がありません")
         if self.restores and self.type != ActionType.RESTORE:
@@ -1105,9 +1117,57 @@ def _validate_scenario(sc: "Scenario") -> None:
     _reject_occurrence_times_that_mark_the_trap(sc)
     _reject_broken_tutorial(sc)
     _reject_broken_restore(sc)
+    _reject_broken_hardening(sc)
 
     # 被害モデルの params
     _validate_damage_params(sc.damage)
+
+
+def required_hardening(sc: "Scenario") -> set[str]:
+    """塞がなければ見込みが緩まない入り口（SPEC 5.12）。
+
+    **塞ぐ手を1つも持たない盤面では空集合を返す。**
+    機構を足しても、既にある盤面の数字は1つも動かさない。
+    """
+    if not any(a.hardens for a in sc.actions):
+        return set()
+    return {sc.world.ground_truth.patient_zero}
+
+
+def _reject_broken_hardening(sc: "Scenario") -> None:
+    """塞ぐ手の検査（SPEC 5.12）。
+
+    **塞ぐ手を置くなら、塞ぐべき口にも届くこと。** 入られた口
+    （`patient_zero`）に届く手が1つも無いと、塞ぎようがないのに
+    「塞いでいない」で減衰が下がる — **守りようのない要求**になる。
+
+    **無実の資産にも塞ぐ手を置く。** 入り口にしか塞ぐ手が無いと、
+    手が並んだ時点で「入られたのはここだ」を配ることになる
+    （`_reject_eradication_that_maps_persistence` と同じ形の漏洩）。
+    """
+    hardens = {a.id: set(a.hardens) for a in sc.actions if a.hardens}
+    if not hardens:
+        return
+
+    known = {a.id for a in sc.world.assets}
+    for aid, targets in hardens.items():
+        missing = sorted(targets - known)
+        if missing:
+            raise ValueError(f"{aid}: 塞ぐ先が盤面に無い: {missing}")
+
+    reach = set().union(*hardens.values())
+    entry = sc.world.ground_truth.patient_zero
+    if entry not in reach:
+        raise ValueError(
+            f"塞ぐ手があるのに、入られた口に届く手がありません（{entry}）。"
+            "塞ぎようがないのに減衰だけが下がります"
+        )
+    secret = set(sc.world.ground_truth.compromised) | {entry}
+    if not reach - secret:
+        raise ValueError(
+            f"塞ぐ手の当たり先が侵害資産にしか届きません: {sorted(reach)}。"
+            "無実の資産にも塞ぐ手を置いて、囮を作ってください"
+        )
 
 
 def _reject_broken_restore(sc: "Scenario") -> None:
@@ -1321,7 +1381,7 @@ def _reject_assets_no_action_can_touch(sc: "Scenario") -> None:
     touchable: set[str] = set()
     for a in sc.actions:
         touchable |= (set(a.targets) | set(a.investigates)
-                      | set(a.eradicates) | set(a.restores))
+                      | set(a.eradicates) | set(a.restores) | set(a.hardens))
     orphans = sorted(a.id for a in sc.world.assets if a.id not in touchable)
     if orphans:
         raise ValueError(
@@ -1587,7 +1647,8 @@ def _reject_actions_that_name_other_assets(sc: "Scenario") -> None:
     by_id = sc.asset_by_id
 
     for act in sc.actions:
-        own = set(act.targets) | set(act.investigates) | set(act.restores)
+        own = (set(act.targets) | set(act.investigates)
+               | set(act.restores) | set(act.hardens))
         forbidden = sorted(secret - own)
         for field in ("label", "description", "group", "command"):
             text = getattr(act, field) or ""

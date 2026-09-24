@@ -64,6 +64,8 @@ def containment_factor(
     eradicated: Iterable[str],
     truth: GroundTruth,
     effect: ContainmentEffect,
+    hardened: Iterable[str] | None = None,
+    must_harden: Iterable[str] | None = None,
 ) -> float:
     """封じ込めの減衰係数（SPEC 5.8）。
 
@@ -88,6 +90,18 @@ def containment_factor(
     persistence = set(truth.persistence)
 
     if compromised <= c and persistence <= e:
+        # **3つ目の条件 — 入り口を塞いだか**（SPEC 5.12）。
+        #
+        # 止めて、取り除いても、**入られた口が開いたままなら同じことが起きる。**
+        # その被害は演習が終わったあとに出るので、盤面の上では見えない —
+        # 見えるのは講評の破線（復旧地平まで伸ばした見込み）である。
+        #
+        # **塞ぐ手を1つも持たない盤面では、この条件は無い。**
+        # `must_harden` が空なら、これまでと寸分変わらない。
+        # 機構を足しても、既にある盤面の数字は1つも動かさない
+        need = set(must_harden or ())
+        if need and not need <= set(hardened or ()):
+            return effect.on_partial
         return effect.on_correct_containment
     if c & compromised:
         return effect.on_partial
@@ -126,6 +140,8 @@ def project(
     eradicated: Iterable[str],
     end_minute: int,
     horizon: int,
+    hardened: Iterable[str] | None = None,
+    must_harden: Iterable[str] | None = None,
 ) -> list[float]:
     """演習を終えた時点から復旧地平 H までの、1分刻みの被害量（SPEC 5.8）。
 
@@ -138,7 +154,11 @@ def project(
     盤面上ほとんど効かなくなる。H は business_impact と共用する
     （「復旧まで」は同じ1つの前提であり、2つ置くと作者が別々に調整できてしまう）。
     """
-    return accrue(model, truth, contained, eradicated, end_minute, end_minute + horizon)
+    return accrue(
+        model, truth, contained, eradicated,
+        end_minute, end_minute + horizon,
+        hardened, must_harden,
+    )
 
 
 def accrue(
@@ -148,13 +168,18 @@ def accrue(
     eradicated: Iterable[str],
     start_minute: int,
     end_minute: int,
+    hardened: Iterable[str] | None = None,
+    must_harden: Iterable[str] | None = None,
 ) -> list[float]:
     """[start, end) の各分の被害量を返す（1分刻みの離散和）。
 
     封じ込め状態は区間内で一定とみなす。エンジンはアクション単位で
     この関数を呼ぶため、区間内で状態が変わることはない。
     """
-    factor = containment_factor(contained, eradicated, truth, model.containment_effect)
+    factor = containment_factor(
+        contained, eradicated, truth, model.containment_effect,
+        hardened, must_harden,
+    )
     out: list[float] = []
     for m in range(start_minute, end_minute):
         # 分あたりに直すため 60 で割る（base は「/時間」で与えられる）

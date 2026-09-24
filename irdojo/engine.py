@@ -98,6 +98,10 @@ class GameState(BaseModel):
     halted_at: dict[str, int] = {}
     # 戻した資産 → その時刻（SPEC 5.11）。業務影響はここで止まる
     restored_at: dict[str, int] = {}
+    # 塞いだ入り口 → その時刻（SPEC 5.12）。
+    # **盤面の上では何も起きない。** 効くのは演習が終わったあとで、
+    # 見えるのは講評の破線（復旧地平まで伸ばした見込み）だけである
+    hardened_at: dict[str, int] = {}
     # **戻した先で攻撃が再開した資産** → その時刻。
     # 取り除けていない資産を戻すと、そこで起きる。
     # これは学習者に**その場では告げない**（5.9）— 講評で初めて出る
@@ -156,6 +160,9 @@ class ActionOutcome(BaseModel):
     # 業務に戻した資産（SPEC 5.11）。**戻したことだけを言う。**
     # 戻した先で攻撃が再開したかどうかは、ここでは返さない — 講評で初めて出る（5.9）
     restored: list[str] = []
+    # 塞いだ入り口（SPEC 5.12）。**塞いだことだけを言う。**
+    # それで見込みがどれだけ減ったかは、講評で初めて出る
+    hardened: list[str] = []
     # 押す前から既に止まっていた targets。**空振りではない。**
     # 同じ資産に2つの手があるので、2手目はここに落ちる（例: 境界で遮断した
     # あとに電源を落とす）。数えないと「何も出てこなかった」が出る
@@ -203,6 +210,9 @@ class ActionOutcome(BaseModel):
             # 業務が戻っているのに「何も出てこなかった」と返ると、
             # **押した結果が見えないまま盤面だけが変わる**
             and not self.restored
+            # 塞いだ回も空振りではない。盤面は動かないが、
+            # **先の見込みは動いている**（SPEC 5.12）
+            and not self.hardened
         )
 
 
@@ -438,6 +448,12 @@ class Engine:
         assist_level: AssistLevel | None = None,
     ) -> None:
         self.scenario = scenario
+        # **塞ぐ手を1つも持たない盤面では、塞ぐことを求めない**（SPEC 5.12）。
+        # 機構を足しても、既にある盤面の数字は1つも動かさない
+        self.must_harden: set[str] = (
+            {scenario.world.ground_truth.patient_zero}
+            if any(a.hardens for a in scenario.actions) else set()
+        )
         pid = policy_id or scenario.meta.default_policy
         if pid not in scenario.policy_by_id:
             raise InvalidDecision(f"未定義の方針: {pid}")
@@ -581,6 +597,8 @@ class Engine:
                 st.eradicated_at.keys(),
                 a,
                 b,
+                st.hardened_at.keys(),
+                self.must_harden,
             ):
                 st.accumulated_damage += inc
                 st.damage_history.append(st.accumulated_damage)
@@ -716,6 +734,17 @@ class Engine:
         #     これは**その場では告げない**（5.9）。画面に出るのは
         #     「戻した」だけで、何が起きたかは講評で初めて分かる。
         #     告げてしまうと、取り除かずに戻す判断が一度も起きない。
+        # 7.3 塞ぐ（SPEC 5.12）。**盤面の上では何も起きない。**
+        #     止めるわけでも取り除くわけでもないので、押しても資産は動かない。
+        #     効くのは演習が終わったあと — 見えるのは講評の破線だけである。
+        #     押した結果が無言にならないよう、`hardened` は返す
+        hardened: list[str] = []
+        if action.type == ActionType.HARDEN:
+            before_hardened = set(st.hardened_at)
+            for asset_id in action.hardens:
+                st.hardened_at.setdefault(asset_id, end)
+            hardened = [a for a in st.hardened_at if a not in before_hardened]
+
         restored: list[str] = []
         if action.type == ActionType.RESTORE:
             truth = self.scenario.world.ground_truth
@@ -780,6 +809,7 @@ class Engine:
             eradicated=eradicated,
             halted=halted,
             restored=restored,
+            hardened=hardened,
             cascaded=cascaded,
             already=already,
             business_impact_delta=st.accumulated_business_impact - impact_before,

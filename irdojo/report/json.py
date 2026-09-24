@@ -15,7 +15,7 @@ from .. import records as records_mod
 from .. import retrospective as retro_mod
 from .. import scoring as scoring_mod
 from ..engine import GameState, compromised_now, effective_truth
-from ..schema import Scenario
+from ..schema import Scenario, required_hardening
 
 # ⑥ に出す履歴の件数。全件は records_total で数だけ伝える
 RECENT_RECORDS = 20
@@ -96,6 +96,12 @@ class RestoreReview(BaseModel):
     業務を止めたまま終えた資産があれば、それは業務影響として積み上がっている。
     """
 
+    # 塞いだ入り口（SPEC 5.12）。**塞ぐ手を持たない盤面では空**
+    hardened: list[str]
+    hardened_labels: list[str]
+    # 塞がないまま終えた入り口。ここが空でないなら、見込みは緩まない
+    entry_open: list[str]
+    entry_open_labels: list[str]
     restored: list[str]                # 業務に戻した資産
     restored_labels: list[str]
     # **取り除かずに戻したために、攻撃が再開した資産。**
@@ -479,6 +485,8 @@ def build(
         state.eradicated_at.keys(),
         state.elapsed_minutes,
         horizon,
+        state.hardened_at.keys(),
+        required_hardening(scenario),
     ):
         running += inc
         projection.append(running)
@@ -687,7 +695,7 @@ def _restore_review(state: GameState, scenario: Scenario) -> RestoreReview | Non
     **戻す手が無い盤面では出さない。** 出すと「戻す手があったのに気づかなかった」
     と読まれるが、そもそも無い。
     """
-    if not any(a.restores for a in scenario.actions):
+    if not any(a.restores or a.hardens for a in scenario.actions):
         return None
 
     assets = scenario.asset_by_id
@@ -704,7 +712,14 @@ def _restore_review(state: GameState, scenario: Scenario) -> RestoreReview | Non
     elif restored:
         verdict = "clean"
 
+    need = required_hardening(scenario)
+    hardened = sorted(a for a in state.hardened_at if a in need)
+    entry_open = sorted(need - set(state.hardened_at))
     return RestoreReview(
+        hardened=hardened,
+        hardened_labels=labels(hardened),
+        entry_open=entry_open,
+        entry_open_labels=labels(entry_open),
         restored=restored,
         restored_labels=labels(restored),
         recompromised=recompromised,
@@ -735,7 +750,10 @@ def _containment_review(
     compromised = list(gt.compromised)
     persistence = list(gt.persistence)
 
-    factor = damage_mod.containment_factor(contained, purged, gt, effect)
+    factor = damage_mod.containment_factor(
+        contained, purged, gt, effect,
+        state.hardened_at.keys(), required_hardening(scenario),
+    )
     if factor == effect.on_correct_containment:
         verdict = "correct"
     elif factor == effect.on_partial:

@@ -1335,6 +1335,7 @@ function decide(payload) {
       S.lastOutcome.eradicated = res.eradicated || [];
       S.lastOutcome.halted = res.halted || [];
       S.lastOutcome.restored = res.restored || [];
+      S.lastOutcome.hardened = res.hardened || [];
       S.lastOutcome.already = res.already || [];
       S.lastOutcome.haltsBusiness = !!res.halts_business;
       S.lastOutcome.impact = res.business_impact_delta || 0;
@@ -2041,6 +2042,7 @@ function renderResult(v) {
   var halted = o.halted || [];
   var already = o.already || [];
   var restored = o.restored || [];
+  var hardened = o.hardened || [];
   // 連絡は証拠を産まないが、空振りではない。世界のふるまいが変わっている。
   // 既に止めてある資産をもう一度止めた回も空振りではない（同じ資産に
   // 手が2つあるので普通に起きる）。元の状態に戻した回も同じで、
@@ -2061,10 +2063,10 @@ function renderResult(v) {
   var preserve = !!o.preserved;
   var empty = !notice && !preserve && !o.revealed && !stopped && !purged.length
               && !halted.length && !already.length && !o.prevented
-              && !restored.length;
+              && !restored.length && !hardened.length;
   var note = el('div', 'outcome'
     + (notice || preserve || stopped || purged.length || halted.length
-       || already.length || o.prevented || restored.length
+       || already.length || o.prevented || restored.length || hardened.length
         ? ' outcome-contained'
                               : (empty ? ' outcome-empty' : '')));
 
@@ -2130,6 +2132,19 @@ function renderResult(v) {
   /* 戻したこと（SPEC 5.11）。**言うのは「戻した」だけ。**
      戻した先で攻撃が再開したかどうかは、ここでは言わない —
      見えていないものを告げれば損失の予告になる（原則5）。講評で初めて出る。 */
+  /* 塞いだこと（SPEC 5.12）。**盤面は動かない。**
+     押しても資産は止まらず、戻りもしない。言えるのは「塞いだ」までで、
+     それでどれだけ減ったかは講評の破線で初めて分かる */
+  if (hardened.length) {
+    note.appendChild(el('div', 'outcome-msg sub',
+      '入り口を塞いだのは ' + hardened.length + ' 件。'
+      + 'この演習の中では、盤面は変わらない。'));
+    var krow = el('div', 'outcome-cascade');
+    hardened.forEach(function (a) {
+      krow.appendChild(el('span', 'chip', a.id + '\u3000' + a.label));
+    });
+    note.appendChild(krow);
+  }
   if (restored.length) {
     note.appendChild(el('div', 'outcome-msg sub',
       '業務に戻したのは ' + restored.length + ' 件。'));
@@ -2346,7 +2361,7 @@ function renderActions(v) {
             label: a.label, cost: a.cost_minutes, type: a.type,
             command: '', running: true,
             revealed: 0, unlocked: 0, contained: [], eradicated: [],
-            halted: [], restored: [], already: [],
+            halted: [], restored: [], hardened: [], already: [],
             haltsBusiness: false, impact: 0, prevented: 0, preserved: false
           };
           // 走らせている間もその場で見せる。押した瞬間に何か起きる
@@ -2962,6 +2977,10 @@ function blockRestore(rep) {
   box.appendChild(el('h3', null, '業務に戻したもの'));
 
   var g = el('div', 'summary-grid');
+  if (r.hardened_labels.length || r.entry_open_labels.length) {
+    g.appendChild(el('div', 'k', '入り口を塞いだ'));
+    g.appendChild(el('div', 'v', r.hardened_labels.join('、') || '（なし）'));
+  }
   g.appendChild(el('div', 'k', '戻した'));
   g.appendChild(el('div', 'v', r.restored_labels.join('、') || '（なし）'));
   if (r.still_halted_labels.length) {
@@ -2981,6 +3000,13 @@ function blockRestore(rep) {
   } else if (r.restored.length) {
     box.appendChild(el('p', null,
       '取り除いてから戻しているので、戻した先で攻撃は再開していません。'));
+  }
+  if (r.entry_open_labels.length) {
+    box.appendChild(el('p', null,
+      r.entry_open_labels.join('、') + ' の入り口は、開いたままです。' +
+      '止めて取り除いても、入られた口が残っていれば同じことが起きます。' +
+      'その被害は演習が終わったあとに出るので、盤面の上では見えません — ' +
+      '図の破線（復旧までの見込み）の傾きが、それです。'));
   }
   if (r.still_halted_labels.length) {
     box.appendChild(el('p', null,

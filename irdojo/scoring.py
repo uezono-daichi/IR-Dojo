@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from . import damage as damage_mod
 from .engine import GameState, compromised_now, effective_truth
-from .schema import Policy, Scenario
+from .schema import Policy, Scenario, required_hardening
 
 
 def safe_ratio(num: float, den: float, default: float = 0.0) -> float:
@@ -95,6 +95,10 @@ def consequences(state: GameState, scenario: Scenario) -> Consequences:
             state.eradicated_at.keys(),
             state.elapsed_minutes,
             horizon,
+            # 入り口を塞いだか（SPEC 5.12）。**再発の被害は演習の外に出る** —
+            # 効くのはここ、復旧地平まで伸ばした見込みの傾きである
+            state.hardened_at.keys(),
+            required_hardening(scenario),
         )
     )
 

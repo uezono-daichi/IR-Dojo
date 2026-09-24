@@ -526,6 +526,50 @@ actions:
     side_effects:
       business_impact: true
 
+  # **入り口を塞ぐ**（SPEC 5.12）。盤面の上では何も起きない —
+  # 効くのは演習が終わったあとで、見えるのは講評の破線だけである。
+  # 無実の資産にも置いて囮を作る（塞ぐ手が入り口にしか無いと、
+  # 手が並んだ時点で「入られたのはここだ」を配ることになる）
+  - id: act_harden_account
+    label: 山田のアカウントに多要素認証を必須にする
+    type: harden
+    phase: recovery
+    cost_minutes: 25
+    group: 入り口を塞ぐ
+    hardens: [acct-yamada]
+    command: |
+      $ idq policy set --user yamada@example.co.jp --require-mfa
+        applied   enrollment pending   (00:00:40)
+    description: |
+      正しい資格情報だけでは入れない状態にする。
+      本人は次回のサインインで登録を求められる。
+
+  - id: act_harden_pc
+    label: pc-02 の管理者権限を棚卸しする
+    type: harden
+    phase: recovery
+    cost_minutes: 30
+    group: 入り口を塞ぐ
+    hardens: [pc-02]
+    command: |
+      $ edrctl admins audit --host pc-02 --revoke-unused
+        reviewed 4   revoked 1   (00:02:10)
+    description: |
+      端末の管理者権限を持つアカウントを洗い、使われていないものを外す。
+
+  - id: act_harden_share
+    label: 共有ストレージの外部共有を既定で止める
+    type: harden
+    phase: recovery
+    cost_minutes: 25
+    group: 入り口を塞ぐ
+    hardens: [share-01]
+    command: |
+      $ storeq policy set --site share-01 --external-share off
+        applied   existing links 12 kept   (00:00:55)
+    description: |
+      新しく作られる共有リンクを、既定で社内限定にする。
+
   - id: act_restore_account
     label: 山田のアカウントを業務に戻す
     type: restore
@@ -841,7 +885,25 @@ tutorial:
 
       下の **復旧フェーズに移る** を押してください。
 
-  - id: s15_restore
+  - id: s15_harden
+    expect_action: act_harden_account
+    caveat: |
+      塞ぎ方は1つではありません。多要素認証のほかに、
+      入れる場所そのものを絞る、という手もあります。
+      **どこまでやるかは、次に同じことが起きたときの重さで決まります。**
+    body: |
+      戻す前に、もう1つあります。**入られた口です。**
+
+      正しい資格情報で入られました。資格情報を変えても、
+      **同じやり方でまた取られたら、同じことが起きます。**
+
+      これは**この演習の中では何も起きない手**です。押しても盤面は動きません。
+      効くのは演習が終わったあと — だから画面では何も変わりません。
+
+      **山田のアカウントに多要素認証を必須にして**ください。
+      効いているかどうかは、**講評の被害の見込み（破線）で分かります。**
+
+  - id: s16_restore
     expect_action: act_restore_account
     caveat: |
       戻す順番は1つではありません。業務への影響が大きいものから戻す、
@@ -858,7 +920,7 @@ tutorial:
       さきほど規則を削除したので、このアカウントは戻して大丈夫です。
       **山田のアカウントを業務に戻して**ください。
 
-  - id: s16_finish
+  - id: s17_finish
     expect_kind: finish
     body: |
       お疲れさまでした。

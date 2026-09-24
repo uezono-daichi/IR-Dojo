@@ -313,6 +313,7 @@ def decide(sid: str, body: Decision) -> dict[str, Any]:
             "eradicated": [],
             "halted": [],
             "restored": [],
+            "hardened": [],
             "already": [],
             "halts_business": False,
             "preserved": False,
@@ -381,6 +382,13 @@ def decide(sid: str, body: Decision) -> dict[str, Any]:
         ],
         # 業務に戻した資産（SPEC 5.11）。**戻したことだけを返す。**
         # 戻した先で攻撃が再開したかどうかは、ここでは返さない — 講評で初めて出る
+        # 塞いだ入り口（SPEC 5.12）。**塞いだことだけを返す。**
+        # それで見込みがどれだけ変わったかは講評で初めて出る
+        "hardened": [
+            {"id": a, "label": engine.scenario.asset_by_id[a].label}
+            for a in outcome.hardened
+            if a in engine.scenario.asset_by_id
+        ],
         "restored": [
             {"id": a, "label": engine.scenario.asset_by_id[a].label}
             for a in outcome.restored
