@@ -2070,6 +2070,40 @@ actions:
     description: |
       端末の通信の遮断を解く。利用者は再び業務に使える。
 
+  - id: act_restore_ws055
+    label: "ws-055 をネットワークに戻す"
+    type: restore
+    phase: response
+    cost_minutes: 15
+    group: "業務に戻す"
+    restores: [ws-055]
+    command: |
+      $ netctl release --host WS-055
+        released   (00:00:17)
+    description: |
+      端末の通信の遮断を解く。会議室の共用端末が再び使える。
+
+  # **止めた資産には、戻す手があること。** 止められるのに戻せない資産が
+  # 混ざっていると、学習者は「戻せないほう」を避けて止めるようになり、
+  # 止める手の選択が**盤面の都合**で決まる。dc01 は依存の根なので、
+  # ここを戻せるかどうかで「根を落とす」判断の値段がまるごと変わる
+  - id: act_restore_dc01
+    label: "dc01 を起動し直して業務に戻す"
+    type: restore
+    phase: response
+    cost_minutes: 30
+    group: "業務に戻す"
+    restores: [dc01]
+    command: |
+      $ Start-VM -Name DC01 -Wait
+        DC01: running   services 41/41   (00:06:40)
+
+      $ dcdiag /s:DC01 /q
+        no errors   (00:04:55)
+    description: |
+      停止したドメインコントローラを起動し直し、認証と名前解決を復帰させる。
+      ぶら下がっている資産は、これが戻るまで実質使えない。
+
   # ── 再発防止（SPEC 5.12）。**盤面の上では何も起きない。**
   #    効くのは演習が終わったあとで、見えるのは講評の破線だけである
   - id: act_harden_ws042

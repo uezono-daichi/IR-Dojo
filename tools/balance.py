@@ -96,6 +96,12 @@ class Profile:
     # 名指ししなかった」という失敗が一度も測れない
     # （wanderer / wanderer_clear と同じ作り方の対照）
     writes_off_empty_handed: bool = False
+    # 止めたものを業務に戻すところまでやるか（SPEC 5.11）。
+    # **これが無いと、戻す手は盤面に置かれても一度も押されない。**
+    # `tools/balance.py` には v1.70 まで `restore` の語が1つも無く、
+    # 戻す手を持つ盤面でも判定は素通りしていた — 弱い相手しか
+    # 作らなかったときに起きる、いつもの見逃し方である
+    restores_halted: bool = False
     # 調査を1手も押さない像か。「調べる意味はあるか」の判定は、
     # この印が付いた像と付いていない像の**全対戦**で見る。
     # 1本だけ押して降りる像（shallow）はここに入らない —
@@ -266,6 +272,20 @@ PROFILES = [
     Profile("frugal_thorough", "見切らずに戻る",
             "同じ順で、空振りに終わった資産にもう一度手を入れた場合",
             _exhaustive, eradicates_named=True),
+    # **戻す像**（SPEC 5.11 / v1.70）。skilled と**調査も封じ込めも
+    # 1手違わない**対照で、違うのは止めたものを業務に戻したかどうかだけ。
+    # これが無いと「戻す手に値打ちがあるか」が測れない —
+    # 盤面に置いた手が一度も押されないなら、それは無いのと同じである
+    Profile("restorer", "取り除いてから戻す",
+            "同じ調査と封じ込めのあと、止めたものを業務に戻した場合", _skilled,
+            stop_when_confident=SKILLED_STOPS, eradicates_named=True,
+            restores_halted=True),
+    # restorer と**取り除いたかどうかだけが違う**対照。
+    # 5.11 の中核（取り除かずに戻すと、攻撃者も戻ってくる）は、
+    # この対が無いと盤面で一度も問われない
+    Profile("restorer_halfway", "取り除かずに戻す",
+            "通信を断つところまでで止め、そのまま業務に戻した場合", _skilled,
+            stop_when_confident=SKILLED_STOPS, restores_halted=True),
 ]
 
 
@@ -309,6 +329,7 @@ def _play(
     writes_off_empty_handed: bool = False,
     contains_root: bool = False,
     eradicates_named: bool = False,
+    restores_halted: bool = False,
     names_everything: bool = False,
     containment: list[str] | None = None,
     assessment: list[str] | None = None,
@@ -400,6 +421,22 @@ def _play(
     named = set(e.state.assessment)
     for act in sc.actions:
         if act.hardens and set(act.hardens) <= named:
+            try:
+                e.decide(Decision(kind="action", action_id=act.id))
+            except InvalidDecision:
+                continue
+
+    # **業務に戻す**（SPEC 5.11）。戻す先は**自分が止めたもの**である。
+    # 判定でも ground_truth でもなく、止まっている資産を見て押す —
+    # エンジン自身が「止まっていないものは戻せない」と決めている。
+    # 取り除けているかどうかは**見ない**。それが見えていたら、
+    # 5.11 が教えたい失敗（取り除かずに戻す）は誰も踏まない
+    if restores_halted:
+        for act in sc.actions:
+            if not act.restores:
+                continue
+            if not set(act.restores) & set(e.state.halted_at):
+                continue
             try:
                 e.decide(Decision(kind="action", action_id=act.id))
             except InvalidDecision:
@@ -555,6 +592,7 @@ def run_profile(sc: Scenario, prof: Profile, notices: list[str]) -> Run:
               writes_off_empty_handed=prof.writes_off_empty_handed,
               contains_root=prof.contains_root,
               eradicates_named=prof.eradicates_named,
+              restores_halted=prof.restores_halted,
               names_everything=prof.names_everything)
     st = e.state
     r = Run(
@@ -1531,6 +1569,66 @@ def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
             f"止めるだけ {half.damage:.0f}（{half.minutes}分） vs "
             f"根絶まで {full.damage:.0f}（{full.minutes}分） = {ratio:.2f}倍"
             "（狙い 1.5倍以上。調査は両方同一）",
+        ))
+
+    # ─── 業務に戻す（SPEC 5.11 / v1.70） ───
+    # **この3本は戻す手を持つ盤面にしか出ない。** 持たない盤面では
+    # 何も言わない（塞ぐ手の扱いと同じ）。
+    #
+    # v1.70 まで、この道具には `restore` の語が1つも無かった。
+    # 戻す手を盤面に置いても、どの像も押さないので判定は素通りする —
+    # **緩めたのではなく、相手を作らなかった**ときに起きる見逃し方である
+    if any(a.restores for a in sc.actions):
+        # 止められるのに戻せない資産があると、学習者は「戻せないほう」を
+        # 避けて止めるようになる。**止める手の選択が盤面の都合で決まる。**
+        # 実際 v1.70 の最初の版は ws-055 と dc01 を戻せないまま出していて、
+        # 戻す像を作って初めて見つかった
+        haltable = {
+            t for a in sc.actions
+            if a.type == ActionType.CONTAIN and a.side_effects.business_impact
+            for t in a.targets
+        }
+        restorable = {r for a in sc.actions for r in a.restores}
+        orphans = sorted(haltable - restorable)
+        out.append(Check(
+            not orphans,
+            "止めた資産には、戻す手がある",
+            f"止められる {len(haltable)}件 / 戻せる {len(restorable & haltable)}件"
+            + (f"。戻せない: {orphans}" if orphans else ""),
+        ))
+
+    has_restore = any(a.restores for a in sc.actions)
+    if has_restore and ("restorer", False) in runs and ("restorer_halfway", False) in runs:
+        rs, rh = runs[("restorer", False)], runs[("restorer_halfway", False)]
+        half = runs[("skilled_halfway", False)]
+        # **取り除かずに戻すと、攻撃者も戻ってくる**（5.11 の中核）。
+        # 見るのは2つ — 戻したことで悪化したか（再侵害が実際に起きたか）と、
+        # 取り除いてから戻した場合との開きが残っているか。
+        # 前者だけだと「戻すのに時間がかかった」でも通ってしまう
+        ratio = rh.damage / rs.damage if rs.damage else 0.0
+        out.append(Check(
+            rh.damage > half.damage and ratio >= 1.5,
+            "取り除かずに戻すと、攻撃が再開する",
+            f"戻さずに終えた {half.damage:.0f} → 戻した {rh.damage:.0f}"
+            f"（{'増えた' if rh.damage > half.damage else '増えていない'}）"
+            f" / 取り除いてから戻した {rs.damage:.0f} = {ratio:.2f}倍"
+            "（狙い 1.5倍以上。調査は3つとも同一）",
+        ))
+
+        # **戻さないことも1つの判断である**（5.11）。押せば必ず得になる手は
+        # 判断ではなく作業なので、方針によって損になる側が要る。
+        # 符号で見る — 何点という値ではなく、**割れているか**だけが主張である
+        sk = runs[("skilled", False)]
+        diffs = {
+            pol.id: rs.by_policy[pol.id]["composite"] - sk.by_policy[pol.id]["composite"]
+            for pol in sc.policies
+        }
+        out.append(Check(
+            max(diffs.values()) > 0 and min(diffs.values()) < 0,
+            "戻すかどうかは方針で割れる",
+            f"戻した場合の増減: {diffs}"
+            "（得になる方針と損になる方針が両方要る。"
+            "どの方針でも得なら、それは判断ではなく作業である）",
         ))
 
     # 根絶そのものは物理的に必要だが、**どの根絶手を取るか**は
