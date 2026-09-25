@@ -217,6 +217,14 @@ policies:
       - type: forbid_action
         action_ids: [act_reset_acct_mori]
         message: "資格情報の入れ替えでは、既に発行された更新トークンは失効しません"
+      # **戻す手にも方針は効く**（SPEC 5.11 / v1.73）。ブリーフィングの
+      # 「テナントの側で確実に断つこと」は、断った口を演習の中で開け直さない
+      # ことまで含んでいる。この制約が無いと、戻す手はどの方針でも得になり
+      # **判断ではなく作業**になる（「戻すかどうかは方針で割れる」が落ちる）。
+      # 業務継続にとっては、同じ手が最も値打ちのある1手である
+      - type: forbid_action
+        action_ids: [act_lift_tenant_lock]
+        message: "テナントの側で断った口を、この演習の中で開け直しています"
 
 evidence:
   - id: ev_001
@@ -1673,6 +1681,132 @@ actions:
     side_effects:
       business_impact: true
 
+  # ── 復旧（SPEC 5.11）。**止めたものを業務に戻す手。**
+  #    並びは依存の順 — テナントの制限が残っていると、その下は戻らない
+  - id: act_lift_tenant_lock
+    label: "テナント全体にかけた同意の制限を解く"
+    type: restore
+    phase: response
+    cost_minutes: 20
+    group: "業務に戻す"
+    restores: [tenant]
+    command: |
+      $ idctl tenant consent-policy set --user-consent allowed
+        applied   (00:01:40)
+    description: |
+      利用者が自分で外部の連携に許可を出せない状態を元に戻す。
+      申請を待っていた部門の作業が再び進むようになる。
+
+  - id: act_reenable_acct_admin
+    label: "テナント管理者アカウントを再び使えるようにする"
+    type: restore
+    phase: response
+    cost_minutes: 10
+    group: "業務に戻す"
+    restores: [acct-admin]
+    command: |
+      $ idctl user unblock-signin --user kishi-adm@example.com
+        accountEnabled : true   (00:00:40)
+    description: |
+      そのアカウントのサインインを再び通す。管理の作業を再開できる。
+
+  - id: act_reenable_acct_mori
+    label: "営業部アカウントを再び使えるようにする"
+    type: restore
+    phase: response
+    cost_minutes: 10
+    group: "業務に戻す"
+    restores: [acct-mori]
+    command: |
+      $ idctl user unblock-signin --user mori@example.com
+        accountEnabled : true   (00:00:40)
+    description: |
+      そのアカウントのサインインを再び通す。本人は業務に戻れる。
+
+  - id: act_restore_mailbox_access
+    label: "クラウドメールにかけた連携の制限を解く"
+    type: restore
+    phase: response
+    cost_minutes: 15
+    group: "業務に戻す"
+    restores: [mailbox]
+    command: |
+      $ mailctl app-access set --scope tenant --state allowed
+        applied   (00:01:20)
+    description: |
+      外部の連携からこの領域へ届く経路を止めていた設定を外し、
+      元の状態に戻す。
+
+  - id: act_restore_app_relay
+    label: "差出人整理アシスタントの連携を元に戻す"
+    type: restore
+    phase: response
+    cost_minutes: 15
+    group: "業務に戻す"
+    restores: [app-relay]
+    command: |
+      $ idctl app-access set --app 7f3c-relay --state allowed
+        applied   (00:01:10)
+    description: |
+      その連携に与えていた許可を元に戻す。利用者は再びその機能を使える。
+
+  - id: act_restore_app_scan
+    label: "契約書点検サービスの連携を元に戻す"
+    type: restore
+    phase: response
+    cost_minutes: 15
+    group: "業務に戻す"
+    restores: [app-scan]
+    command: |
+      $ idctl app-access set --app 2b90-scan --state allowed
+        applied   (00:01:10)
+    description: |
+      その連携に与えていた許可を元に戻す。利用者は再びその機能を使える。
+
+  # ── 再発防止（SPEC 5.12）。**盤面の上では何も起きない。**
+  #    効くのは演習が終わったあとで、見えるのは講評の破線だけである
+  - id: act_harden_acct_mori
+    label: "営業部アカウントが外部へ許可を出すとき、管理者の承認を挟むようにする"
+    type: harden
+    phase: response
+    cost_minutes: 20
+    group: "経路を塞ぐ"
+    hardens: [acct-mori]
+    command: |
+      $ idctl consent-policy bind --user mori@example.com --profile admin-review
+        bound   pending requests queued 0   (00:02:30)
+    description: |
+      その利用者が外部の連携へ許可を出す操作に、管理者の確認を必ず挟む。
+      承認された連携はこれまでどおり使える。
+
+  - id: act_harden_acct_admin
+    label: "テナント管理者アカウントの操作に、追加の確認を必ず求めるようにする"
+    type: harden
+    phase: response
+    cost_minutes: 20
+    group: "経路を塞ぐ"
+    hardens: [acct-admin]
+    command: |
+      $ idctl policy set --user kishi-adm@example.com --mfa always \
+          --trusted-network off
+        applied   sessions revoked 1   (00:02:10)
+    description: |
+      そのアカウントで行う操作に、接続元によらず追加の確認を必ず求める。
+      管理の手順そのものは変わらない。
+
+  - id: act_harden_app_board
+    label: "会議室予約コネクタに付いている権限を、要る範囲まで落とす"
+    type: harden
+    phase: response
+    cost_minutes: 20
+    group: "経路を塞ぐ"
+    hardens: [app-board]
+    command: |
+      $ idctl app-scope reduce --app 51ad-board --profile least-privilege
+        applied   scopes 6 -> 2   (00:03:40)
+    description: |
+      その連携に与えている権限を、機能に要る範囲まで絞る。
+      利用者から見た動きは変わらない。
 phases:
   - id: investigation
     label: "調査"
@@ -1697,8 +1831,15 @@ timeline:
         朝より速い勢いで連絡が来ていて、こちらの窓口が追いつきません。」
     heralds: acceleration
 
+  # **280分は再導出した数字である**（v1.73）。255分だった頃、
+  # 証拠保全にとって最良の封じ込め（丁寧な根絶）は 250分で終わっていて、
+  # **5分差でこの出来事を避けていた。** 盤面に復旧と再発防止が入って
+  # 対応フェーズが伸びると、同じプレイが 270分になり、避けられなくなる。
+  # すると証拠を守る手の値打ちが消え、証拠保全は業務継続と同じ組に着地した
+  #（「方針ごとに、封じ込めの順位が違う」が落ちた）。
+  # **出来事の時刻も、盤面を変えれば腐る。**
   - id: tl_retention_signin
-    at_minutes: 255
+    at_minutes: 280
     label: "ログ基盤チームから連絡"
     text: |
       「日次のパージが走りました。保持期間の設定どおりの動作です。
@@ -1824,7 +1965,7 @@ scoring:
       - containment_completeness
     business_impact_horizon_minutes: 480
     normalization:
-      total_damage:             { worst: 18000, best: 0 }
+      total_damage:             { worst: 11000, best: 0 }
       # 帯の上端は「盤面で到達しうる最悪」に合わせる。1600 にしていたとき、
       # 依存の根を止める3つのプレイ（1976 / 2071 / 2273）が全部 0点に
       # 張り付いて、互いの差が消えていた

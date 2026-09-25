@@ -902,26 +902,42 @@ def test_the_tenant_wide_signout_is_forbidden_where_the_model_cannot_charge_it(b
     assert not _named(balance.report(loose), "同じ行動列が方針で違う評価になる")["ok"]
 
 
-def _best_plan_damage(balance, sc, policy_id: str) -> tuple[int, float]:
-    """その方針の最良の封じ込めで解いたときの（経過, 被害）。
+def _best_containment(balance, sc, policy_id: str) -> tuple[str, ...]:
+    """その方針が選ぶ封じ込めの組（3×3 の入れ替え表が採るのと同じ組）。"""
+    covering = {
+        c: v for c, v in balance.containment_sweep(sc).items()
+        if balance._covers_compromised(sc, c)
+    }
+    return max(covering.items(), key=lambda kv: kv[1][policy_id])[0]
 
-    3×3 の入れ替え表（`policy_swap`）が採るのと同じ組・同じ前提を採る。
+
+def _plan_damage(balance, sc, policy_id: str, combo=None) -> tuple[int, float]:
+    """その方針でその組を解いたときの（経過, 被害）。
+
     講評の文言を測るには点ではなく生の被害が要るので、ここだけ別に組む。
+
+    **組を外から渡せるようにしてある**（v1.73）。制約の形だけを変えた対照で
+    組まで `max` に選び直させると、**比べているものが「制約の形」から
+    「どの組が勝つか」へずれる。** 実際そうなった — 盤面に復旧と再発防止が
+    入って点が僅かに動いた途端、2つの腕が別々の組を選び、
+    前提の値段（35分）ではなく組の違いを測っていた。
+    戻す像の対照と同じ理屈で、**変えていいのは1つだけ**である。
     """
     from irdojo import retrospective, scoring
 
     pol = next(p for p in sc.policies if p.id == policy_id)
     base = balance._skilled(sc)
-    covering = {
-        c: v for c, v in balance.containment_sweep(sc).items()
-        if balance._covers_compromised(sc, c)
-    }
-    combo = max(covering.items(), key=lambda kv: kv[1][policy_id])[0]
+    if combo is None:
+        combo = _best_containment(balance, sc, policy_id)
     prep = retrospective.policy_prerequisites(sc, pol, base, list(combo))
     e = balance._play(sc, base + prep, [], stop=False, patience=None,
                       weighs_refutations=True, contains_everything=False,
                       containment=list(combo))
     return e.state.elapsed_minutes, scoring.score(e.state, sc, pol).consequences.total_damage
+
+
+def _best_plan_damage(balance, sc, policy_id: str) -> tuple[int, float]:
+    return _plan_damage(balance, sc, policy_id)
 
 
 def test_the_second_scenario_replay_hint_is_not_a_lie(balance):
@@ -977,11 +993,20 @@ def test_the_free_form_of_the_preservation_constraint_makes_that_hint_hollow(bal
             if c["type"] == "require_capture_of_target":
                 c["type"] = "require_before"
 
+    from irdojo.loader import load_scenario
+
+    real = load_scenario("oauth-consent-abuse-01")
     old = load_scenario_text(yaml.safe_dump(data, allow_unicode=True))
+
+    # **変えていいのは制約の形だけ。** 証拠保全が実際に選ぶ組を本物の盤面から
+    # 取り、同じ組を緩い盤面でも解かせる。組まで選び直させると、
+    # 測っているものが「前提の値段」から「どの組が勝つか」へずれる
+    combo = _best_containment(balance, real, "evidence_preservation")
     _bc_min, bc_dmg = _best_plan_damage(balance, old, "business_continuity")
-    _ep_min, ep_dmg = _best_plan_damage(balance, old, "evidence_preservation")
+    _ep_min, ep_dmg = _plan_damage(balance, old, "evidence_preservation", combo)
     assert ep_dmg <= bc_dmg * 1.05, (
         "自由な形の制約でも伸びが測れてしまう。制約型の選び直しは効いていない"
+        f"（{ep_dmg:.0f} vs {bc_dmg:.0f}・組 {combo}）"
     )
 
 

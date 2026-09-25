@@ -2034,6 +2034,152 @@ actions:
     side_effects:
       business_impact: false
 
+  # ── 復旧（SPEC 5.11）。**止めたものを業務に戻す手。**
+  #    並びは依存の順 — 保管庫が戻らないと、配信の仕組みは動かない
+  - id: act_resume_repo01
+    label: "パッケージ保管庫を再び使えるようにする"
+    type: restore
+    phase: response
+    cost_minutes: 15
+    group: "業務に戻す"
+    restores: [repo01]
+    command: |
+      $ svcctl start --host REPO01 --service repod --wait
+        started   indexes 4/4   (00:02:50)
+    description: |
+      保管庫の受け渡しを再開する。ここにあるものを取りに来る仕組みが、
+      再び取りに来られるようになる。
+
+  # **この盤面でいちばん重い戻す手である。** 押した先で何が配られるかは、
+  # ここまでに何をしたかで決まる。手そのものは、それを教えない
+  - id: act_resume_dist01
+    label: "構成管理サーバの配信を再開する"
+    type: restore
+    phase: response
+    cost_minutes: 30
+    group: "業務に戻す"
+    restores: [dist01]
+    command: |
+      $ distctl service start --host DIST01 --wait
+        started   agents reconnected 214/214   (00:06:10)
+
+      $ distctl ring status --all
+        ring-0 active   ring-1 active   ring-2 active
+    description: |
+      配信の仕組みを動かし直す。保管庫にあるものが、対象の端末へ
+      いつもの順で配られる状態に戻る。
+
+  - id: act_return_eng01
+    label: "設計部端末を業務に戻す"
+    type: restore
+    phase: response
+    cost_minutes: 15
+    group: "業務に戻す"
+    restores: [ws-eng01]
+    command: |
+      $ netctl release --host WS-ENG01
+        released   (00:00:22)
+    description: |
+      端末の通信の遮断を解く。利用者は再び業務に使える。
+
+  - id: act_return_mgmt01
+    label: "運用作業端末を業務に戻す"
+    type: restore
+    phase: response
+    cost_minutes: 15
+    group: "業務に戻す"
+    restores: [mgmt01]
+    command: |
+      $ netctl release --host MGMT01
+        released   (00:00:20)
+    description: |
+      端末の通信の遮断を解く。運用の作業を再開できる。
+
+  - id: act_return_sales
+    label: "営業部端末を業務に戻す"
+    type: restore
+    phase: response
+    cost_minutes: 15
+    group: "業務に戻す"
+    restores: [ws-sales]
+    command: |
+      $ netctl release --host WS-SALES
+        released   (00:00:21)
+    description: |
+      端末の通信の遮断を解く。利用者は再び業務に使える。
+
+  - id: act_return_acct
+    label: "経理部端末を業務に戻す"
+    type: restore
+    phase: response
+    cost_minutes: 15
+    group: "業務に戻す"
+    restores: [ws-acct]
+    command: |
+      $ netctl release --host WS-ACCT
+        released   (00:00:19)
+    description: |
+      端末の通信の遮断を解く。利用者は再び業務に使える。
+
+  - id: act_return_lobby
+    label: "受付の共用端末を業務に戻す"
+    type: restore
+    phase: response
+    cost_minutes: 10
+    group: "業務に戻す"
+    restores: [ws-lobby]
+    command: |
+      $ netctl release --host WS-LOBBY
+        released   (00:00:18)
+    description: |
+      端末の通信の遮断を解く。受付の手続きに再び使える。
+
+  # ── 再発防止（SPEC 5.12）。**盤面の上では何も起きない。**
+  #    効くのは演習が終わったあとで、見えるのは講評の破線だけである
+  - id: act_harden_dist01
+    label: "配信に載せられる操作を、承認された変更の枠に限る"
+    type: harden
+    phase: response
+    cost_minutes: 25
+    group: "経路を塞ぐ"
+    hardens: [dist01]
+    command: |
+      $ distctl policy set --require-change-window --require-approver 2 \
+          --deny-manual-push
+        applied   pending pushes rejected 0   (00:04:30)
+    description: |
+      配信に載せる操作を、承認された変更の枠の中だけで行えるようにし、
+      枠の外からの手動の投入を断る。定例の配信はそのまま流れる。
+
+  - id: act_harden_repo01
+    label: "保管庫に登録できるものを、署名の検証を通ったものに限る"
+    type: harden
+    phase: response
+    cost_minutes: 25
+    group: "経路を塞ぐ"
+    hardens: [repo01]
+    command: |
+      $ repoctl policy set --require-signature --trusted-keys corp-build \
+          --reject-unsigned
+        applied   existing entries re-verified 1,284   (00:11:40)
+    description: |
+      保管庫へ登録できるものを、社内の作成の仕組みが署名したものだけに限る。
+      既に置かれているものも、この設定で検証し直される。
+
+  - id: act_harden_mgmt01
+    label: "運用作業端末からの操作に、追加の確認を必ず求めるようにする"
+    type: harden
+    phase: response
+    cost_minutes: 20
+    group: "経路を塞ぐ"
+    hardens: [mgmt01]
+    command: |
+      $ idpctl policy set --host MGMT01 --mfa always --trusted-network off
+        applied   sessions revoked 2   (00:03:20)
+    description: |
+      その端末から行う操作に、接続元によらず追加の確認を必ず求める設定にする。
+      運用の手順そのものは変わらない。
+
 # 時間が経つと向こうから入ってくること（SPEC 5.10）。
 # どれも学習者に不利にしか働かない。奪うか、費用の変化を告げるか。
 #
@@ -2158,7 +2304,11 @@ scoring:
       - containment_completeness
     business_impact_horizon_minutes: 480
     normalization:
-      total_damage:             { worst: 20000, best: 0 }
+      # 巧いプレイが**経路を塞ぐところまで**行くようになり（5.12）、
+      # 復旧地平が半分になって被害が 4,170 → 2,086 に下がった。
+      # 8.2 手順7 どおり再導出する（v1.73）。**手で書いた数字は、
+      # 盤面を変えた瞬間に腐る。**
+      total_damage:             { worst: 8700,  best: 0 }
       # 盤面で到達できる最大は「全部押して全部止める」の 1308。
       # 広すぎる帯は差を潰し、狭すぎる帯は上位を 0 で並べる（6.4）
       business_impact:          { worst: 1400,  best: 0 }
