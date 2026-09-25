@@ -23,7 +23,7 @@ import argparse
 import itertools
 import json
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable
 
 from irdojo import loader, retrospective, scoring
@@ -286,6 +286,15 @@ PROFILES = [
     Profile("restorer_halfway", "取り除かずに戻す",
             "通信を断つところまでで止め、そのまま業務に戻した場合", _skilled,
             stop_when_confident=SKILLED_STOPS, restores_halted=True),
+    # **止めることを避ける盤面では、巧い像は戻すものを持たない**（v1.71）。
+    # 制御の盤面の巧いプレイは、運転を止めずに経路を絞るほうを選ぶので、
+    # 止まっているのは端末1台だけ — そこで「戻すかどうか」を測っても
+    # 3方針とも増減 0 になる。**判断が無いのではなく、その像に無い。**
+    # 戻すかどうかが本当に問われるのは、**止めた側**のプレイである
+    Profile("restorer_root", "根元まで止めて、取り除いて戻す",
+            "依存の根まで止めて取り除いたあと、止めたものを業務に戻した場合",
+            _skilled, stop_when_confident=SKILLED_STOPS, contains_root=True,
+            eradicates_named=True, restores_halted=True),
 ]
 
 
@@ -1617,17 +1626,35 @@ def checks(sc: Scenario, runs: dict[tuple[str, bool], Run]) -> list[Check]:
 
         # **戻さないことも1つの判断である**（5.11）。押せば必ず得になる手は
         # 判断ではなく作業なので、方針によって損になる側が要る。
-        # 符号で見る — 何点という値ではなく、**割れているか**だけが主張である
-        sk = runs[("skilled", False)]
-        diffs = {
-            pol.id: rs.by_policy[pol.id]["composite"] - sk.by_policy[pol.id]["composite"]
-            for pol in sc.policies
-        }
+        # 符号で見る — 何点という値ではなく、**割れているか**だけが主張である。
+        #
+        # **対は1組ではない。** 止めることを避ける盤面（制御系）では、
+        # 巧い像は端末1台しか止めておらず、戻すかどうかの判断がその像に無い
+        # （3方針とも増減 0 になる）。戻すかどうかが本当に問われるのは
+        # **止めた側**のプレイなので、止めた量の違う対を並べて、
+        # **どれかで割れていれば良し**とする。全部で割れることは求めない —
+        # 止めていない像で割れるはずがない
+        # **対照はその場で作る。** 「戻す以外が1つも違わない双子」を
+        # 名簿に置くと、戻す像の数だけ対の像が要る。像の設定から
+        # `restores_halted` だけを落として走らせれば、定義上ずれようがない
+        splits = {}
+        for prof in PROFILES:
+            if not prof.restores_halted:
+                continue
+            after = (prof.key, False)
+            if after not in runs:
+                continue
+            before = run_profile(sc, replace(prof, restores_halted=False), [])
+            splits[prof.label] = {
+                pol.id: runs[after].by_policy[pol.id]["composite"]
+                - before.by_policy[pol.id]["composite"]
+                for pol in sc.policies
+            }
         out.append(Check(
-            max(diffs.values()) > 0 and min(diffs.values()) < 0,
+            any(max(d.values()) > 0 and min(d.values()) < 0 for d in splits.values()),
             "戻すかどうかは方針で割れる",
-            f"戻した場合の増減: {diffs}"
-            "（得になる方針と損になる方針が両方要る。"
+            " / ".join(f"{lab} から戻した増減: {d}" for lab, d in splits.items())
+            + "（どれか1つで、得になる方針と損になる方針が両方あること。"
             "どの方針でも得なら、それは判断ではなく作業である）",
         ))
 

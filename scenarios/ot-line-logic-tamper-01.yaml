@@ -2078,6 +2078,152 @@ actions:
     side_effects:
       business_impact: false
 
+  # ── 復旧（SPEC 5.11）。**止めたものを業務に戻す手。**
+  #    並びは依存の順にしてある — 安全計装が戻るまでラインは運転できず、
+  #    基盤サーバが戻るまでぶら下がる端末は実質使えない。
+  #    順を違えて押しても、依存で引き直されて元の木阿弥になる
+  - id: act_resume_sis01
+    label: "安全計装を起動し直して、運転の条件を戻す"
+    type: restore
+    phase: response
+    cost_minutes: 20
+    group: "業務に戻す"
+    restores: [sis01]
+    command: |
+      $ safetyctl start --confirm
+        safety system: ONLINE   14 e-stop / 12 interlock / 0 bypass  (00:03:40)
+
+      $ safetyctl prooftest --scope startup
+        24/24 passed  (00:12:10)
+    description: |
+      安全計装を起動し直し、立ち上げ時の確認を通す。
+      これが戻らない限り、ラインは運転を続けられない。
+
+  - id: act_resume_ctl01
+    label: "ctl01 を起動し直して業務に戻す"
+    type: restore
+    phase: response
+    cost_minutes: 20
+    group: "業務に戻す"
+    restores: [ctl01]
+    command: |
+      $ Start-VM -Name CTL01 -Wait
+        CTL01: running   services 33/33  (00:05:20)
+
+      $ ctlctl health --all
+        time sync ok   tag catalog ok   auth ok   (00:03:10)
+    description: |
+      制御系の土台になっているサーバを起動し直す。
+      ぶら下がっている資産は、これが戻るまで実質使えない。
+
+  - id: act_resume_jump01
+    label: "jump01 を制御ネットワークに戻す"
+    type: restore
+    phase: response
+    cost_minutes: 10
+    group: "業務に戻す"
+    restores: [jump01]
+    command: |
+      $ swctl port enable --switch sw-dmz-01 --port Gi1/0/8
+        port up  (00:00:35)
+    description: |
+      踏み台の通信を元に戻す。ベンダの遠隔作業が再びできるようになる。
+
+  - id: act_resume_ews01
+    label: "ews01 を制御ネットワークに戻す"
+    type: restore
+    phase: response
+    cost_minutes: 10
+    group: "業務に戻す"
+    restores: [ews01]
+    command: |
+      $ swctl port enable --switch sw-ot-02 --port Gi1/0/3
+        port up  (00:00:33)
+    description: |
+      端末の通信を元に戻す。予定されている他ラインの改造作業を再開できる。
+
+  - id: act_resume_hmi02
+    label: "hmi02 を制御ネットワークに戻す"
+    type: restore
+    phase: response
+    cost_minutes: 10
+    group: "業務に戻す"
+    restores: [hmi02]
+    command: |
+      $ swctl port enable --switch sw-ot-01 --port Gi1/0/12
+        port up  (00:00:31)
+    description: |
+      端末の通信を元に戻す。オペレータが再びラインの値を見られるようになる。
+
+  # **この盤面でいちばん高い戻す手である。** 止めたラインは押した瞬間には
+  # 戻らない — 立ち上げ直しに要る時間が、そのまま生産の止まっている時間になる。
+  # 値段が安いと「とりあえず止めて、あとで戻す」が無料の選択肢になり、
+  # ラインを止めるかどうかという、この盤面の中心の判断が消える
+  - id: act_restart_line11
+    label: "ラインを立ち上げ直して運転に戻す"
+    type: restore
+    phase: response
+    cost_minutes: 210
+    group: "業務に戻す"
+    restores: [plc-11]
+    command: |
+      $ opsctl line start --line 11 --mode normal
+        interlock check   : ok
+        feed purge        : 62 min
+        temperature ramp  : 94 min
+        first-article     : 3 lots discarded
+        line running  (03:26:40)
+    description: |
+      止めた充填ラインを立ち上げ直して運転に戻す。原料の入れ替えと
+      温度の立ち上げに時間がかかり、立ち上がりの分は製品にならない。
+      戻るまでの間、生産は止まったままである。
+
+  # ── 再発防止（SPEC 5.12）。**盤面の上では何も起きない。**
+  #    効くのは演習が終わったあとで、見えるのは講評の破線だけである
+  - id: act_harden_jump01
+    label: "保守接続の追加確認を、接続元によらず必ず求めるようにする"
+    type: harden
+    phase: response
+    cost_minutes: 25
+    group: "入り口を塞ぐ"
+    hardens: [jump01]
+    command: |
+      $ idpctl policy set --app maint-gw --mfa always --trusted-network off
+        applied   sessions revoked 3   (00:04:10)
+    description: |
+      保守接続の認証で、接続元の場所による免除をやめ、追加の確認を
+      常に求める設定にする。ベンダの遠隔作業の手順は変わらない。
+
+  - id: act_harden_ews01
+    label: "ews01 から装置へ送る操作を、承認された作業のときだけに限る"
+    type: harden
+    phase: response
+    cost_minutes: 25
+    group: "入り口を塞ぐ"
+    hardens: [ews01]
+    command: |
+      $ cellctl acl add --dst 192.0.2.0/24 --proto tcp --dport 18245 \
+          --allow-src ews01 --require-change-window --action allow --log
+        acl applied (cell-sw-11)  entries: 1   (00:03:50)
+    description: |
+      エンジニアリング端末から装置へプログラムや設定を送れる時間帯を、
+      承認された作業の枠に限る。枠の中の作業は今までどおり行える。
+
+  - id: act_harden_hmi02
+    label: "hmi02 の外向き通信を、許可した宛先だけに限る"
+    type: harden
+    phase: response
+    cost_minutes: 20
+    group: "入り口を塞ぐ"
+    hardens: [hmi02]
+    command: |
+      $ fwctl policy set --src HMI-02 --egress allowlist --default deny --log
+        applied   entries 4   (00:02:40)
+    description: |
+      監視操作端末から外へ出る通信を、許可した宛先だけに限る。
+      画面の表示に使っている取得先は許可に含める。
+
+
 # フェーズは2つ。不可逆な移行は、必ず判断を伴うものだけにする（SPEC 3.8）。
 phases:
   - id: investigation
@@ -2198,7 +2344,17 @@ scoring:
       - containment_completeness
     business_impact_horizon_minutes: 480
     normalization:
-      total_damage:             { worst: 16000, best: 0 }
+      # 巧いプレイが**入り口を塞ぐところまで**行くようになり（5.12）、
+      # 復旧地平が半分になって被害が 4,800 → 2,417 に下がった。
+      # 8.2 手順7 どおり再導出する（v1.71）。**手で書いた数字は、
+      # 盤面を変えた瞬間に腐る。**
+      #
+      # **2つの判定が逆向きに引っ張る。** 帯（巧いプレイが 2〜3割）は
+      # 天井を下げたがり、「何も止めないプレイは正しく止めたプレイに負ける」は
+      # 天井を上げたがる — 下げすぎると何も止めないプレイが帯の外に出て 0 で
+      # 並び、被害の差が消えるからである。両方が通るのは 11,000〜12,085 の
+      # 窓だけで、その真ん中を取っている
+      total_damage:             { worst: 11500, best: 0 }
       business_impact:          { worst: 5200,  best: 0 }
       evidence_preserved:       { worst: 0.75,  best: 1.0 }
       containment_completeness: { worst: 0.0,   best: 1.0 }

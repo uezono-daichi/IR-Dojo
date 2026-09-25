@@ -1,5 +1,5 @@
 {
-  "fingerprint": "a938d95b09ffc823a5eb669249b9a622aa600caaab6c71a5256bd9aa1d93224b",
+  "fingerprint": "722bbdbd662a8beea86fe4e7ca8d690b891d7055ce58d8785244ab79dbf1ee74",
   "scenarios": [
     {
       "scenario_id": "insider-exfil-suspicion-01",
@@ -88,8 +88,8 @@
           "policy_id": "safety_first",
           "scores": {
             "safety_first": 93,
-            "production_continuity": 92,
-            "evidence_preservation": 87
+            "production_continuity": 91,
+            "evidence_preservation": 86
           }
         },
         {
@@ -106,8 +106,8 @@
           "policy_id": "evidence_preservation",
           "scores": {
             "safety_first": 76,
-            "production_continuity": 93,
-            "evidence_preservation": 97
+            "production_continuity": 92,
+            "evidence_preservation": 95
           }
         }
       ]
@@ -187,5 +187,5 @@
       ]
     }
   ],
-  "generator": "89e430622333cd9ffb394a95412736b84c3dc7546c6b97a6210ce0bd5beff02d"
+  "generator": "4fd37f4b64c383f3d21099d0f320c8edb61089e637ff440cac5d4d0be9873d21"
 }
