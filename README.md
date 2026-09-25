@@ -68,6 +68,18 @@ cd IR-Dojo && python3 -m venv .venv && .venv/bin/pip install -e . && .venv/bin/p
 必要なのは **Python 3.11 以降**だけです（`python3 --version` で確認できます。
 入っていなければ <https://www.python.org/downloads/>）。
 
+**ターミナルを使いたくない方へ。** リポジトリを
+[zip でダウンロード](../../archive/refs/heads/main.zip)して展開し、
+中の **`start.command`（Mac）** か **`start.bat`（Windows）** をダブルクリック
+してください。初回だけ1〜2分かかって、あとはブラウザが開きます。
+
+Mac で「開発元を確認できないため開けません」と出たら、
+そのファイルを**右クリック →「開く」**でもう一度試してください。
+
+---
+
+以下はターミナルを使う場合です。
+
 ```
 git clone <このリポジトリの URL>
 cd IR_Dojo

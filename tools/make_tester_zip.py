@@ -69,8 +69,8 @@ def build(out: Path, name: str) -> Path:
         shutil.copy2(ROOT / f, stage / f)
     _strip_readme(stage / "pyproject.toml")
     shutil.copy2(ROOT / "docs" / "TESTER.md", stage / "はじめに読んでください.md")
-    shutil.copy2(ROOT / "docs" / "start.command", stage / "起動_Mac.command")
-    shutil.copy2(ROOT / "docs" / "start.bat", stage / "起動_Windows.bat")
+    shutil.copy2(ROOT / "start.command", stage / "起動_Mac.command")
+    shutil.copy2(ROOT / "start.bat", stage / "起動_Windows.bat")
     (stage / "起動_Mac.command").chmod(0o755)
 
     zip_path = out / f"{name}.zip"
