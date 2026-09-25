@@ -2134,10 +2134,15 @@ function renderResult(v) {
      見えていないものを告げれば損失の予告になる（原則5）。講評で初めて出る。 */
   /* 塞いだこと（SPEC 5.12）。**盤面は動かない。**
      押しても資産は止まらず、戻りもしない。言えるのは「塞いだ」までで、
-     それでどれだけ減ったかは講評の破線で初めて分かる */
+     それでどれだけ減ったかは講評の破線で初めて分かる。
+
+     語は「入り口」ではなく**「経路」**にしてある（v1.72）— 内部不正の盤面では
+     誰も入ってきていない。持ち出しに使われた道であって、入られた口ではない。
+     画面の文言は盤面をまたいで使い回されるので、どれか1つの系統でしか
+     成り立たない語を置くと、別の系統で嘘になる */
   if (hardened.length) {
     note.appendChild(el('div', 'outcome-msg sub',
-      '入り口を塞いだのは ' + hardened.length + ' 件。'
+      '同じことが起きる経路を塞いだのは ' + hardened.length + ' 件。'
       + 'この演習の中では、盤面は変わらない。'));
     var krow = el('div', 'outcome-cascade');
     hardened.forEach(function (a) {
@@ -2981,7 +2986,7 @@ function blockRestore(rep) {
 
   var g = el('div', 'summary-grid');
   if (r.hardened_labels.length || r.entry_open_labels.length) {
-    g.appendChild(el('div', 'k', '入り口を塞いだ'));
+    g.appendChild(el('div', 'k', '経路を塞いだ'));
     g.appendChild(el('div', 'v', r.hardened_labels.join('、') || '（なし）'));
   }
   g.appendChild(el('div', 'k', '戻した'));
@@ -3006,8 +3011,8 @@ function blockRestore(rep) {
   }
   if (r.entry_open_labels.length) {
     box.appendChild(el('p', null,
-      r.entry_open_labels.join('、') + ' の入り口は、開いたままです。' +
-      '止めて取り除いても、入られた口が残っていれば同じことが起きます。' +
+      r.entry_open_labels.join('、') + ' で使われた経路は、塞がれていません。' +
+      '止めて取り除いても、同じ経路が残っていれば同じことが起きます。' +
       'その被害は演習が終わったあとに出るので、盤面の上では見えません — ' +
       '図の破線（復旧までの見込み）の傾きが、それです。'));
   }

@@ -1733,6 +1733,139 @@ actions:
     side_effects:
       business_impact: true
 
+  # ── 復旧（SPEC 5.11）。**止めたものを業務に戻す手。**
+  #    この盤面の戻すことは、他の盤面より重い — 相手は攻撃者ではなく
+  #    まだ在職している人である。戻さないことは「疑ったまま置く」ことでもある
+  - id: act_return_dirsvc
+    label: "社内ディレクトリの制限を解く"
+    type: restore
+    phase: response
+    cost_minutes: 25
+    group: "業務に戻す"
+    restores: [dirsvc]
+    command: |
+      $ idctl scope policy remove --policy ir-restrict-sales
+        removed   affected principals 46   (00:04:30)
+    description: |
+      部門にかけた制限を外す。ぶら下がっている仕組みが再び使えるようになる。
+
+  - id: act_return_ws317
+    label: "退職予定者の業務端末を本人の業務に戻す"
+    type: restore
+    phase: response
+    cost_minutes: 20
+    group: "業務に戻す"
+    restores: [ws-317]
+    command: |
+      $ mdmctl release --device WS-317 --reason ir-closed
+        released   (00:01:20)
+
+      $ assetctl handover --device WS-317 --to owner
+        acknowledged   (00:08:40)
+    description: |
+      端末を本人の手元に戻し、業務に使える状態にする。
+      引き継ぎの作業を再開できる。
+
+  - id: act_reenable_acct_317
+    label: "退職予定者の業務アカウントを再び使えるようにする"
+    type: restore
+    phase: response
+    cost_minutes: 10
+    group: "業務に戻す"
+    restores: [acct-317]
+    command: |
+      $ idctl user unblock-signin --user u317@example.com
+        accountEnabled : true   (00:00:40)
+    description: |
+      そのアカウントのサインインを再び通す。本人は業務に戻れる。
+
+  - id: act_return_store_personal
+    label: "私物の外部保管への通信を元に戻す"
+    type: restore
+    phase: response
+    cost_minutes: 10
+    group: "業務に戻す"
+    restores: [store-personal]
+    command: |
+      $ fwctl rule remove --id ir-block-personal-store
+        removed   (00:00:35)
+    description: |
+      その保管先への通信を止めていた設定を外し、元の状態に戻す。
+
+  - id: act_return_ws224
+    label: "営業企画部の同僚端末を業務に戻す"
+    type: restore
+    phase: response
+    cost_minutes: 20
+    group: "業務に戻す"
+    restores: [ws-224]
+    command: |
+      $ assetctl handover --device WS-224 --to owner
+        acknowledged   (00:09:10)
+    description: |
+      端末を利用者の手元に戻し、業務に使える状態にする。
+
+  - id: act_return_phone_317
+    label: "社給携帯の通信の制限を解く"
+    type: restore
+    phase: response
+    cost_minutes: 10
+    group: "業務に戻す"
+    restores: [phone-317]
+    command: |
+      $ mdmctl policy clear --device PHONE-317 --profile ir-egress-hold
+        cleared   (00:01:10)
+    description: |
+      その端末にかけた通信の制限を外す。本人の連絡手段が元に戻る。
+
+  # ── 再発防止（SPEC 5.12）。**盤面の上では何も起きない。**
+  #    効くのは演習が終わったあとで、見えるのは講評の破線だけである。
+  #    **ここで塞ぐのは「入られた口」ではない** — 持ち出しに使われた道である
+  - id: act_harden_ws317
+    label: "退職予定者の業務端末から、承認されていない宛先への書き出しを管理設定で止める"
+    type: harden
+    phase: response
+    cost_minutes: 25
+    group: "経路を塞ぐ"
+    hardens: [ws-317]
+    command: |
+      $ mdmctl policy apply --device WS-317 --profile cloud-egress-lockdown
+        applied   scopes 6   drift alerts on   (00:03:40)
+    description: |
+      その端末から、承認されていない宛先へファイルを書き出せない設定を
+      管理側で入れ、変更を検知するようにする。
+      業務で使うことになっている宛先は許可に含める。
+
+  - id: act_harden_acct_317
+    label: "退職予定者の業務アカウントの権限を、退職手続きに合わせて落とす"
+    type: harden
+    phase: response
+    cost_minutes: 25
+    group: "経路を塞ぐ"
+    hardens: [acct-317]
+    command: |
+      $ idctl lifecycle bind --user u317@example.com --profile offboarding
+        bound   scheduled scope reductions 4   (00:04:20)
+    description: |
+      そのアカウントに付いている権限を、退職日までの予定に合わせて
+      段階的に落とす設定にする。引き継ぎに要る範囲は最後まで残る。
+
+  - id: act_harden_ws224
+    label: "営業企画部の同僚端末から、承認されていない宛先への書き出しを管理設定で止める"
+    type: harden
+    phase: response
+    cost_minutes: 20
+    group: "経路を塞ぐ"
+    hardens: [ws-224]
+    command: |
+      $ mdmctl policy apply --device WS-224 --profile cloud-egress-lockdown
+        applied   scopes 6   drift alerts on   (00:03:30)
+    description: |
+      その端末から、承認されていない宛先へファイルを書き出せない設定を
+      管理側で入れ、変更を検知するようにする。
+      業務で使うことになっている宛先は許可に含める。
+
+
 phases:
   - id: investigation
     label: "調査"
@@ -1870,7 +2003,11 @@ scoring:
       - containment_completeness
     business_impact_horizon_minutes: 480
     normalization:
-      total_damage:             { worst: 18000, best: 0 }
+      # 巧いプレイが**経路を塞ぐところまで**行くようになり（5.12）、
+      # 復旧地平が半分になって被害が 5,100 → 2,561 に下がった。
+      # 8.2 手順7 どおり再導出する（v1.72）。**手で書いた数字は、
+      # 盤面を変えた瞬間に腐る。**
+      total_damage:             { worst: 10700, best: 0 }
       business_impact:          { worst: 2200,  best: 0 }
       evidence_preserved:       { worst: 0.706, best: 1.0 }
       containment_completeness: { worst: 0.0,   best: 1.0 }

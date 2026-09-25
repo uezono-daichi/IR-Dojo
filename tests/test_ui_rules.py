@@ -1229,3 +1229,29 @@ def test_the_frame_says_what_is_selected_even_when_closed(index_html, app_js):
     fn = body[body.index("function selectScenario") :]
     fn = fn[: fn.index("\nfunction ")]
     assert "scenario-picked" in fn, "選んだときに見出しを書き替えていない"
+
+
+def test_the_browser_scripts_parse():
+    """**画面の JavaScript が構文として通ること。**
+
+    テストは 560本あって、そのうち1本も `web/*.js` を読んでいなかった。
+    Python 側の検査は文字列として grep するだけなので、
+    **コメントの閉じ方を1つ間違えただけの版が全部通る。**
+    実際 v1.72 で壊れた版が 562本すべてを通り抜け、
+    `playtest.mjs` が画面を開いて初めて落ちた。
+
+    これは「判定が甘かった」のではなく、**その言語を誰も読んでいなかった**。
+    `node --check` は 0.1秒で答えるので、ブラウザを立てる前にここで落とす。
+    """
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node が無い（playtest.mjs も動かない環境）")
+
+    for path in sorted(WEB.glob("*.js")):
+        done = subprocess.run(
+            [node, "--check", str(path)], capture_output=True, text=True
+        )
+        assert done.returncode == 0, f"{path.name} が構文として通らない:\n{done.stderr}"
