@@ -1,0 +1,24 @@
+同梱シナリオ（`scenarios/*.yaml`）のライセンス
+==============================================
+
+各シナリオの `meta.license` に従う。同梱の7本はすべて **CC-BY-4.0**。
+
+    Creative Commons Attribution 4.0 International
+    https://creativecommons.org/licenses/by/4.0/
+
+Copyright (c) 2026 Daichi Uezono
+
+エンジン本体（`irdojo/`・`web/`・`tools/`・`tests/`）は
+リポジトリ直下の LICENSE（MIT）に従う。
+
+シナリオを分けている理由
+------------------------
+
+盤面は教材であって、コードではない。改変して配ることを妨げたくないが、
+**どの盤面を誰が書いたかは辿れるようにしておきたい** — 演習の妥当性は
+出所に依存する（「この盤面の答えは本当に正しいのか」は、書いた人に
+聞くしかない問いである）。表示義務のある CC-BY を選んだのはそのため。
+
+登場する組織・人物・アドレス・ログはすべて架空である。
+メールアドレスは RFC 2606 / RFC 6761 の予約ドメイン
+（`example.com` / `example.co.jp` / `example.test` / `example.org`）だけを使う。
