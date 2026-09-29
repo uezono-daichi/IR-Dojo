@@ -24,7 +24,10 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # 遊ぶのに要るものだけ。**足すときは「無いと遊べないか」で決める**
 INCLUDE_DIRS = ["irdojo", "web", "scenarios"]
-INCLUDE_FILES = ["pyproject.toml"]
+# **LICENSE は必ず入れる。** MIT は「全ての複製に許諾表示を含めること」を
+# 条件にしている。配布物は複製そのものなので、入れ忘れは条件違反である
+# （`scenarios/LICENSE` は copytree で付いてくるが、本体の MIT は付いてこない）
+INCLUDE_FILES = ["pyproject.toml", "LICENSE"]
 
 # 入れないもの。名前を書いて残す — 「なんとなく入れなかった」を後から復元できない
 EXCLUDE_NOTE = {

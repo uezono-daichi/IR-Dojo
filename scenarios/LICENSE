@@ -19,6 +19,19 @@ Copyright (c) 2026 Daichi Uezono
 出所に依存する（「この盤面の答えは本当に正しいのか」は、書いた人に
 聞くしかない問いである）。表示義務のある CC-BY を選んだのはそのため。
 
+表示のしかた
+------------
+
+CC-BY が求める表示は、次の形でよい。
+
+    IR Dojo 同梱シナリオ（Daichi Uezono）CC-BY-4.0
+    https://github.com/uezono-daichi/IR-Dojo
+
+各 YAML の `meta.author` は `IR Dojo`（盤面群としての名前）だが、
+**著作権者は上の Copyright 行の individual である。** 改変した場合は
+その旨を併記すること（CC-BY-4.0 3(a)(1)(B)）。
+
 登場する組織・人物・アドレス・ログはすべて架空である。
-メールアドレスは RFC 2606 / RFC 6761 の予約ドメイン
-（`example.com` / `example.co.jp` / `example.test` / `example.org`）だけを使う。
+メールアドレスは**予約ドメインだけ**を使う
+（`example.com` / `example.org` / `.example` / `.test` は RFC 2606 / RFC 6761、
+`example.co.jp` は JPRS の予約ドメイン名）。

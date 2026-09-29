@@ -48,7 +48,7 @@ grep -rhoE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' scenarios/ | sort -u
 
 | | |
 |---|---|
-| 実行時（Python） | pydantic / PyYAML / fastapi / uvicorn — いずれも MIT または BSD |
+| 実行時（Python） | pydantic / PyYAML / fastapi / uvicorn の4つ — MIT と BSD-3-Clause。推移的に入るもの（starlette / click / idna / anyio / h11 / annotated-types / typing-extensions 他）も**すべて許容的**で、コピーレフトは1つも無い（BSD-3-Clause と PSF-2.0 を含む） |
 | 開発時（Node） | playwright-core（画面を実際に遊んで確かめるためだけに使う。Apache-2.0） |
 
 本体は MIT（[LICENSE](LICENSE)）、同梱シナリオは CC-BY-4.0

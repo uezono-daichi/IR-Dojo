@@ -312,3 +312,28 @@ def test_the_debug_output_is_not_tracked():
     ignore = (ROOT / ".gitignore").read_text("utf-8")
     assert ".playtest*/" in ignore, "検証の出力先を名前ごとに足している"
     assert ".pt/" in ignore
+
+
+def test_the_tester_zip_carries_both_licences():
+    """**配る以上、許諾表示も一緒に配る**（SPEC 7.5.6）。
+
+    MIT は「上記の著作権表示および本許諾表示を、**ソフトウェアの複製または
+    重要な部分のすべてに記載する**こと」を条件にしている。配布物は複製そのもので、
+    そこに `LICENSE` が入っていなければ**その条件を満たしていない。**
+
+    実際、長いあいだ入っていなかった。`scenarios/LICENSE`（CC-BY）は
+    `copytree` に付いてきたので**片方だけが入っていて**、
+    「ライセンスは同梱されている」ように見えていた。
+    **付いてきたものと、入れたものを、区別していなかった。**
+
+    zip を組む側の一覧で見る（実際に固めなくても、入る物は決まっている）。
+    """
+    import make_tester_zip as kit
+
+    assert "LICENSE" in kit.INCLUDE_FILES, (
+        "本体の MIT が配布物に入らない。MIT はすべての複製に許諾表示を求める"
+    )
+    assert "scenarios" in kit.INCLUDE_DIRS, (
+        "盤面の CC-BY が配布物に入らない"
+    )
+    assert (ROOT / "LICENSE").exists() and (ROOT / "scenarios" / "LICENSE").exists()
