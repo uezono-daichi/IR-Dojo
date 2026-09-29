@@ -294,7 +294,7 @@ critical 論点の数、証拠数からローダが算出する。
 
 ```
 pip install -e ".[dev]"
-pytest                                   # 285本
+pytest                                   # 570本（564 通過・6 skip）
 ```
 
 - `tests/test_scoring.py` — SPEC 6.8 の計算例をそのまま検証する
