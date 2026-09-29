@@ -1353,3 +1353,38 @@ def test_the_guidance_does_not_block_what_it_invites(app_js):
     assert "expect_action" in lock and "later[" in lock, (
         "後の段が待っている手まで通すと、その段で押す物が無くなる"
     )
+
+
+def test_the_guidance_can_be_read_again(app_js):
+    """**読み終えた案内に、戻る手段があること**（SPEC 9.4 #13）。
+
+    案内は指した手を押すと自動で次の段へ進むので、読み途中の文が消えていた。
+    `S.tutorAt` を動かすのは `+= 1` の2箇所だけで、**減らす場所が無かった**
+    （GitHub issue #4）。
+
+    `applyTutorialLock()` は自分でこう書いている —
+
+        制限するのは「ルート」であって、**読み返す手段ではない。**
+        ここを塞ぐと、迷った人に逃げ場が無くなる — それは制限ではなく監禁である。
+
+    **思想として守ると言っているものが、実装として無かった。**
+
+    直し方は「段を戻す」ではなく「読み終えた段を畳んで残す」。戻すと、押した手の
+    結果が既に画面を書き換えているので、本文（「左に結果が出ました」）と画面が
+    食い違う段が生まれる。残すだけなら盤面に触らない。
+    """
+    src = strip_comments(app_js)
+    fn = src[src.index("function renderTutorial"):]
+    fn = fn[: fn.index("\n}")]
+
+    assert "tutor-past" in fn, "読み終えた案内を残す場所が無い"
+    assert "S.tutorAt" in fn and "tutorial[" in fn, (
+        "過去の段を、案内そのもの（S.tutorial）から引いていない"
+    )
+    # 畳みの記号は共通のものを通す（SPEC 7.6.15）
+    assert "caret(" in fn, "読み返しの畳みが共通の記号を使っていない"
+    # **現在の段より後ろに置く。** 頭に置くと、開いた瞬間に現在の段が
+    # 画面の外へ押し出される（実測で確かめた）
+    assert fn.index("tutor-past") > fn.index("tutor-wait"), (
+        "読み返しが現在の段より前にある。開くと、いま読むべき文が画面の外へ出る"
+    )

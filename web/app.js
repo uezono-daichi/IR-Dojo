@@ -1519,6 +1519,7 @@ function renderTutorial() {
   head.appendChild(el('span', null, '練習の案内'));
   host.appendChild(head);
 
+
   var body = el('div', 'tutor-body');
   emphProse(body, step.body);
   host.appendChild(body);
@@ -1567,6 +1568,44 @@ function renderTutorial() {
     });
     row.appendChild(next);
     host.appendChild(row);
+  }
+
+  /* **読み終えた段を、畳んで残す。**（SPEC 9.4 #13）
+     案内は指した手を押すと自動で次の段に進むので、読み途中でも消えていた。
+     `applyTutorialLock()` は「制限するのはルートであって、**読み返す手段では
+     ない**」と書いているのに、**読み返す手段そのものが無かった**
+     （GitHub issue #4。`S.tutorAt` を動かすのは `+= 1` だけだった）。
+
+     **段を戻すのではなく、残す。** 戻すと、押した手の結果が既に画面を
+     書き換えているので、本文（「左に結果が出ました」）と画面が食い違う段が
+     生まれる。残すだけなら盤面に触らないので、その食い違いは起きない。
+
+     **枠の末尾に置く。** 頭に置いたら、開いた瞬間に7段ぶんの文が現在の段を
+     画面の外へ押し出した。読み返しが、いま読むべきものを埋めては本末転倒である
+     （連絡欄が新着を上・済みを下に置いているのと同じ並べ方）。
+     畳んだ一行にしてあるのも、**現在の段より目立ってはいけない**ため。
+     記号は証拠カードや連絡と同じ `caret()` を通す（SPEC 7.6.15）。 */
+  if (S.tutorAt > 0) {
+    var past = el('details', 'tutor-past');
+    var psum = el('summary');
+    var pmark = caret(false);
+    psum.appendChild(pmark);
+    psum.appendChild(el('span', 'tutor-past-label',
+      'これまでの案内（' + S.tutorAt + '）'));
+    past.appendChild(psum);
+    past.addEventListener('toggle', function () {
+      pmark.textContent = caret(past.open).textContent;
+    });
+    for (var pi = 0; pi < S.tutorAt; pi++) {
+      var old = S.tutorial[pi];
+      if (!old) { continue; }
+      var item = el('div', 'tutor-past-item');
+      item.appendChild(el('div', 'tutor-step',
+        (pi + 1) + ' / ' + S.tutorial.length));
+      emphProse(item.appendChild(el('div', 'tutor-body')), old.body);
+      past.appendChild(item);
+    }
+    host.appendChild(past);
   }
 
   if (step.points_at) {
