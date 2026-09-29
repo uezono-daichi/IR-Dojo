@@ -1545,14 +1545,16 @@ function renderTutorial() {
     wait.appendChild(document.createTextNode(' を押してください。'));
     host.appendChild(wait);
   } else if (step.expect_kind) {
+    // **ボタンの名前は、そのボタン自身から引く。** すぐ上の expect_action と
+    // 同じ理由である。ここに書き写していたせいで、被疑判定の段が
+    // 「被疑判定を宣言する を押してください」と言っていた — **そんなボタンは
+    // 画面に無い。** 押すのは盤面の `advance_label`（「対応フェーズに移る」）で、
+    // applyTutorialLock() の側は最初からそれを知っていた（#btn-advance を通す）。
+    // **通す先と、案内が指す先が、別々に書かれていたことが原因である。**
+    var btn = $(step.expect_kind === 'finish' ? 'btn-finish' : 'btn-advance');
     var w2 = el('div', 'tutor-wait');
-    w2.appendChild(document.createTextNode(
-      step.expect_kind === 'advance_phase' ? '下の ' :
-      step.expect_kind === 'declare_assessment' ? '下の ' : '下の '));
-    w2.appendChild(el('span', 'what',
-      step.expect_kind === 'advance_phase' ? '対応フェーズに移る' :
-      step.expect_kind === 'declare_assessment' ? '被疑判定を宣言する' :
-      '対応を終了する'));
+    w2.appendChild(document.createTextNode('下の '));
+    w2.appendChild(el('span', 'what', (btn && btn.textContent) || ''));
     w2.appendChild(document.createTextNode(' を押してください。'));
     host.appendChild(w2);
   } else {
@@ -1612,16 +1614,40 @@ function applyTutorialLock() {
     '#btn-show-assessment',// いまの被疑判定
     '#btn-what-play',      // 帰結の「?」
   ];
+  /* **後の段が名指ししている手だけは、先に押させない。**
+     先に押すとその手は available_actions から消え、その段に着いたとき
+     押す物が無くなって案内が進まなくなる。塞ぐ理由はこれ**だけ**である。 */
+  function freeActions() {
+    var later = {}, out = [];
+    for (var i = S.tutorAt + 1; i < S.tutorial.length; i++) {
+      var s2 = S.tutorial[i];
+      if (s2 && s2.expect_action) { later[s2.expect_action] = true; }
+    }
+    (S.view.available_actions || []).forEach(function (a) {
+      if (!later[a.id]) { out.push('[data-action="' + a.id + '"]'); }
+    });
+    return out;
+  }
+
   if (step.expect_action) {
     allow.push('[data-action="' + step.expect_action + '"]');
   } else if (step.expect_kind === 'finish') {
+    /* **この段は「止める手を打ってもいい」と自分で言っている。**
+       終わらせる口だけを開けていたので、案内が約束したことを試せなかった。
+       「どちらが正しいかは方針が決める」はこの製品の主張そのもので、
+       **練習がそれを試させないのは、主張を自分で取り下げているのと同じ。**
+       最後の段なので、手を通しても後で詰まる段は無い。 */
     allow.push('#btn-finish');
+    allow = allow.concat(freeActions());
   } else if (step.expect_kind) {
     // 被疑判定の宣言も、押すのは「対応フェーズに移る」である
     allow.push('#btn-advance');
   } else {
-    // 読むだけの段。通すのは案内の「次へ」だけ
+    /* 読むだけの段。**ルートが無いので、手を塞ぐ理由も無い。**
+       塞いでいたせいで「余裕があれば両方押してみてください」と言う段で
+       何も押せなかった（`t06_noise`）。この段の値打ちは押し比べることにある。 */
     allow.push('#tutor-panel button');
+    allow = allow.concat(freeActions());
   }
 
   for (var k = 0; k < all.length; k++) {

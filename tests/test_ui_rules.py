@@ -1255,3 +1255,101 @@ def test_the_browser_scripts_parse():
             [node, "--check", str(path)], capture_output=True, text=True
         )
         assert done.returncode == 0, f"{path.name} が構文として通らない:\n{done.stderr}"
+
+
+def test_the_guidance_points_at_a_button_that_exists(any_scenario, index_html):
+    """**案内が名指しするボタンが、画面に実在すること**（SPEC 7.6.7）。
+
+    練習「遊び方を覚える」の名指しの段は、こう言っていた。
+
+        下の **被疑判定を宣言する** を押してください。
+
+    **そんなボタンは画面のどこにも無い。** 押すのは盤面の `advance_label`
+    （この盤面では「対応フェーズに移る」）で、`applyTutorialLock()` は
+    最初からそれを通していた。**通す先と、案内が指す先が、別々に
+    書かれていた**ので、片方だけが現実と切れても誰も気づかなかった。
+
+    利用者に「押せと言われたボタンが無い」と報告されて初めて出た
+    （GitHub issue #2）。押す物の名前は、押す物から引くしかない。
+    """
+    steps = getattr(any_scenario, "tutorial", None) or []
+    if not steps:
+        pytest.skip("案内を持たない盤面")
+
+    # 画面に実在するボタンの文言（静的なもの＋盤面が与えるもの）
+    real = {m.strip() for m in re.findall(r"<button[^>]*>([^<]+)</button>", index_html)}
+    real |= {p.advance_label for p in any_scenario.phases if p.advance_label}
+    real |= {a.label for a in any_scenario.actions}
+
+    named = re.compile(r"\*\*(.+?)\*\*\s*を押して")
+    for step in steps:
+        for hit in named.findall(step.body or ""):
+            assert hit in real, (
+                f"{any_scenario.id} の案内 `{step.id}` が "
+                f"「{hit}」を押せと言うが、そのボタンは画面に無い。"
+                f"\n実在するのは: {sorted(real)}"
+            )
+
+
+def test_the_guidance_does_not_copy_a_button_name(app_js):
+    """**画面が、ボタンの名前を案内の側に書き写していないこと。**
+
+    `expect_action` の段は「手の名前は盤面から引く」と自分で書いて
+    そうしているのに、`expect_kind` の段だけが文字列のべた書きだった。
+    **同じファイルの70行しか離れていない場所で、規律が片側にしか
+    かかっていなかった。**
+
+    盤面が `advance_label` を変えた日に案内だけが古い名前を指す。
+    ここで落とす。
+    """
+    src = strip_comments(app_js)
+
+    # 画面に無いボタン名がコードに残っていないこと
+    assert "被疑判定を宣言する" not in src, (
+        "`被疑判定を宣言する` というボタンは画面に無い。"
+        "案内がそう言っていた版が issue #2 になった"
+    )
+
+    # 待ち文言は、ボタンそのものから引いていること
+    assert "btn-advance" in src and "btn-finish" in src, (
+        "案内の待ち文言が、押すボタンを参照していない"
+    )
+
+
+def test_the_guidance_does_not_block_what_it_invites(app_js):
+    """**案内が「押してみてください」と言う段で、手が押せること。**
+
+    `advanceTutorial()` は自分でこう書いている —
+
+        **待っていないものを押しても止めない。**
+        案内は道しるべであって通せんぼではない
+
+    ところが `applyTutorialLock()` は、手を名指ししない段で
+    アクションを**全部** `inert` にしていた。おかげで
+
+    - 「余裕があれば、右の2つを両方押してみてください」（`t06_noise`）→ 押せない
+    - 「止める手を打ってもいいですし、何も止めずに終えることもできます」
+      （`t08_finish`）→ 打てない
+
+    後者は**この製品の主張そのもの**（どちらが正しいかは方針が決める）で、
+    練習がそれを試させないのは主張を自分で取り下げているのと同じだった
+    （GitHub issue #3）。
+
+    塞いでよいのは**後の段が名指ししている手だけ**である
+    （先に押されるとその段で押す物が無くなり、案内が進まなくなる）。
+    """
+    src = strip_comments(app_js)
+    lock = src[src.index("function applyTutorialLock"):]
+    lock = lock[: lock.index("\n}")]
+
+    assert "freeActions" in lock, (
+        "手を名指ししない段で、アクションを通す道が無い"
+    )
+    # 「終わらせるだけ」の段と「読むだけ」の段の両方で通っていること
+    assert lock.count("allow.concat(freeActions())") >= 2, (
+        "通しているのが片方の段だけになっている"
+    )
+    # 後の段が名指しする手は、先に押させない（詰み防止）
+    assert "expect_action" in lock and "later[" in lock, (
+        "後の段が待っている手まで通すと、その段で押す物が無くなる"
+    )
